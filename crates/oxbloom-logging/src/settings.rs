@@ -717,6 +717,14 @@ impl Settings {
         levels
     }
 
+    /// `root` and every configured target with its level, groups expanded as in
+    /// [`levels`](Self::levels).
+    pub(crate) fn configured_levels(&self) -> BTreeMap<String, Level> {
+        let mut levels = self.levels();
+        levels.insert("root".to_string(), self.root);
+        levels
+    }
+
     /// The groups whose name matches `name` the way Config matches keys.
     fn groups_named(&self, name: &str) -> impl Iterator<Item = usize> + '_ {
         let canon = canonical(name);

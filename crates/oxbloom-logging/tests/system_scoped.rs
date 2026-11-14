@@ -425,3 +425,18 @@ fn level_filter_still_applies() {
     let shown = output(&dispatch, &out, || tracing::debug!(target: "app", "yes"));
     assert!(shown.contains("\"yes\""));
 }
+
+#[test]
+fn levels_lists_root_targets_and_group_members() {
+    let (_dispatch, system, _) = subscriber(GROUPS);
+    let levels = system.levels();
+    assert_eq!(levels["root"], Level::Info);
+    assert_eq!(levels["app_web"], Level::Debug);
+    assert_eq!(levels["app_api"], Level::Trace);
+
+    system.set_level("extra", Level::Warn).unwrap();
+    system.set_level("root", Level::Error).unwrap();
+    let levels = system.levels();
+    assert_eq!(levels["extra"], Level::Warn);
+    assert_eq!(levels["root"], Level::Error);
+}

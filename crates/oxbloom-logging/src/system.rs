@@ -1,5 +1,6 @@
 //! The installed subscriber and the handle that changes its levels at runtime.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::io::{self, IsTerminal};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -289,6 +290,34 @@ impl LoggingSystem {
     /// ```
     pub fn level(&self, target: &str) -> Level {
         self.lock().current.level(target)
+    }
+
+    /// Every level now configured: `root` and each target with a level of its own, including
+    /// the members of a group that has a level, in name order. A target that is not listed
+    /// takes the level of its longest listed prefix, as [`level`](Self::level) tells.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_config::Config;
+    /// use oxbloom_logging::{Level, LoggingSystem};
+    ///
+    /// let config = Config::from_str("[logging.level]\nroot = \"warn\"\noxbloom_web = \"debug\"")?;
+    /// let logging = LoggingSystem::init(&config)?;
+    /// logging.set_level("app", Level::Trace)?;
+    /// let levels: Vec<_> = logging.levels().into_iter().collect();
+    /// assert_eq!(
+    ///     levels,
+    ///     [
+    ///         ("app".to_string(), Level::Trace),
+    ///         ("oxbloom_web".to_string(), Level::Debug),
+    ///         ("root".to_string(), Level::Warn),
+    ///     ]
+    /// );
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn levels(&self) -> BTreeMap<String, Level> {
+        self.lock().current.configured_levels()
     }
 
     /// Re-reads `logging.level.*` and `logging.group.*` from `config` and applies them: keys
