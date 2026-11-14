@@ -34,7 +34,7 @@ pub use server::WebServerAutoConfiguration;
 #[cfg(feature = "ssl")]
 pub use ssl::SslAutoConfiguration;
 #[cfg(feature = "tasks")]
-pub use tasks::{SchedulerService, TasksAutoConfiguration};
+pub use tasks::{RetryAutoConfiguration, SchedulerService, TasksAutoConfiguration};
 
 use crate::autoconfig::AutoConfigurations;
 
@@ -42,7 +42,8 @@ use crate::autoconfig::AutoConfigurations;
 /// `JwtDecoderAutoConfiguration` and then `SecurityAutoConfiguration`; with `ssl`,
 /// `SslAutoConfiguration`; with `actuator`, `ActuatorAutoConfiguration`; with `web`,
 /// `RequestLogAutoConfiguration` and then `WebServerAutoConfiguration` (after the others when
-/// several features are on); with `tasks`, `TasksAutoConfiguration` last. Remove one with
+/// several features are on); with `tasks`, `TasksAutoConfiguration` and then
+/// `RetryAutoConfiguration` last. Remove one with
 /// [`exclude`](crate::OxbloomApplicationBuilder::exclude).
 ///
 /// # Examples
@@ -52,12 +53,12 @@ use crate::autoconfig::AutoConfigurations;
 /// use oxbloom_config::Config;
 ///
 /// // `security` adds two auto-configurations, `ssl` one, `actuator` one, `web` two and
-/// // `tasks` one.
+/// // `tasks` two.
 /// let expected = 2 * usize::from(cfg!(feature = "security"))
 ///     + usize::from(cfg!(feature = "ssl"))
 ///     + usize::from(cfg!(feature = "actuator"))
 ///     + 2 * usize::from(cfg!(feature = "web"))
-///     + usize::from(cfg!(feature = "tasks"));
+///     + 2 * usize::from(cfg!(feature = "tasks"));
 /// assert_eq!(auto_configurations().len(), expected);
 ///
 /// # tokio::runtime::Builder::new_current_thread().build()?.block_on(async {
@@ -106,9 +107,11 @@ use crate::autoconfig::AutoConfigurations;
 /// }
 /// #[cfg(feature = "tasks")]
 /// {
-///     use oxbloom_boot::TasksAutoConfiguration;
-///     assert_eq!(keys(all(), "tasks."), 5);
-///     assert_eq!(keys(all().exclude::<TasksAutoConfiguration>(), "tasks."), 0);
+///     use oxbloom_boot::{RetryAutoConfiguration, TasksAutoConfiguration};
+///     // 5 `tasks.scheduling` keys and 6 `tasks.retry` keys.
+///     assert_eq!(keys(all(), "tasks."), 11);
+///     assert_eq!(keys(all().exclude::<TasksAutoConfiguration>(), "tasks."), 6);
+///     assert_eq!(keys(all().exclude::<RetryAutoConfiguration>(), "tasks."), 5);
 /// }
 /// # let _ = (keys, all);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -130,6 +133,8 @@ pub fn auto_configurations() -> AutoConfigurations {
         .add::<RequestLogAutoConfiguration>()
         .add::<WebServerAutoConfiguration>();
     #[cfg(feature = "tasks")]
-    let list = list.add::<TasksAutoConfiguration>();
+    let list = list
+        .add::<TasksAutoConfiguration>()
+        .add::<RetryAutoConfiguration>();
     list
 }

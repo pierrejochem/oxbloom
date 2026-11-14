@@ -471,11 +471,11 @@ fn metadata_keys_match_config() {
 fn auto_configurations_lists_both_and_metadata_follows_exclusion() {
     // `web` adds `RequestLogAutoConfiguration` and `WebServerAutoConfiguration`, `ssl` adds
     // `SslAutoConfiguration`, `actuator` adds `ActuatorAutoConfiguration`, `tasks` adds
-    // `TasksAutoConfiguration`.
+    // `TasksAutoConfiguration` and `RetryAutoConfiguration`.
     let web = 2 * usize::from(cfg!(feature = "web"));
     let ssl = usize::from(cfg!(feature = "ssl"));
     let actuator = usize::from(cfg!(feature = "actuator"));
-    let tasks = usize::from(cfg!(feature = "tasks"));
+    let tasks = 2 * usize::from(cfg!(feature = "tasks"));
     assert_eq!(
         auto_configurations().len(),
         2 + web + ssl + actuator + tasks
