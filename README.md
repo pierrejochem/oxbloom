@@ -1,5 +1,14 @@
 <p align="center"><img src="branding/logos/oxbloom-lockup.svg" alt="Oxbloom" width="360"></p>
 
+<p align="center">
+  <a href="https://github.com/pierrejochem/oxbloom/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/pierrejochem/oxbloom/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://pierrejochem.github.io/oxbloom/"><img alt="Documentation" src="https://img.shields.io/badge/docs-pierrejochem.github.io%2Foxbloom-b5462a"></a>
+  <a href="#license"><img alt="License: MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-56722b"></a>
+  <img alt="Rust 1.99+" src="https://img.shields.io/badge/rust-1.99%2B-5e1a1d?logo=rust">
+  <img alt="Edition 2024" src="https://img.shields.io/badge/edition-2024-1c1714">
+  <a href="https://github.com/pierrejochem/oxbloom/commits/main"><img alt="Last commit" src="https://img.shields.io/github/last-commit/pierrejochem/oxbloom?color=f4b39a&labelColor=1c1714"></a>
+</p>
+
 # Oxbloom
 
 **Enterprise Rust, in bloom.**
@@ -31,4 +40,9 @@ mdbook build
 
 ## License
 
-MIT OR Apache-2.0.
+Licensed under either of
+
+- [Apache License, Version 2.0](LICENSE-APACHE)
+- [MIT license](LICENSE-MIT)
+
+at your option. Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in Oxbloom by you, as defined in the Apache-2.0 license, is dual licensed as above, without any additional terms or conditions.
