@@ -16,6 +16,8 @@ proc-macro = true
 [dev-dependencies]
 http = "1.5.0"
 oxbloom-boot = { path = "../oxbloom-boot" }
+oxbloom-core = { path = "../oxbloom-core" }
 oxbloom-di = { path = "../oxbloom-di" }
+oxbloom-tasks = { path = "../oxbloom-tasks" }
 oxbloom-web = { path = "../oxbloom-web" }
 tokio = { version = "1.54.1", features = ["rt", "macros"] }

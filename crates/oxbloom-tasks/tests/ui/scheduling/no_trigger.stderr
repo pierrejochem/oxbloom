@@ -1,0 +1,5 @@
+error: the scheduled method `refresh` has no trigger; add exactly one of `cron`, `fixed_rate` or `fixed_delay`
+ --> tests/ui/scheduling/no_trigger.rs:7:5
+  |
+7 |     #[scheduled(initial_delay = "5s")]
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

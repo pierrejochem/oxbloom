@@ -1,0 +1,5 @@
+error: the scheduled method `refresh` takes no arguments besides `&self`; the scheduler has nothing to pass
+ --> tests/ui/scheduling/extra_argument.rs:8:29
+  |
+8 |     async fn refresh(&self, limit: u32) {
+  |                             ^^^^^^^^^^

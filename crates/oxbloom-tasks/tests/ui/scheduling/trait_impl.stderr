@@ -1,0 +1,5 @@
+error: #[scheduling] requires an inherent impl such as `impl Reports { .. }`, not a trait impl
+  --> tests/ui/scheduling/trait_impl.rs:10:6
+   |
+10 | impl Refresh for Reports {
+   |      ^^^^^^^

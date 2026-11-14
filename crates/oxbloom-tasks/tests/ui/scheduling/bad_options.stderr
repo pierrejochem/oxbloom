@@ -1,0 +1,5 @@
+error: unknown key on the scheduled method `refresh`; the keys are `cron`, `fixed_rate`, `fixed_delay`, `initial_delay`, `zone` and `name`
+ --> tests/ui/scheduling/bad_options.rs:7:37
+  |
+7 |     #[scheduled(fixed_rate = "30s", every = "1s")]
+  |                                     ^^^^^

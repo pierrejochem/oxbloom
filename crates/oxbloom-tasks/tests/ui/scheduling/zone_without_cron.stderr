@@ -1,0 +1,5 @@
+error: `zone` only applies to a `cron` trigger, and the scheduled method `refresh` uses `fixed_rate`
+ --> tests/ui/scheduling/zone_without_cron.rs:7:37
+  |
+7 |     #[scheduled(fixed_rate = "30s", zone = "Europe/Amsterdam")]
+  |                                     ^^^^

@@ -1731,7 +1731,9 @@ version = "0.1.0"
 dependencies = [
  "http",
  "oxbloom-boot",
+ "oxbloom-core",
  "oxbloom-di",
+ "oxbloom-tasks",
  "oxbloom-web",
  "proc-macro2",
  "quote",
@@ -1789,8 +1791,10 @@ dependencies = [
  "chrono-tz",
  "cron",
  "oxbloom-core",
+ "oxbloom-macros",
  "tokio",
  "tracing",
+ "trybuild",
 ]
 
 [[package]]

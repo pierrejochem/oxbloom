@@ -1,0 +1,7 @@
+error: #[scheduled] is only valid on methods inside a #[scheduling] impl block
+ --> tests/ui/scheduling/outside_scheduling.rs:6:5
+  |
+6 |     #[scheduled(fixed_rate = "30s")]
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `scheduled` (in Nightly builds, run with -Z macro-backtrace for more info)

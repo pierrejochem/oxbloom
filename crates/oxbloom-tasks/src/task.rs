@@ -74,7 +74,8 @@ pub enum Outcome {
 #[derive(Clone)]
 pub struct Task {
     name: String,
-    trigger: Result<Trigger, TriggerError>,
+    /// The trigger, or the key whose value was invalid and why.
+    trigger: Result<Trigger, (&'static str, TriggerError)>,
     initial_delay: Option<Duration>,
     run: RunFn,
 }
@@ -106,8 +107,10 @@ impl Task {
         }
     }
 
-    /// A task whose trigger could not be built. It never runs:
-    /// [`Scheduler::try_new`](crate::Scheduler::try_new) fails with a [`TaskError`] naming it.
+    /// A task whose trigger could not be built because the value of `key` (such as `cron`,
+    /// `zone`, `fixed_rate`, `fixed_delay` or `initial_delay`) was invalid. It never runs:
+    /// [`Scheduler::try_new`](crate::Scheduler::try_new) fails with a [`TaskError`] naming the
+    /// task and the key.
     ///
     /// # Examples
     ///
@@ -115,13 +118,13 @@ impl Task {
     /// use oxbloom_tasks::{Task, Trigger, Zone};
     ///
     /// let error = Trigger::cron("every day", Zone::Utc).unwrap_err();
-    /// let task = Task::invalid("Reports::nightly", error);
+    /// let task = Task::invalid("Reports::nightly", "cron", error);
     /// assert!(task.trigger().is_none());
     /// ```
-    pub fn invalid(name: impl Into<String>, error: TriggerError) -> Task {
+    pub fn invalid(name: impl Into<String>, key: &'static str, error: TriggerError) -> Task {
         Task {
             name: name.into(),
-            trigger: Err(error),
+            trigger: Err((key, error)),
             initial_delay: None,
             run: Arc::new(|| Box::pin(async { Ok(()) })),
         }
@@ -209,8 +212,9 @@ impl Task {
     ) -> Result<(String, Trigger, Option<Duration>, RunFn), TaskError> {
         match self.trigger {
             Ok(trigger) => Ok((self.name, trigger, self.initial_delay, self.run)),
-            Err(error) => Err(TaskError {
+            Err((key, error)) => Err(TaskError {
                 task: self.name,
+                key,
                 error,
             }),
         }
@@ -258,8 +262,8 @@ pub trait Scheduling: Send + Sync + 'static {
 
 /// A task that cannot be scheduled because its trigger is invalid.
 ///
-/// The message names the task and what was wrong (the cron expression, the zone, the
-/// duration), never the offending value.
+/// The message names the task, the key whose value was invalid (such as `cron` or
+/// `initial_delay`) and what was wrong with it, never the offending value.
 ///
 /// # Examples
 ///
@@ -270,15 +274,17 @@ pub trait Scheduling: Send + Sync + 'static {
 ///
 /// let error = Trigger::cron("secret-ish value", Zone::Utc).unwrap_err();
 /// let clock: Arc<dyn Clock> = Arc::new(SystemClock);
-/// let err = Scheduler::try_new(vec![Task::invalid("Jobs::sync", error)], SchedulerConfig::default(), clock)
-///     .unwrap_err();
+/// let task = Task::invalid("Jobs::sync", "cron", error);
+/// let err = Scheduler::try_new(vec![task], SchedulerConfig::default(), clock).unwrap_err();
 /// assert_eq!(err.task(), "Jobs::sync");
+/// assert_eq!(err.key(), "cron");
 /// assert!(err.to_string().contains("cron expression"));
 /// assert!(!err.to_string().contains("secret-ish"));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskError {
     task: String,
+    key: &'static str,
     error: TriggerError,
 }
 
@@ -295,17 +301,37 @@ impl TaskError {
     ///
     /// let error = Trigger::fixed_rate(Duration::ZERO).unwrap_err();
     /// let clock: Arc<dyn Clock> = Arc::new(SystemClock);
-    /// let err = Scheduler::try_new(vec![Task::invalid("a", error)], SchedulerConfig::default(), clock)
-    ///     .unwrap_err();
+    /// let task = Task::invalid("a", "fixed_rate", error);
+    /// let err = Scheduler::try_new(vec![task], SchedulerConfig::default(), clock).unwrap_err();
     /// assert_eq!(err.task(), "a");
     /// ```
     pub fn task(&self) -> &str {
         &self.task
     }
+
+    /// The key whose value was invalid, such as `cron`, `zone`, `fixed_rate`, `fixed_delay` or
+    /// `initial_delay`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use oxbloom_core::{Clock, SystemClock};
+    /// use oxbloom_tasks::{Scheduler, SchedulerConfig, Task, Zone};
+    ///
+    /// let error = Zone::parse("Atlantis/Capital").unwrap_err();
+    /// let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+    /// let task = Task::invalid("Jobs::nightly", "zone", error);
+    /// let err = Scheduler::try_new(vec![task], SchedulerConfig::default(), clock).unwrap_err();
+    /// assert_eq!(err.key(), "zone");
+    /// ```
+    pub fn key(&self) -> &'static str {
+        self.key
+    }
 }
 
 impl fmt::Display for TaskError {
-    /// Writes the task name in backticks after `scheduled task`, then what was wrong.
+    /// Writes the task name and the key in backticks, then what was wrong.
     ///
     /// # Examples
     ///
@@ -317,12 +343,19 @@ impl fmt::Display for TaskError {
     ///
     /// let error = Trigger::fixed_delay(Duration::ZERO).unwrap_err();
     /// let clock: Arc<dyn Clock> = Arc::new(SystemClock);
-    /// let err = Scheduler::try_new(vec![Task::invalid("Jobs::poll", error)], SchedulerConfig::default(), clock)
-    ///     .unwrap_err();
-    /// assert_eq!(err.to_string(), "scheduled task `Jobs::poll`: fixed delay must be greater than zero");
+    /// let task = Task::invalid("Jobs::poll", "fixed_delay", error);
+    /// let err = Scheduler::try_new(vec![task], SchedulerConfig::default(), clock).unwrap_err();
+    /// assert_eq!(
+    ///     err.to_string(),
+    ///     "scheduled task `Jobs::poll`, key `fixed_delay`: fixed delay must be greater than zero"
+    /// );
     /// ```
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "scheduled task `{}`: {}", self.task, self.error)
+        write!(
+            f,
+            "scheduled task `{}`, key `{}`: {}",
+            self.task, self.key, self.error
+        )
     }
 }
 

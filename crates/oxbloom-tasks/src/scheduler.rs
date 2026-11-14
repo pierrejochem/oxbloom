@@ -203,7 +203,7 @@ impl Scheduler {
     ///
     /// # Errors
     ///
-    /// Returns a [`TaskError`] naming the first task made with [`Task::invalid`].
+    /// Returns a [`TaskError`] naming the first task made with [`Task::invalid`] and its key.
     ///
     /// # Examples
     ///
@@ -219,7 +219,7 @@ impl Scheduler {
     /// });
     /// assert!(Scheduler::try_new(vec![ok], SchedulerConfig::default(), clock.clone()).is_ok());
     ///
-    /// let bad = Task::invalid("bad", Trigger::cron("* * *", Zone::Utc).unwrap_err());
+    /// let bad = Task::invalid("bad", "cron", Trigger::cron("* * *", Zone::Utc).unwrap_err());
     /// assert!(Scheduler::try_new(vec![bad], SchedulerConfig::default(), clock).is_err());
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```

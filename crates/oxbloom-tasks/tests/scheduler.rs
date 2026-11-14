@@ -487,14 +487,15 @@ async fn start_is_idempotent() {
 #[test]
 fn an_invalid_task_fails_construction_naming_the_task() {
     let error = Trigger::cron("not a cron", Zone::Utc).unwrap_err();
-    let tasks = vec![Task::invalid("Reports::nightly", error)];
+    let tasks = vec![Task::invalid("Reports::nightly", "cron", error)];
     let clock: Arc<dyn Clock> = Arc::new(oxbloom_core::SystemClock);
     let Err(err) = Scheduler::try_new(tasks, SchedulerConfig::default(), clock) else {
         panic!("an invalid task must fail construction");
     };
     let text = err.to_string();
+    assert_eq!(err.key(), "cron");
     assert!(text.contains("Reports::nightly"), "{text}");
-    assert!(text.contains("cron"), "{text}");
+    assert!(text.contains("key `cron`"), "{text}");
     assert!(
         !text.contains("not a cron"),
         "the value is not echoed: {text}"
