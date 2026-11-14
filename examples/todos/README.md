@@ -21,23 +21,27 @@ curl http://127.0.0.1:8081/actuator/health/liveness
 curl http://127.0.0.1:8081/actuator/health/readiness
 ```
 
-The other actuator endpoints need an authenticated request, as every path outside
-`/api/todos/**` does. The example configures no `security.jwt`, so without one they
-answer 401.
+The other actuator endpoints, `/actuator/info` and `/actuator/loggers`, need
+authentication, as every path outside `/api/todos/**` and the health probes does. The
+example configures no `security.jwt` and ships no token issuer, so these calls answer 401
+as written here.
 
 ```text
 curl http://127.0.0.1:8081/actuator/info
 ```
 
-With a token, the info endpoint shows the build facts that `build.rs` collects (name,
-version, git sha and branch, and the build time) and the platform. The git facts are
-left out when git is not available at build time.
+An application that configures `security.jwt` can call them with a bearer token. The info
+endpoint then shows the build facts that `build.rs` collects (name, version, git sha and
+branch, and the build time) and the platform; the git facts are left out when git is not
+available at build time.
 
-Logger targets use `::` as the separator, so a dotted target is rejected with 400. This
-call sets the level of the `todos` target to `DEBUG` at run time:
+Logger targets use `::` as the separator, so a dotted target is rejected with 400. In an
+application with `security.jwt` configured, this call sets the level of the `todos` target
+to `DEBUG` at run time. In this example, without a token, it answers 401.
 
 ```text
 curl -X POST -H 'content-type: application/json' \
+  -H 'Authorization: Bearer <token>' \
   -d '{"configuredLevel":"DEBUG"}' \
   http://127.0.0.1:8081/actuator/loggers/todos
 ```
