@@ -11,6 +11,7 @@ jwks = ["dep:reqwest", "dep:rustls"]
 
 [dependencies]
 async-trait = "0.1.92"
+base64 = "0.23.1"
 # Argon2id password hashing; the OS RNG salts come from `getrandom`, with no `ring`.
 argon2 = { version = "0.6.0", default-features = false, features = ["alloc", "getrandom", "password-hash"] }
 http = "1.5.0"

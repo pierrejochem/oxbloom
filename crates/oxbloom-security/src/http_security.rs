@@ -5,7 +5,9 @@ use std::sync::Arc;
 
 use oxbloom_core::HttpMethod;
 
-use crate::chain::{DefaultAccessDeniedHandler, DefaultEntryPoint};
+use crate::chain::{
+    ChallengeEntryPoint, Challenges, DefaultAccessDeniedHandler, DefaultEntryPoint,
+};
 use crate::{
     AccessDeniedHandler, AuthenticationEntryPoint, AuthenticationProvider, AuthorizationManager,
     AuthorizationRule, JwtAuthenticationConverter, JwtAuthenticationProvider, JwtDecoder,
@@ -37,6 +39,10 @@ pub enum SecurityBuildError {
     /// A matcher pattern has a segment with `{`, `}` or `?`, or a `*` that is not a whole `*` or
     /// `**` segment (for example `{id}` or `*.pdf`). Such a pattern would never match.
     InvalidPattern,
+    /// `http_basic` was called but no `password_provider` was added, so no login could succeed.
+    HttpBasicWithoutProvider,
+    /// The Basic realm contains a double quote, a backslash or an ASCII control character.
+    InvalidRealm,
 }
 
 impl fmt::Display for SecurityBuildError {
@@ -49,6 +55,8 @@ impl fmt::Display for SecurityBuildError {
             }
             Self::DuplicateAuthorizeSection => "authorize called more than once",
             Self::InvalidPattern => "invalid matcher pattern",
+            Self::HttpBasicWithoutProvider => "http_basic configured without a password provider",
+            Self::InvalidRealm => "invalid http basic realm",
         })
     }
 }
@@ -75,6 +83,10 @@ pub struct HttpSecurity {
     entry_point: Arc<dyn AuthenticationEntryPoint>,
     access_denied: Arc<dyn AccessDeniedHandler>,
     resource_server_without_decoder: bool,
+    basic: Option<HttpBasic>,
+    password_provider: bool,
+    bearer: bool,
+    custom_entry_point: bool,
 }
 
 impl Default for HttpSecurity {
@@ -101,6 +113,10 @@ impl HttpSecurity {
             entry_point: Arc::new(DefaultEntryPoint),
             access_denied: Arc::new(DefaultAccessDeniedHandler),
             resource_server_without_decoder: false,
+            basic: None,
+            password_provider: false,
+            bearer: false,
+            custom_entry_point: false,
         }
     }
 
@@ -167,6 +183,66 @@ impl HttpSecurity {
     /// ```
     pub fn bearer_provider(mut self, provider: Arc<dyn AuthenticationProvider>) -> Self {
         self.providers.push(provider);
+        self.bearer = true;
+        self
+    }
+
+    /// Registers a provider for `UsernamePassword` requests, such as a
+    /// [`DaoAuthenticationProvider`](crate::DaoAuthenticationProvider). It is only used once
+    /// [`http_basic`](Self::http_basic) is on. Providers are tried in the order they were added.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use oxbloom_security::{
+    ///     Argon2PasswordEncoder, DaoAuthenticationProvider, HttpSecurity,
+    ///     InMemoryUserDetailsService,
+    /// };
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let users = Arc::new(InMemoryUserDetailsService::new(vec![])?);
+    /// let dao = DaoAuthenticationProvider::new(users, Arc::new(Argon2PasswordEncoder::new(8, 1, 1)?));
+    /// let chain = HttpSecurity::new()
+    ///     .http_basic(|b| b)
+    ///     .password_provider(Arc::new(dao))
+    ///     .authorize(|a| a.any_request().authenticated())
+    ///     .build();
+    /// assert!(chain.is_ok());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn password_provider(mut self, provider: Arc<dyn AuthenticationProvider>) -> Self {
+        self.providers.push(provider);
+        self.password_provider = true;
+        self
+    }
+
+    /// Turns on HTTP Basic: `Authorization: Basic <base64>` is decoded and handed to the
+    /// password providers. Without this call a `Basic` header leaves the request anonymous.
+    /// An anonymous request or a failed login gets `WWW-Authenticate: Basic realm="Oxbloom",
+    /// charset="UTF-8"` (see [`HttpBasic::realm`]); when a bearer provider exists too, the 401
+    /// carries the Basic challenge first and the Bearer challenge second. A malformed Basic
+    /// header is a 401, never a 400. A custom [`entry_point`](Self::entry_point) replaces the
+    /// default answers. [`build`](Self::build) fails with
+    /// [`SecurityBuildError::HttpBasicWithoutProvider`] when no
+    /// [`password_provider`](Self::password_provider) was added.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_security::{HttpSecurity, SecurityBuildError};
+    ///
+    /// let err = HttpSecurity::new()
+    ///     .http_basic(|b| b.realm("Admin area"))
+    ///     .authorize(|a| a.any_request().authenticated())
+    ///     .build()
+    ///     .err()
+    ///     .unwrap();
+    /// assert_eq!(err, SecurityBuildError::HttpBasicWithoutProvider);
+    /// ```
+    pub fn http_basic(mut self, f: impl FnOnce(HttpBasic) -> HttpBasic) -> Self {
+        self.basic = Some(f(HttpBasic::new()));
         self
     }
 
@@ -213,10 +289,13 @@ impl HttpSecurity {
     ) -> Self {
         let server = f(ResourceServer::new());
         match server.decoder {
-            Some(decoder) => self.providers.push(Arc::new(JwtAuthenticationProvider::new(
-                decoder,
-                server.converter,
-            ))),
+            Some(decoder) => {
+                self.providers.push(Arc::new(JwtAuthenticationProvider::new(
+                    decoder,
+                    server.converter,
+                )));
+                self.bearer = true;
+            }
             None => self.resource_server_without_decoder = true,
         }
         self
@@ -226,7 +305,9 @@ impl HttpSecurity {
     ///
     /// The one exception is a malformed `Authorization` header (several headers, an empty token,
     /// or a token with whitespace): the chain answers that with its built-in 401
-    /// (`error="invalid_request"`) and never calls this entry point.
+    /// (`error="invalid_request"`, or the Basic challenge for a malformed Basic header) and
+    /// never calls this entry point. With [`http_basic`](Self::http_basic) on, a custom entry
+    /// point also replaces the Basic challenge.
     ///
     /// # Examples
     ///
@@ -242,6 +323,7 @@ impl HttpSecurity {
     /// ```
     pub fn entry_point(mut self, entry_point: Arc<dyn AuthenticationEntryPoint>) -> Self {
         self.entry_point = entry_point;
+        self.custom_entry_point = true;
         self
     }
 
@@ -274,7 +356,9 @@ impl HttpSecurity {
     /// [`SecurityBuildError::InvalidPattern`] when a matcher pattern is not valid Ant syntax
     /// (see [`RequestMatcher::is_valid`]), and
     /// [`SecurityBuildError::ResourceServerWithoutDecoder`] when `oauth2_resource_server` has no
-    /// decoder.
+    /// decoder, [`SecurityBuildError::HttpBasicWithoutProvider`] when `http_basic` has no
+    /// `password_provider`, and [`SecurityBuildError::InvalidRealm`] for a realm with `"`, `\` or
+    /// a control character.
     ///
     /// # Examples
     ///
@@ -316,13 +400,79 @@ impl HttpSecurity {
         if self.resource_server_without_decoder {
             return Err(SecurityBuildError::ResourceServerWithoutDecoder);
         }
+        if let Some(basic) = &self.basic {
+            if basic
+                .realm
+                .chars()
+                .any(|c| c == '"' || c == '\\' || c.is_ascii_control())
+            {
+                return Err(SecurityBuildError::InvalidRealm);
+            }
+            if !self.password_provider {
+                return Err(SecurityBuildError::HttpBasicWithoutProvider);
+            }
+        }
+        let challenges = Challenges {
+            basic_realm: self.basic.map(|b| Arc::from(b.realm)),
+            bearer: self.bearer,
+        };
+        let entry_point: Arc<dyn AuthenticationEntryPoint> =
+            if challenges.basic_realm.is_some() && !self.custom_entry_point {
+                Arc::new(ChallengeEntryPoint(challenges.clone()))
+            } else {
+                self.entry_point
+            };
         let manager = (!self.providers.is_empty()).then(|| ProviderManager::new(self.providers));
         Ok(SecurityFilterChain::new(
             manager,
             authorize.rules,
-            self.entry_point,
+            entry_point,
             self.access_denied,
+            challenges,
         ))
+    }
+}
+
+/// HTTP Basic settings inside [`HttpSecurity::http_basic`].
+///
+/// # Examples
+///
+/// ```
+/// use oxbloom_security::HttpSecurity;
+///
+/// let _security = HttpSecurity::new().http_basic(|b| b.realm("Admin area"));
+/// ```
+#[derive(Debug, Clone)]
+pub struct HttpBasic {
+    realm: String,
+}
+
+impl HttpBasic {
+    fn new() -> Self {
+        Self {
+            realm: "Oxbloom".to_string(),
+        }
+    }
+
+    /// Sets the realm of the `WWW-Authenticate` challenge. The default is `Oxbloom`. A realm
+    /// with `"`, `\` or an ASCII control character makes [`HttpSecurity::build`] fail with
+    /// [`SecurityBuildError::InvalidRealm`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_security::{HttpSecurity, SecurityBuildError};
+    ///
+    /// let err = HttpSecurity::new()
+    ///     .http_basic(|b| b.realm("bad\"realm"))
+    ///     .authorize(|a| a.any_request().authenticated())
+    ///     .build()
+    ///     .err();
+    /// assert_eq!(err, Some(SecurityBuildError::InvalidRealm));
+    /// ```
+    pub fn realm(mut self, realm: impl Into<String>) -> Self {
+        self.realm = realm.into();
+        self
     }
 }
 

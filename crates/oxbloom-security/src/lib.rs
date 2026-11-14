@@ -119,7 +119,7 @@ pub use dao::DaoAuthenticationProvider;
 #[cfg(feature = "di")]
 pub use di::SecurityContainerExt;
 pub use http_security::{
-    AuthorizeBuilder, HttpSecurity, ResourceServer, RuleBuilder, SecurityBuildError,
+    AuthorizeBuilder, HttpBasic, HttpSecurity, ResourceServer, RuleBuilder, SecurityBuildError,
 };
 pub use jsonwebtoken::{Algorithm, Header as JwtHeader};
 pub use jwks::{FetchError, JwksError, JwksFetcher, JwksSource, JwksSourceBuilder, KeyLookupError};

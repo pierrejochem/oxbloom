@@ -3,6 +3,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use http::{HeaderValue, StatusCode, header};
 use oxbloom_config::Secret;
 use oxbloom_core::HttpMethod;
@@ -83,6 +85,93 @@ fn unauthorized(error: Option<&'static str>) -> Response {
     res
 }
 
+/// Which challenges a chain advertises: the Basic realm (when `http_basic` is on) and whether a
+/// bearer provider exists.
+#[derive(Debug, Clone)]
+pub(crate) struct Challenges {
+    pub(crate) basic_realm: Option<Arc<str>>,
+    pub(crate) bearer: bool,
+}
+
+impl Challenges {
+    fn basic_value(&self) -> Option<HeaderValue> {
+        let realm = self.basic_realm.as_ref()?;
+        HeaderValue::from_str(&format!("Basic realm=\"{realm}\", charset=\"UTF-8\"")).ok()
+    }
+
+    fn response(&self, values: impl IntoIterator<Item = HeaderValue>) -> Response {
+        let mut res = empty(StatusCode::UNAUTHORIZED);
+        for value in values {
+            res.headers_mut().append(header::WWW_AUTHENTICATE, value);
+        }
+        res
+    }
+
+    /// The challenge for an anonymous request: Basic first, then Bearer.
+    fn anonymous(&self) -> Response {
+        let mut values = Vec::new();
+        values.extend(self.basic_value());
+        if self.bearer || values.is_empty() {
+            values.push(HeaderValue::from_static("Bearer"));
+        }
+        self.response(values)
+    }
+
+    /// The challenge for a malformed header. `basic` tells whether the scheme was Basic.
+    fn malformed(&self, scheme: Option<Scheme>) -> Response {
+        let invalid_request = HeaderValue::from_static("Bearer error=\"invalid_request\"");
+        let mut values = Vec::new();
+        match scheme {
+            Some(Scheme::Basic) => values.extend(self.basic_value()),
+            Some(Scheme::Bearer) => values.push(invalid_request),
+            None => {
+                values.extend(self.basic_value());
+                if self.bearer || values.is_empty() {
+                    values.push(invalid_request);
+                }
+            }
+        }
+        self.response(values)
+    }
+
+    /// The challenge for a failed login, by the scheme the request used.
+    fn failed(&self, req: &Request) -> Response {
+        if let (true, Some(basic)) = (is_basic(req), self.basic_value()) {
+            return self.response([basic]);
+        }
+        unauthorized(Some("invalid_token"))
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Scheme {
+    Basic,
+    Bearer,
+}
+
+fn is_basic(req: &Request) -> bool {
+    req.headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|t| t.split(' ').next())
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("basic"))
+}
+
+/// The entry point `build` installs when `http_basic` is on and no custom one was set.
+pub(crate) struct ChallengeEntryPoint(pub(crate) Challenges);
+
+impl AuthenticationEntryPoint for ChallengeEntryPoint {
+    fn commence(&self, req: &Request, error: Option<&AuthenticationError>) -> Response {
+        match error {
+            None => self.0.anonymous(),
+            Some(AuthenticationError::ProviderUnavailable) => {
+                empty(StatusCode::SERVICE_UNAVAILABLE)
+            }
+            Some(_) => self.0.failed(req),
+        }
+    }
+}
+
 /// The default [`AuthenticationEntryPoint`].
 ///
 /// Anonymous requests get 401 with `WWW-Authenticate: Bearer`. A failed token gets 401 with
@@ -141,32 +230,51 @@ impl AccessDeniedHandler for DefaultAccessDeniedHandler {
 
 enum Credentials {
     Anonymous,
-    Malformed,
+    Malformed(Option<Scheme>),
     Token(String),
+    Basic { username: String, password: String },
 }
 
-/// Reads `Authorization: Bearer <token>`. A missing header or another scheme is anonymous.
-fn extract(req: &Request) -> Credentials {
+/// Reads `Authorization: Bearer <token>` and, when `basic` is on, `Authorization: Basic <token>`.
+/// A missing header or another scheme is anonymous; so is a scheme that is switched off.
+fn extract(req: &Request, basic: bool, bearer: bool) -> Credentials {
     let mut values = req.headers.get_all(header::AUTHORIZATION).iter();
     let Some(first) = values.next() else {
         return Credentials::Anonymous;
     };
     if values.next().is_some() {
-        return Credentials::Malformed;
+        return Credentials::Malformed(None);
     }
     let Ok(text) = first.to_str() else {
-        return Credentials::Malformed;
+        return Credentials::Malformed(None);
     };
     let (scheme, rest) = text.split_once(' ').unwrap_or((text, ""));
-    if !scheme.eq_ignore_ascii_case("bearer") {
-        return Credentials::Anonymous;
-    }
     let token = rest.trim_start_matches(' ');
-    if token.is_empty() || token.contains(char::is_whitespace) {
-        Credentials::Malformed
+    if bearer && scheme.eq_ignore_ascii_case("bearer") {
+        if token.is_empty() || token.contains(char::is_whitespace) {
+            Credentials::Malformed(Some(Scheme::Bearer))
+        } else {
+            Credentials::Token(token.to_owned())
+        }
+    } else if basic && scheme.eq_ignore_ascii_case("basic") {
+        decode_basic(token).unwrap_or(Credentials::Malformed(Some(Scheme::Basic)))
     } else {
-        Credentials::Token(token.to_owned())
+        Credentials::Anonymous
     }
+}
+
+/// Decodes the Base64 token of a Basic header and splits it at the first colon.
+fn decode_basic(token: &str) -> Option<Credentials> {
+    if token.is_empty() || token.contains(char::is_whitespace) {
+        return None;
+    }
+    let bytes = STANDARD.decode(token).ok()?;
+    let text = String::from_utf8(bytes).ok()?;
+    let (username, password) = text.split_once(':')?;
+    Some(Credentials::Basic {
+        username: username.to_owned(),
+        password: password.to_owned(),
+    })
 }
 
 /// A [`Filter`] that authenticates a request, authorizes it and either continues or answers
@@ -212,6 +320,7 @@ pub struct SecurityFilterChain {
     rules: Vec<(RequestMatcher, AuthorizationRule)>,
     entry_point: Arc<dyn AuthenticationEntryPoint>,
     access_denied: Arc<dyn AccessDeniedHandler>,
+    challenges: Challenges,
 }
 
 impl SecurityFilterChain {
@@ -220,12 +329,14 @@ impl SecurityFilterChain {
         rules: Vec<(RequestMatcher, AuthorizationRule)>,
         entry_point: Arc<dyn AuthenticationEntryPoint>,
         access_denied: Arc<dyn AccessDeniedHandler>,
+        challenges: Challenges,
     ) -> Self {
         Self {
             manager,
             rules,
             entry_point,
             access_denied,
+            challenges,
         }
     }
 
@@ -254,17 +365,29 @@ impl Filter for SecurityFilterChain {
         }
         let mut context = SecurityContext::anonymous();
         if let Some(manager) = &self.manager {
-            match extract(&req) {
-                Credentials::Anonymous => {}
-                Credentials::Malformed => return unauthorized(Some("invalid_request")),
+            let credentials = match extract(
+                &req,
+                self.challenges.basic_realm.is_some(),
+                self.challenges.bearer,
+            ) {
+                Credentials::Anonymous => None,
+                Credentials::Malformed(scheme) => return self.challenges.malformed(scheme),
                 Credentials::Token(token) => {
-                    let credentials = AuthenticationRequest::BearerToken(Secret::new(token));
-                    match manager.authenticate(&credentials).await {
-                        Ok(authentication) => {
-                            context = SecurityContext::authenticated(authentication);
-                        }
-                        Err(error) => return self.entry_point.commence(&req, Some(&error)),
+                    Some(AuthenticationRequest::BearerToken(Secret::new(token)))
+                }
+                Credentials::Basic { username, password } => {
+                    Some(AuthenticationRequest::UsernamePassword {
+                        username,
+                        password: Secret::new(password),
+                    })
+                }
+            };
+            if let Some(credentials) = credentials {
+                match manager.authenticate(&credentials).await {
+                    Ok(authentication) => {
+                        context = SecurityContext::authenticated(authentication);
                     }
+                    Err(error) => return self.entry_point.commence(&req, Some(&error)),
                 }
             }
         }
