@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/oxbloom-core", "crates/oxbloom-macros", "crates/oxbloom-web", "crates/oxbloom-cli", "crates/oxbloom-di", "crates/oxbloom-config", "crates/oxbloom-security", "crates/oxbloom-boot", "crates/oxbloom-logging", "crates/oxbloom-test", "crates/oxbloom-ssl", "examples/hello", "examples/todos"]
+members = ["crates/oxbloom-core", "crates/oxbloom-macros", "crates/oxbloom-web", "crates/oxbloom-cli", "crates/oxbloom-di", "crates/oxbloom-config", "crates/oxbloom-security", "crates/oxbloom-boot", "crates/oxbloom-logging", "crates/oxbloom-test", "crates/oxbloom-ssl", "crates/oxbloom-actuator", "examples/hello", "examples/todos"]
 
 [workspace.package]
 version = "0.1.0"
