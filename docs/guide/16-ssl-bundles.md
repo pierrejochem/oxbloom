@@ -103,7 +103,7 @@ bundle = "web"
 - The port speaks only HTTPS. There is no second HTTP listener and no redirect from HTTP; put a proxy in front when you need one.
 - ALPN is `http/1.1` only, so a client that offers only `h2` fails the handshake. Mutual TLS (client certificates on the server side) is not supported.
 - Each connection is handshaken in its own task with a 10 second timeout. A failed or timed-out handshake is logged at `debug` on target `oxbloom::web` with the peer address and the error kind, and does not affect other connections. A handshake still running when shutdown starts is dropped at once; established connections drain under `server.shutdown-timeout` as they do without TLS.
-- `Request::scheme()` reports `https`, unless a trusted proxy's forwarded headers say otherwise.
+- `Request::scheme()` reports `https`, unless a trusted proxy sends a forwarded `proto` that says otherwise. Without a `proto`, also from a trusted peer that sends no forwarded header at all, it stays `https`.
 - An unknown bundle name, or a bundle without an identity, fails the startup with a `ConfigError` on `server.ssl.bundle` that lists the available bundle names.
 - `server.ssl.bundle` without the `ssl` feature is an error too, and so is `WebServer::new` with the key set: the server never falls back to plain HTTP when you asked for HTTPS. Build the server with `WebServer::with_ssl(app, &config, Some(&bundles))` when you construct it by hand.
 

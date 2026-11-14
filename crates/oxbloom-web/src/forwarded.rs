@@ -305,9 +305,10 @@ fn parse_net(entry: &str) -> Option<(IpAddr, u8)> {
 /// any host and steer redirects, absolute links or security decisions built on them.
 ///
 /// `transport` is the scheme of the connection itself: `Https` when the server terminated TLS.
-/// It is the scheme whenever the forwarded headers are not used. Trusted forwarded headers keep
-/// their meaning: they describe the client's own connection to the first proxy, so a missing
-/// `proto` there still means `Http`.
+/// It is the scheme whenever the forwarded headers are not used, and also when a trusted peer
+/// sends no `proto` (no forwarded header at all, or one without `proto`): a missing `proto`
+/// leaves the request's own scheme. A `proto` from a trusted proxy wins, because it describes
+/// the client's own connection to the first proxy.
 pub(crate) fn resolve_client(
     peer: SocketAddr,
     headers: &HeaderMap,
@@ -323,9 +324,9 @@ pub(crate) fn resolve_client(
         return fallback;
     }
     let resolved = if headers.contains_key(http::header::FORWARDED) {
-        from_forwarded(headers, &cfg.trusted)
+        from_forwarded(headers, &cfg.trusted, transport)
     } else {
-        from_x_forwarded(headers, &cfg.trusted, peer)
+        from_x_forwarded(headers, &cfg.trusted, peer, transport)
     };
     resolved.unwrap_or(fallback)
 }
@@ -358,6 +359,7 @@ fn from_x_forwarded(
     headers: &HeaderMap,
     trusted: &TrustedProxies,
     peer: SocketAddr,
+    transport: Scheme,
 ) -> Option<ClientInfo> {
     let hops = match joined(headers, "x-forwarded-for")? {
         Some(list) => list.split(',').map(parse_hop).collect::<Option<Vec<_>>>()?,
@@ -382,7 +384,7 @@ fn from_x_forwarded(
     };
     Some(ClientInfo {
         addr,
-        scheme: pick("x-forwarded-proto").map_or(Scheme::Http, |p| parse_proto(&p)),
+        scheme: pick("x-forwarded-proto").map_or(transport, |p| parse_proto(&p)),
         host: pick("x-forwarded-host").filter(|h| is_authority(h)),
     })
 }
@@ -395,7 +397,11 @@ struct Element {
     host: Option<String>,
 }
 
-fn from_forwarded(headers: &HeaderMap, trusted: &TrustedProxies) -> Option<ClientInfo> {
+fn from_forwarded(
+    headers: &HeaderMap,
+    trusted: &TrustedProxies,
+    transport: Scheme,
+) -> Option<ClientInfo> {
     let list = joined(headers, "forwarded")??;
     let elements = split_quoted(&list, b',')?
         .into_iter()
@@ -409,7 +415,7 @@ fn from_forwarded(headers: &HeaderMap, trusted: &TrustedProxies) -> Option<Clien
     let el = &elements[i];
     Some(ClientInfo {
         addr: hops[i],
-        scheme: el.proto.as_deref().map_or(Scheme::Http, parse_proto),
+        scheme: el.proto.as_deref().map_or(transport, parse_proto),
         host: el.host.clone().filter(|h| is_authority(h)),
     })
 }
@@ -1043,13 +1049,33 @@ mod tests {
         // Unparsable headers from a trusted peer fall back to the connection as well.
         let cfg = framework(&["10.0.0.1"]);
         assert_eq!(tls(&cfg, &[("forwarded", "for=\"")]).scheme, Scheme::Https);
-        // A trusted proxy's headers describe the client's connection to it.
+        // A trusted proxy's proto describes the client's connection to it.
         assert_eq!(tls(&cfg, &spoofed).scheme, Scheme::Http);
-        assert_eq!(
-            tls(&cfg, &[("x-forwarded-for", "203.0.113.9")]).scheme,
-            Scheme::Http
-        );
+        let got = tls(&cfg, &[("forwarded", "for=203.0.113.9;proto=http")]);
+        assert_eq!(got.scheme, Scheme::Http);
         let got = tls(&cfg, &[("forwarded", "for=203.0.113.9;proto=https")]);
         assert_eq!(got.scheme, Scheme::Https);
+        // Without a proto, the request's own scheme stays.
+        let got = tls(&cfg, &[("x-forwarded-for", "203.0.113.9")]);
+        assert_eq!(got.scheme, Scheme::Https);
+        assert_eq!(got.addr, sa("203.0.113.9:0"));
+        let got = tls(&cfg, &[("forwarded", "for=203.0.113.9")]);
+        assert_eq!(got.scheme, Scheme::Https);
+        // A trusted peer that sends no forwarded header at all, such as a local client of the
+        // default loopback list.
+        let got = tls(&cfg, &[]);
+        assert_eq!(got.scheme, Scheme::Https);
+        assert_eq!(got.addr, sa(PEER));
+        let loopback = ForwardedConfig {
+            strategy: ForwardStrategy::Framework,
+            ..ForwardedConfig::default()
+        };
+        let local = resolve_client(
+            sa("127.0.0.1:50000"),
+            &HeaderMap::new(),
+            &loopback,
+            Scheme::Https,
+        );
+        assert_eq!(local.scheme, Scheme::Https);
     }
 }

@@ -989,9 +989,11 @@ untrusted hop is the client, and when every hop is trusted the leftmost is. With
 come from the client's element. A list in `X-Forwarded-Proto` or `X-Forwarded-Host` is read at the client's hop
 when it has as many entries as `X-Forwarded-For`; otherwise (also without `X-Forwarded-For`) its rightmost entry
 is used. Any element that is not a valid IP address (optional port, bracketed IPv6) makes the whole header
-unusable; then any `proto` and `host` are dropped too, so the peer stays the client, the scheme is `Http` and the
-host is `None`. `proto` gives `Https` when it is `https` (in any case); any other value leaves the scheme `Http`.
-`host` must be a valid authority, otherwise the host is `None`.
+unusable; then any `proto` and `host` are dropped too, so the peer stays the client, the scheme is the
+connection's own and the host is `None`. `proto` gives `Https` when it is `https` (in any case) and `Http` for
+any other value. Without a `proto` (also without any forwarded header) the scheme is the connection's own:
+`Http`, or `Https` when the server terminated TLS. `host` must be a valid authority, otherwise the host is
+`None`.
 
 **Deployment requirement.** The trusted proxy must set or strip `Forwarded`, overwrite or strip
 `X-Forwarded-Proto` and `X-Forwarded-Host`, and append to `X-Forwarded-For`. Otherwise clients control their
@@ -1197,7 +1199,9 @@ by default and adds `tokio-rustls` without a crypto provider, so the caller's co
   never with bytes the client sent.
 - HTTP/1.1 only: set `alpn_protocols` to `http/1.1` alone, so an `h2`-only client fails the handshake. A
   connection that still negotiates another protocol is closed; a client that offers no ALPN is served.
-- `Request::scheme()` is `Scheme::Https`, unless a trusted proxy's forwarded headers say otherwise.
+- `Request::scheme()` is `Scheme::Https`, unless a trusted proxy sends a forwarded `proto` that says
+  otherwise. A trusted peer without a `proto` (for example a local client under the default loopback list)
+  keeps `Https`.
 
 ```rust
 use tokio_rustls::rustls::ServerConfig;
