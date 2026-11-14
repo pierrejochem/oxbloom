@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
@@ -45,6 +46,8 @@ pub struct Todo {
 #[derive(Debug, Default)]
 pub struct TodoStore {
     items: Mutex<BTreeMap<u64, Todo>>,
+    /// When each todo that is done became done; the cleanup task reads it.
+    done_at: Mutex<BTreeMap<u64, SystemTime>>,
     /// The last id handed out.
     last_id: AtomicU64,
 }
@@ -53,6 +56,10 @@ impl TodoStore {
     fn items(&self) -> std::sync::MutexGuard<'_, BTreeMap<u64, Todo>> {
         // The map stays consistent even if a holder panicked.
         self.items.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    fn done_at(&self) -> std::sync::MutexGuard<'_, BTreeMap<u64, SystemTime>> {
+        self.done_at.lock().unwrap_or_else(|p| p.into_inner())
     }
 
     /// Adds a todo that is not done and returns it.
@@ -146,6 +153,31 @@ impl TodoStore {
     /// assert_eq!((todo.title.as_str(), todo.done), ("a", true));
     /// ```
     pub fn patch(&self, id: u64, title: Option<String>, done: Option<bool>) -> Option<Todo> {
+        self.patch_at(id, title, done, SystemTime::now())
+    }
+
+    /// Like [`patch`](TodoStore::patch), with `at` as the moment a todo becomes done. A todo
+    /// that is already done keeps its earlier moment, and one that is no longer done has none.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::time::SystemTime;
+    /// use todos::todo::TodoStore;
+    ///
+    /// let store = TodoStore::default();
+    /// store.create("a".into());
+    /// let long_ago = SystemTime::UNIX_EPOCH;
+    /// store.patch_at(1, None, Some(true), long_ago);
+    /// assert_eq!(store.remove_done_before(SystemTime::now()), 1);
+    /// ```
+    pub fn patch_at(
+        &self,
+        id: u64,
+        title: Option<String>,
+        done: Option<bool>,
+        at: SystemTime,
+    ) -> Option<Todo> {
         let mut items = self.items();
         let todo = items.get_mut(&id)?;
         if let Some(title) = title {
@@ -153,8 +185,45 @@ impl TodoStore {
         }
         if let Some(done) = done {
             todo.done = done;
+            let mut done_at = self.done_at();
+            if done {
+                done_at.entry(id).or_insert(at);
+            } else {
+                done_at.remove(&id);
+            }
         }
         Some(todo.clone())
+    }
+
+    /// Removes every done todo that became done before `cutoff` and returns how many.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::time::SystemTime;
+    /// use todos::todo::TodoStore;
+    ///
+    /// let store = TodoStore::default();
+    /// store.create("open".into());
+    /// store.create("done".into());
+    /// store.patch(2, None, Some(true));
+    /// assert_eq!(store.remove_done_before(SystemTime::UNIX_EPOCH), 0);
+    /// assert_eq!(store.remove_done_before(SystemTime::now() + std::time::Duration::from_secs(1)), 1);
+    /// assert_eq!(store.list(None).len(), 1);
+    /// ```
+    pub fn remove_done_before(&self, cutoff: SystemTime) -> usize {
+        let mut items = self.items();
+        let mut done_at = self.done_at();
+        let expired: Vec<u64> = done_at
+            .iter()
+            .filter(|(_, at)| **at < cutoff)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in &expired {
+            items.remove(id);
+            done_at.remove(id);
+        }
+        expired.len()
     }
 
     /// Removes the todo; `true` if it existed.
@@ -170,6 +239,7 @@ impl TodoStore {
     /// assert!(!store.delete(1));
     /// ```
     pub fn delete(&self, id: u64) -> bool {
+        self.done_at().remove(&id);
         self.items().remove(&id).is_some()
     }
 }

@@ -7,10 +7,12 @@ rust-version.workspace = true
 
 [dependencies]
 http = "1.5.0"
-oxbloom-boot = { version = "0.1.0", path = "../../crates/oxbloom-boot", features = ["web", "security", "logging", "actuator"] }
+oxbloom-boot = { version = "0.1.0", path = "../../crates/oxbloom-boot", features = ["web", "security", "logging", "actuator", "tasks"] }
 oxbloom-actuator = { version = "0.1.0", path = "../../crates/oxbloom-actuator" }
+oxbloom-config = { version = "0.1.0", path = "../../crates/oxbloom-config" }
 oxbloom-di = { version = "0.1.0", path = "../../crates/oxbloom-di" }
 oxbloom-security = { version = "0.1.0", path = "../../crates/oxbloom-security", features = ["di"] }
+oxbloom-tasks = { version = "0.1.0", path = "../../crates/oxbloom-tasks" }
 oxbloom-web = { version = "0.1.0", path = "../../crates/oxbloom-web" }
 serde = { version = "1.0.229", features = ["derive"] }
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros"] }

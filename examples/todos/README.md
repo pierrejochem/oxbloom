@@ -1,7 +1,7 @@
 # Todos example
 
 A CRUD REST API on the Oxbloom web, security and logging stack, with the actuator
-enabled. Start it on a free port and note the address it prints.
+and the task scheduler enabled. Start it on a free port and note the address it prints.
 
 ```text
 cargo run -p todos -- --server.port=0
@@ -45,3 +45,18 @@ curl -X POST -H 'content-type: application/json' \
   -d '{"configuredLevel":"DEBUG"}' \
   http://127.0.0.1:8081/actuator/loggers/todos
 ```
+
+## Scheduled cleanup
+
+The `TodoCleanup` bean in `src/cleanup.rs` has one scheduled task, `TodoCleanup::cleanup`. It
+removes every todo that has been done for longer than `todos.cleanup.max-age`, which is 24
+hours in `application.toml`. The task uses `fixed_delay = "1m"`, so it runs one minute after
+the previous run ended, and the first run is one minute after the application starts. The
+period is written in the attribute and cannot be changed by configuration; the age can, for
+example with `--todos.cleanup.max-age=30m`. A todo that is set back to not done is not removed.
+
+Boot starts the scheduler because the bean is registered as a `dyn Scheduling`. Its settings
+are the `tasks.scheduling.*` keys: `enabled` (set it to `false` to run no task),
+`max-concurrent`, `shutdown-timeout`, `zone` and `initial-delay`. For example,
+`--tasks.scheduling.enabled=false` switches the cleanup off. The scheduler logs its events at the
+target `oxbloom::tasks`, and the cleanup logs the number of removed todos at the target `todos`.

@@ -4,8 +4,9 @@
 //! |---|---|
 //! | `todo.rs` | a thread-safe in-memory store: `Mutex<BTreeMap>` plus an atomic id counter, ids from 1, never reused |
 //! | `api.rs` | `#[controller("/api/todos")]` with `#[post("")]`, `#[get]`, `#[put]`, `#[patch]`, `#[delete]`, path parameters, a query filter, `Json<T>` answers, `Request::json` bodies, status codes, a `SecurityCustomizer` |
+//! | `cleanup.rs` | `#[scheduling]` with one `#[scheduled(fixed_delay = "1m")]` method that removes done todos older than `todos.cleanup.max-age`, run by boot's `tasks` feature |
 //! | `build.rs` | `oxbloom_actuator::build::emit()`, which feeds the build facts of `/actuator/info` |
-//! | `application.toml` | `server.port` and the `logging.level` table (`root`, and `todos` for the handlers' events) |
+//! | `application.toml` | `server.port`, `todos.cleanup.max-age` and the `logging.level` table (`root`, and `todos` for the handlers' events) |
 //!
 //! The handlers log with `tracing::info!` at target `todos`; boot installs the
 //! logging subscriber, so the events show on the console. `main.rs` adds the
@@ -18,6 +19,7 @@
 //! ```
 
 pub mod api;
+pub mod cleanup;
 pub mod todo;
 
 use std::path::PathBuf;
@@ -28,9 +30,11 @@ use oxbloom_boot::{
 };
 use oxbloom_di::Container;
 use oxbloom_security::SECRET_KEY;
+use oxbloom_tasks::Scheduling;
 use oxbloom_web::Controller;
 
 use crate::api::{PublicPaths, TodoController};
+use crate::cleanup::{TodoCleanup, cleanup_bean};
 use crate::todo::TodoStore;
 
 /// Prints the address once the server listens.
@@ -87,6 +91,8 @@ pub fn application(config_dir: impl Into<PathBuf>) -> OxbloomApplicationBuilder 
         .configure(|b| {
             b.bean(build_info)
                 .bean(TodoStore::default)
+                .try_bean(cleanup_bean)
+                .provides(|c: Arc<TodoCleanup>| -> Arc<dyn Scheduling> { c })
                 .component::<TodoController>()
                 .provides(|c: Arc<TodoController>| -> Arc<dyn Controller> { c })
                 .bean(|| PublicPaths)
