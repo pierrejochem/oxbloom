@@ -11,6 +11,12 @@ title() { sed -n 's/^# //p;T;q' "$1" | head -n 1; }
   echo
   echo "[Introduction](introduction.md)"
   echo
+  echo "# Guide"
+  echo
+  for f in docs/guide/*.md; do
+    t=$(title "$f"); echo "- [${t:-$(basename "$f" .md)}](${f#docs/})"
+  done
+  echo
   echo "# Reference"
   echo
   echo "- [API reference](API.md)"
