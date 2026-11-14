@@ -9,17 +9,17 @@ Only what is implemented and tested is documented as available. Anything else is
 | Crate | Purpose | Key public items |
 |---|---|---|
 | `oxbloom-core` | Shared types | `HttpMethod`, `InvalidHttpMethod`, `Clock`, `SystemClock` |
-| `oxbloom-macros` | Procedural macros | `#[controller]`, `#[get]`, `#[post]`, `#[put]`, `#[patch]`, `#[delete]`, `#[head]`, `#[options]`, `#[component]`, `#[configuration]`, `#[bean]` (with condition options), `#[auto_configuration]` (used through `oxbloom-boot`), `#[scheduling]` and `#[scheduled]` (used through `oxbloom-tasks`) |
+| `oxbloom-macros` | Procedural macros | `#[controller]`, `#[get]`, `#[post]`, `#[put]`, `#[patch]`, `#[delete]`, `#[head]`, `#[options]`, `#[component]`, `#[configuration]`, `#[bean]` (with condition options), `#[auto_configuration]` (used through `oxbloom-boot`), `#[scheduling]`, `#[scheduled]` and `#[retryable]` (used through `oxbloom-tasks`) |
 | `oxbloom-web` | Router, request/response, Hyper server, filters | `App`, `Router`, `RouterConfig`, `Route`, `Request`, `Response`, `IntoResponse`, `Controller`, `RouteError`, `Filter`, `Next`, `Ordered`, `order` (with `order::CORS`, `order::NEGOTIATION` and `order::COMPRESSION`), `RequestLogFilter`, `CorsConfig`, `CorsFilter`, `CorsError`, `CompressionConfig`, `CompressionLevel`, `CompressionFilter`, `codecs`, `StaticResources`, `ResourceSource`, `DiskResources`, `EmbeddedResources`, `Resource`, `ResourceError`, `Json` and `JsonBody` (feature `json`), `HttpError`, `ErrorValue`, `ErrorAttributes`, `RequestInfo`, `ErrorRenderer`, `ProblemRenderer`, `ClientInfo`, `Scheme`, `ForwardedConfig`, `ForwardStrategy`, `TrustedProxies`, `ProxyParseError`, `App::serve_tls` (feature `tls`) |
 | `oxbloom-di` | Singleton dependency injection: traits, collections, lifecycle, lazy beans, bean factories, profiles, conditions and groups | `ContainerBuilder`, `Container`, `Resolver`, `Component`, `Configuration`, `Lifecycle`, `ShutdownReport`, `DestroyFailure`, `Inject`, `BeanFn`, `TryBeanFn`, `DiError`, `ErrorSource`, `Environment`, `ConditionContext`, `ConditionOutcome`, `Conditions`, `ConditionReport`, `ConditionRecord` |
 | `oxbloom-config` | Typed config: TOML + imports, profiles, env and CLI sources, placeholders, origins | `Config`, `ConfigBuilder`, `Secret`, `ConfigError`, `Origin`, `DataSize`, `ConfigWarning` |
 | `oxbloom-security` | Filter-chain security, JWT resource server | `HttpSecurity`, `SecurityFilterChain`, `JwtDecoderBuilder`, `JwksSource`, `Authentication`, `jwt_decoder_from_config`, `jwks_ssl_bundle`, `ReqwestJwksFetcher` with `with_tls` (feature `jwks`) |
-| `oxbloom-boot` | Application entry point: lifecycle events, runners, services, signals, exit codes, banner, failure analysis, auto-configuration and the conditions report | `OxbloomApplication`, `OxbloomApplicationBuilder`, `ApplicationArguments`, `RunListener`, `ApplicationRunner`, `CommandLineRunner`, `Service`, `ExitCodeGenerator`, `ShutdownHandle`, `StartupError`, `StartupPhase`, `ServiceError`, `RunnerError`, `ExitStatus`, `Banner`, `FailureAnalysis`, `FailureAnalyzer`, `AutoConfiguration`, `AutoConfigurations`, `ConfigRef`, `auto_configuration`, `Conditions`, `Configuration`, `PropertyMetadata`, `boot_properties`, `WebServer`, `BindError`, `WebServerAutoConfiguration` and `RequestLogAutoConfiguration` (feature `web`), `auto_configurations` (feature `security` or `web`), `JwtDecoderAutoConfiguration`, `SecurityAutoConfiguration` and `SecurityCustomizer` (feature `security`), `WebServer::with_ssl` and `SslAutoConfiguration` (feature `ssl`), `ActuatorAutoConfiguration` (feature `actuator`), `TasksAutoConfiguration` and `SchedulerService` (feature `tasks`), `OxbloomApplicationBuilder::logging` (feature `logging`), `async_trait` |
+| `oxbloom-boot` | Application entry point: lifecycle events, runners, services, signals, exit codes, banner, failure analysis, auto-configuration and the conditions report | `OxbloomApplication`, `OxbloomApplicationBuilder`, `ApplicationArguments`, `RunListener`, `ApplicationRunner`, `CommandLineRunner`, `Service`, `ExitCodeGenerator`, `ShutdownHandle`, `StartupError`, `StartupPhase`, `ServiceError`, `RunnerError`, `ExitStatus`, `Banner`, `FailureAnalysis`, `FailureAnalyzer`, `AutoConfiguration`, `AutoConfigurations`, `ConfigRef`, `auto_configuration`, `Conditions`, `Configuration`, `PropertyMetadata`, `boot_properties`, `WebServer`, `BindError`, `WebServerAutoConfiguration` and `RequestLogAutoConfiguration` (feature `web`), `auto_configurations` (feature `security` or `web`), `JwtDecoderAutoConfiguration`, `SecurityAutoConfiguration` and `SecurityCustomizer` (feature `security`), `WebServer::with_ssl` and `SslAutoConfiguration` (feature `ssl`), `ActuatorAutoConfiguration` (feature `actuator`), `TasksAutoConfiguration`, `RetryAutoConfiguration` and `SchedulerService` (feature `tasks`), `OxbloomApplicationBuilder::logging` (feature `logging`), `async_trait` |
 | `oxbloom-logging` | `tracing` subscriber from the `logging.*` keys: levels, groups, console format and color, rotating file output, JSON lines, runtime change | `Level`, `ParseLevelError`, `ConsoleFormat`, `ConsoleColor`, `FileRotation`, `FileFormat`, `JsonField`, `LoggingError`, `LoggingSystem`, `PROPERTIES` |
 | `oxbloom-test` | Test support (dev-dependency): run an application context through the real boot lifecycle, captured output, temporary config directories, controllable clocks, a test client and whole applications on port 0 | `ContextRunner`, `ContextView`, `FailureView`, `Captured`, `Log`, `TempConfigDir`, `FixedClock`, `ManualClock`, `TestClient`, `TestResponse`, `TestApp` and `RunningApp` (feature `web`), `TestClient::connect_tls` and `RunningApp::client_tls` (feature `tls`) |
 | `oxbloom-ssl` | Named SSL bundles from the `ssl.*` keys (PEM and PKCS#12), reloaded when their files change, with certificate validity warnings | `SslBundles`, `SslBundle`, `SslError`, `CertValidity`, `ReloadTask`, `PROPERTIES` |
 | `oxbloom-actuator` | Operational endpoints: availability state, health indicators, build and platform info, runtime log levels, a certificate validity indicator | `Availability`, `Liveness`, `Readiness`, `Status`, `Health`, `HealthIndicator`, `HealthRunner`, `BuildInfo`, `build_info!`, `build::emit`, `Platform`, `Info`, `InfoContributor`, `ActuatorSettings`, `ActuatorController` (feature `web`), `SslHealthIndicator` (feature `ssl`) |
-| `oxbloom-tasks` | Task scheduling: fixed-rate, fixed-delay and cron triggers with zones, the `Scheduler`, and the `#[scheduling]` and `#[scheduled]` macros | `Trigger`, `CronExpr`, `Zone`, `TriggerError`, `parse_duration`, `Task`, `Scheduling`, `Outcome`, `TaskError`, `BoxFuture`, `RunFn`, `Scheduler`, `SchedulerConfig`, `TaskStatus`, `TasksSettings`, `scheduling`, `scheduled` |
+| `oxbloom-tasks` | Task scheduling and retry: fixed-rate, fixed-delay and cron triggers with zones, the `Scheduler`, `RetryPolicy` with backoff and jitter, and the `#[scheduling]`, `#[scheduled]` and `#[retryable]` macros | `Trigger`, `CronExpr`, `Zone`, `TriggerError`, `parse_duration`, `Task`, `Scheduling`, `Outcome`, `TaskError`, `BoxFuture`, `RunFn`, `Scheduler`, `SchedulerConfig`, `TaskStatus`, `TasksSettings`, `RetryPolicy`, `Backoff`, `Jitter`, `RetryDefaults`, `RetryError`, `defaults`, `set_defaults`, `reset_defaults`, `scheduling`, `scheduled`, `retryable` |
 | `oxbloom-cli` | `oxbloom` binary: project generator | `new`, `list` |
 | `examples/todos` | A CRUD REST API on the web, security and logging stack (controller with `#[post]`, `#[get]`, `#[put]`, `#[patch]`, `#[delete]`, a thread-safe in-memory store, `Json<T>` and `Request::json`, `tracing` events at the target `todos`, a scheduled cleanup task) | `cargo run -p todos -- --server.port=0` or `make run-todos` |
 | `examples/hello` | A small application that uses the current features (configuration and beans, trait injection, lifecycle, runners, listeners, exit codes, security and `WebServer` auto-configured through a `SecurityCustomizer` and a `dyn Controller`, a custom failure analyzer, an auto-configuration with a user override) | `cargo run -p hello -- --server.port=0` |
@@ -38,8 +38,8 @@ startup events, the `LoggingSystem` bean and a built-in analyzer for invalid `lo
 SSL bundle errors. `oxbloom-web/tls` adds `App::serve_tls`. `oxbloom-ssl/di` implements
 `oxbloom_di::Lifecycle` for `SslBundles`. `oxbloom-boot/actuator` (it turns `web` on) enables `oxbloom-actuator/web` and adds
 `ActuatorAutoConfiguration`; with `logging` or `ssl` it also enables `oxbloom-actuator/logging` or
-`oxbloom-actuator/ssl`. `oxbloom-boot/tasks` adds `oxbloom-tasks`, `TasksAutoConfiguration` and
-`SchedulerService`; the macros `#[scheduling]` and `#[scheduled]` have no feature flag. `oxbloom-test/tls` adds `TestClient::connect_tls` and
+`oxbloom-actuator/ssl`. `oxbloom-boot/tasks` adds `oxbloom-tasks`, `TasksAutoConfiguration`, `RetryAutoConfiguration` and
+`SchedulerService`; the macros `#[scheduling]`, `#[scheduled]` and `#[retryable]` have no feature flag. `oxbloom-test/tls` adds `TestClient::connect_tls` and
 `RunningApp::client_tls`. With either
 feature, `oxbloom_boot::auto_configurations()` lists the auto-configurations of the enabled
 features. `oxbloom-boot` always enables `oxbloom-config/di`.
@@ -3619,7 +3619,7 @@ for the enabled features, in dependency order: `JwtDecoderAutoConfiguration` and
 `SecurityAutoConfiguration` with `security`, `SslAutoConfiguration` with `ssl`,
 `ActuatorAutoConfiguration` with `actuator`, then
 `RequestLogAutoConfiguration` and `WebServerAutoConfiguration` with `web`, and last
-`TasksAutoConfiguration` with `tasks`. Without
+`TasksAutoConfiguration` and then `RetryAutoConfiguration` with `tasks`. Without
 either feature the function does not exist. Remove one entry with `exclude::<A>()`.
 
 ```rust
@@ -3870,6 +3870,33 @@ let clock: Arc<dyn Clock> = Arc::new(SystemClock);
 let scheduler = Arc::new(Scheduler::try_new(Vec::new(), SchedulerConfig::default(), clock)?);
 let service = SchedulerService::new(scheduler);
 assert_eq!((service.phase(), service.name()), (i32::MAX, "TaskScheduler"));
+```
+
+#### `RetryAutoConfiguration` (feature `tasks`)
+
+Makes the `tasks.retry.*` keys the process-wide defaults of every `#[retryable]` method of
+[`oxbloom-tasks`](#413-oxbloom-tasks). It has no conditions, so it runs with or without a `dyn Scheduling` bean
+and when `tasks.scheduling.enabled` is `false`. It registers the `RetryDefaults` read with
+`RetryDefaults::from_config` and stores them with `set_defaults`. An unknown key directly under `tasks` or
+`tasks.retry`, or a bad value, fails the build with `DiError::Creation` for `RetryDefaults` whose source is the
+`ConfigError` naming the key, never the value, and the defaults stay as they were. The defaults are
+process-wide: each context that runs this group overwrites them, a context without it keeps what the process
+stored before, they stay set after the run ends, and `oxbloom_tasks::reset_defaults()` restores the built-in
+values (`oxbloom-test` has no reset). The property metadata lists the six `tasks.retry.*` keys, so with
+`TasksAutoConfiguration` there are eleven `tasks.*` keys in all; the retry keys are in the table under
+[`oxbloom-tasks`](#413-oxbloom-tasks).
+
+```rust
+use oxbloom_boot::{OxbloomApplication, RetryAutoConfiguration};
+
+let keys: Vec<_> = OxbloomApplication::builder()
+    .auto_configuration::<RetryAutoConfiguration>()
+    .property_metadata()
+    .iter()
+    .map(|p| p.key)
+    .collect();
+assert_eq!(keys.len(), 6);
+assert!(keys.contains(&"tasks.retry.max-attempts") && keys.contains(&"tasks.retry.jitter"));
 ```
 
 #### `OxbloomApplicationBuilder::listener(listener)`
@@ -5725,8 +5752,8 @@ assert_eq!(indicator.health().await.status, Status::Up);
 
 ### 4.13 `oxbloom-tasks`
 
-Scheduled tasks: fixed-rate, fixed-delay and cron triggers, the `Scheduler` that runs them on tokio, and the
-macros `#[scheduling]` and `#[scheduled]`. In an application, `TasksAutoConfiguration` (feature `tasks` of
+Scheduled tasks and retry: fixed-rate, fixed-delay and cron triggers, the `Scheduler` that runs them on tokio, the
+macros `#[scheduling]` and `#[scheduled]`, and `RetryPolicy` with the macro `#[retryable]`. In an application, `TasksAutoConfiguration` (feature `tasks` of
 `oxbloom-boot`) wires everything; use the crate directly to build a `Scheduler` yourself. The guide chapter is
 [Task scheduling](guide/18-tasks.md#task-scheduling). The macros live in `oxbloom-macros` without a feature
 flag and are re-exported by this crate. Rules to remember:
@@ -5743,7 +5770,7 @@ flag and are re-exported by this crate. Rules to remember:
   configuration binder accepts more forms, such as `1.5s`.
 - A plain `fn` runs in `spawn_blocking` and cannot be aborted: `stop` returns at the deadline and leaves the
   thread to finish.
-- Events use the log target `oxbloom::tasks`.
+- Retry is described in [Retry](#retry-oxbloom-tasks) below. Events of the scheduler and of retry use the log target `oxbloom::tasks`.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -5752,6 +5779,8 @@ flag and are re-exported by this crate. Rules to remember:
 | `tasks.scheduling.shutdown-timeout` | `10s` | How long `stop` waits for runs in flight before it aborts them. |
 | `tasks.scheduling.zone` | `UTC` | The zone of cron tasks without a `zone` of their own. |
 | `tasks.scheduling.initial-delay` | `0s` | The initial delay of tasks without an `initial_delay` of their own. |
+
+The `tasks.retry.*` keys are in the table of the [retry subsection](#retry-oxbloom-tasks).
 
 Imports for the examples below:
 
@@ -5943,6 +5972,172 @@ assert!(settings.enabled);
 let typo = Config::from_str("[tasks]\nschedule = true")?;
 assert!(TasksSettings::from_config(&typo).is_err());
 ```
+
+### Retry (`oxbloom-tasks`)
+
+`RetryPolicy` runs an async operation again when it returns `Err`, and `#[retryable(..)]` applies a policy to one
+method. Both need no scheduler. The guide chapter is [Retry](guide/18-tasks.md#retry). Rules to remember:
+
+- `RetryPolicy::run` calls the operation up to `max_attempts` times, counting the first call. Before retry *n*
+  (from 1) it sleeps `delay(n, ..)` with `tokio::time::sleep`. When the attempts run out the last error is
+  returned. A panic is never retried and is not caught. Dropping the future stops the retries.
+- Exponential backoff waits `initial * multiplier^(n-1)`, fixed backoff `initial`, both capped at `max_delay`
+  and then spread by the jitter. With the built-in policy the delays before jitter are 100, 200, 400 and
+  800 ms.
+- The built-in default jitter is `full` (a random time from zero to the delay); Spring's default is none.
+- `#[retryable]` needs an `async fn` that returns `Result<T, E>` with `E: Display` and takes `&self` or no
+  receiver. `&mut self`, `self` and `mut` arguments are compile errors. The body runs again for every attempt,
+  so it may borrow its arguments but not consume them; clone what it must own. A free `async fn` is accepted.
+- A key that the attribute omits is read from `defaults()` at call time; a key that it writes is fixed at
+  compile time. The defaults are process-wide state (a `static RwLock`).
+- With `max_attempts = 1` the first failure logs the `error` event; an error that `retry_if` rejects logs
+  nothing.
+- Events (target `oxbloom::tasks`): a `warn` event `attempt failed, retrying` per retry with `method`,
+  `attempt`, `delay_ms` and `error`, and one `error` event `retry attempts exhausted` with `method`,
+  `attempts` and `error`.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `tasks.retry.max-attempts` | `3` | At least 1. |
+| `tasks.retry.backoff` | `exponential` | `fixed` or `exponential`. |
+| `tasks.retry.initial` | `100ms` | The delay before the first retry; not above `max-delay`. |
+| `tasks.retry.multiplier` | `2.0` | Finite and at least 1.0. |
+| `tasks.retry.max-delay` | `30s` | The cap on every delay. |
+| `tasks.retry.jitter` | `full` | `none`, `full` or `equal`. |
+
+Imports for the examples below:
+
+```rust
+use std::time::Duration;
+use oxbloom_config::Config;
+use oxbloom_tasks::{
+    Backoff, Jitter, RetryDefaults, RetryError, RetryPolicy, defaults, reset_defaults, retryable, set_defaults,
+};
+```
+
+#### `#[retryable(..)]`
+
+The keys are `max_attempts = 3` (an integer, at least 1), `backoff = "exponential"` or `"fixed"`,
+`initial = ".."` and `max_delay = ".."` (a whole number with `ms`, `s`, `m`, `h` or `d`; `initial` must not
+exceed `max_delay`), `multiplier = 2.0` (at least 1, finite), `jitter = "full"`, `"equal"` or `"none"`, and
+`retry_if = "path::to::fn"`, a `fn(&E) -> bool` in a string. All are optional. The macro keeps its own copy of the
+duration grammar, because it cannot call `parse_duration`; a test keeps the two equal. Compile errors, each
+naming the method: a plain `fn`, a return type that is not a `Result`, a receiver other than `&self`, a `mut`
+argument, generic parameters, `max_attempts = 0`, an unknown `backoff` or `jitter`, a bad duration, `initial`
+above `max_delay`, a `multiplier` below 1, a `retry_if` that is not a path in a string, and an unknown or
+repeated key. The attribute combines with `#[scheduled]` on a method of a `#[scheduling]` impl, in either order:
+one scheduled run then includes all its attempts and counts as the same run for the overlap rule. The generated
+code names the crate `oxbloom_tasks`, so the dependency must not be renamed.
+
+```rust
+#[derive(Debug, PartialEq)]
+enum PaymentError {
+    Unavailable,
+    Declined,
+}
+
+impl std::fmt::Display for PaymentError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            PaymentError::Unavailable => "payment service unavailable",
+            PaymentError::Declined => "card declined",
+        })
+    }
+}
+
+fn is_transient(error: &PaymentError) -> bool {
+    *error == PaymentError::Unavailable
+}
+
+struct Payments;
+
+impl Payments {
+    #[retryable(max_attempts = 4, initial = "10ms", jitter = "none", retry_if = "is_transient")]
+    async fn charge(&self, id: u64) -> Result<u64, PaymentError> {
+        if id == 0 { Err(PaymentError::Declined) } else { Ok(id) }
+    }
+}
+
+assert_eq!(Payments.charge(7).await, Ok(7));
+assert_eq!(Payments.charge(0).await, Err(PaymentError::Declined));
+```
+
+#### `RetryPolicy`
+
+A struct with the public fields `max_attempts: u32`, `backoff: Backoff`, `initial: Duration`,
+`multiplier: f64`, `max_delay: Duration` and `jitter: Jitter`. `RetryPolicy::default()` holds the built-in values
+(3, exponential, 100 ms, 2.0, 30 s, full), not the process-wide defaults; use `defaults().policy()` for those.
+`delay(retry_number: u32, unit_random: f64) -> Duration` is pure: a `retry_number` of 0 counts as 1, the
+backoff is computed in floating point and capped before it becomes a `Duration`, full jitter multiplies by
+`unit_random`, equal jitter takes half plus `unit_random` times the other half, and `unit_random` outside `[0, 1]`
+is clamped and NaN counts as zero.
+`async fn run<T, E, Fut, Op, If>(&self, label: &str, op: Op, retry_if: If) -> Result<T, E>` takes
+`Op: FnMut() -> Fut`, `E: Display` and `If: Fn(&E) -> bool`; it returns the last error, or the first error that
+`retry_if` rejects. `label` is the `method` field of the events. `run_with_random` takes the random source as
+a fourth argument and is `#[doc(hidden)]`, for tests.
+
+```rust
+let policy = RetryPolicy { max_attempts: 4, jitter: Jitter::None, ..RetryPolicy::default() };
+assert_eq!(policy.delay(1, 0.5), Duration::from_millis(100));
+assert_eq!(policy.delay(4, 0.5), Duration::from_millis(800));
+let full = RetryPolicy { jitter: Jitter::Full, ..policy.clone() };
+assert_eq!(full.delay(2, 0.25), Duration::from_millis(50));
+
+let calls = std::cell::Cell::new(0);
+let result = policy
+    .run(
+        "fetch",
+        || {
+            calls.set(calls.get() + 1);
+            let n = calls.get();
+            async move { if n < 3 { Err("unavailable") } else { Ok(n) } }
+        },
+        |_| true,
+    )
+    .await;
+assert_eq!(result, Ok(3));
+```
+
+#### `Backoff`, `Jitter` and `RetryError`
+
+`Backoff` is `Fixed` or `Exponential`; `Jitter` is `None`, `Full` or `Equal`. Both are `Copy`, implement
+`Display` (the lowercase name) and `FromStr` (lowercase, surrounding whitespace ignored). A parse failure is a
+`RetryError`, whose message lists the accepted names and never repeats the input.
+
+```rust
+assert_eq!("fixed".parse::<Backoff>()?, Backoff::Fixed);
+assert_eq!(Jitter::Equal.to_string(), "equal");
+let error: RetryError = "linear".parse::<Backoff>().unwrap_err();
+assert_eq!(error.to_string(), "unknown backoff, expected fixed or exponential");
+```
+
+#### `RetryDefaults`, `defaults`, `set_defaults` and `reset_defaults`
+
+`RetryDefaults` has the fields of `RetryPolicy`, `Default` is the built-in values, and `policy()` returns a
+`RetryPolicy`. `RetryDefaults::from_config(&config)` reads the `tasks.retry.*` keys: an unknown key directly
+under `tasks` or `tasks.retry`, a wrong type or bad duration, a `max-attempts` of 0, a `multiplier` below 1 or
+not finite, an `initial` greater than `max-delay` and an unknown `backoff` or `jitter` name are a `ConfigError`
+that names the key and never shows the value. `set_defaults(value)` stores the process-wide defaults,
+`defaults()` returns the last stored value (the built-in values at first), and `reset_defaults()` restores the
+built-in values. In an application, boot's `RetryAutoConfiguration` calls `set_defaults`.
+
+```rust
+let config = Config::from_str("[tasks.retry]\nmax-attempts = 5\nbackoff = \"fixed\"\ninitial = \"250ms\"")?;
+let from_config = RetryDefaults::from_config(&config)?;
+assert_eq!((from_config.max_attempts, from_config.backoff), (5, Backoff::Fixed));
+assert_eq!(from_config.initial, Duration::from_millis(250));
+
+let zero = Config::from_str("[tasks.retry]\nmax-attempts = 0")?;
+assert!(RetryDefaults::from_config(&zero).unwrap_err().to_string().contains("tasks.retry.max-attempts"));
+
+set_defaults(from_config);
+assert_eq!(defaults().max_attempts, 5);
+reset_defaults();
+assert_eq!(defaults(), RetryDefaults::default());
+```
+
+Not covered: a circuit breaker, rate limiting, retry of a plain `fn` or on a result value, per-error backoff,
+named policies in configuration, metrics, an actuator view and a `recover` fallback method.
 
 ## 5. Recipe: a complete small service
 

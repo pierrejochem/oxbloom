@@ -8,7 +8,9 @@ oxbloom-boot = { version = "0.1", features = ["tasks"] }
 oxbloom-tasks = "0.1"
 ```
 
-The design is in the C9a spec, the plan is the C9a plan (both are local files under `docs/superpowers`, so this page names them without a link), the decisions are in [ADR 0084](../adr/0084-task-scheduling.md), and every public item has an example in the [API reference](../API.md#413-oxbloom-tasks). The example `examples/todos` has a scheduled cleanup task.
+The same crate also holds retry: `#[retryable]` runs an async method again when it fails, with backoff and jitter (see [Retry](#retry)).
+
+The design is in the C9a spec, the plan is the C9a plan (both are local files under `docs/superpowers`, so this page names them without a link), the decisions are in [ADR 0084](../adr/0084-task-scheduling.md) (retry has its own, [ADR 0085](../adr/0085-retry.md)), and every public item has an example in the [API reference](../API.md#413-oxbloom-tasks). The example `examples/todos` has a scheduled cleanup task, and its store access is retried.
 
 ## Declaring tasks
 
@@ -162,9 +164,195 @@ All events use the target `oxbloom::tasks`:
 
 `Scheduler::tasks()` returns a snapshot of every task, in the order the tasks were given. Each `TaskStatus` has the name, the trigger as a string such as `fixed rate 5s` or `cron 0 0 3 * * * (UTC)`, the last start and end time, the last `Outcome` (`Ok`, `Failed`, `Panicked` or `Skipped`) and the number of skipped triggers. `Scheduler::is_running()` is true between `start` and `stop`.
 
+## Retry
+
+A method that talks to something unreliable can retry itself. Put `#[retryable(..)]` on an `async` method that returns a `Result`: when the method returns `Err`, Oxbloom waits for a delay and runs the body again, up to a number of attempts. The attribute needs no outer attribute on the impl block, because it rewrites only that one method, and it needs no scheduler either.
+
+```rust
+use std::fmt;
+use oxbloom_tasks::retryable;
+
+#[derive(Debug, PartialEq)]
+pub enum PaymentError {
+    Unavailable,
+    Declined,
+}
+
+impl fmt::Display for PaymentError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            PaymentError::Unavailable => "payment service unavailable",
+            PaymentError::Declined => "card declined",
+        })
+    }
+}
+
+// A card that was declined stays declined, so only an outage is worth another try.
+fn is_transient(error: &PaymentError) -> bool {
+    *error == PaymentError::Unavailable
+}
+
+pub struct Payments;
+
+impl Payments {
+    #[retryable(
+        max_attempts = 5,
+        backoff = "exponential",
+        initial = "200ms",
+        max_delay = "10s",
+        jitter = "full",
+        retry_if = "is_transient"
+    )]
+    pub async fn charge(&self, id: u64) -> Result<u64, PaymentError> {
+        // Call the payment service here. The body runs again for every attempt.
+        Ok(id)
+    }
+}
+```
+
+Every key is optional. A call that succeeds at the first attempt behaves as if there were no attribute and logs nothing.
+
+### The attribute
+
+| Key | Default | Meaning |
+|---|---|---|
+| `max_attempts = 3` | `3` | How many times the body runs at most, counting the first call; at least 1. |
+| `backoff = ".."` | `"exponential"` | `"exponential"` or `"fixed"`. |
+| `initial = ".."` | `"100ms"` | The delay before the first retry, before jitter. |
+| `multiplier = 2.0` | `2.0` | The factor of exponential backoff, a number of at least 1. Fixed backoff ignores it. |
+| `max_delay = ".."` | `"30s"` | The cap on every delay. |
+| `jitter = ".."` | `"full"` | `"full"`, `"equal"` or `"none"`. |
+| `retry_if = ".."` | every error | A path to a `fn(&E) -> bool`, written in a string. When it returns `false`, the error comes back at once. |
+
+The durations in the attribute are a whole number with `ms`, `s`, `m`, `h` or `d`, as for `#[scheduled]`. The macro keeps its own copy of that grammar, because a procedural macro cannot call `parse_duration` while it expands; a test checks that the two agree.
+
+A key that the attribute writes is fixed at compile time. A key that it omits is read from the process-wide defaults (see below) every time the method is called.
+
+The shape of the method is checked at compile time, and a mistake is an error that names the method:
+
+- The method must be an `async fn` that returns `Result<T, E>` (or an alias such as `io::Result<T>`) with `E: Display`. A plain `fn` and any other return type are rejected.
+- The receiver is `&self` or absent. `&mut self` and `self` are rejected, because the body runs again for every attempt and each attempt only borrows the receiver. A free `async fn` is accepted too, since an attribute cannot see whether it sits in a context with beans.
+- The body runs again for every attempt, so it may borrow its arguments but not consume them. An argument that the body must own is cloned inside the body. A `mut` argument is rejected.
+- A `return` inside the body ends that attempt, and `?` works as in any other method.
+- Generic parameters, `max_attempts = 0`, an unknown `backoff` or `jitter` name, a duration that does not parse, an `initial` greater than `max_delay`, a `multiplier` below 1 or not finite, a `retry_if` that is not a path in a string, and an unknown or repeated key are rejected too.
+
+### Delays
+
+Retry *n* (counting from 1, so the first retry is the one after the first failure) waits
+
+```text
+exponential: initial * multiplier^(n-1)
+fixed:       initial
+```
+
+capped at `max_delay`, and then spread by the jitter. With the built-in policy (three attempts, `initial` 100 ms, `multiplier` 2.0) the delays before jitter are:
+
+| Retry | Delay before jitter |
+|---|---|
+| 1 | 100 ms |
+| 2 | 200 ms |
+| 3 | 400 ms |
+| 4 | 800 ms |
+
+A policy with three attempts uses only the first two rows, because there is no retry after the last attempt; the table shows the growth for a policy with more attempts. The delay stops growing at `max_delay`.
+
+Jitter keeps many callers that failed together from retrying together:
+
+- `none` waits exactly the delay of the table.
+- `full` waits a random time between zero and the delay. It is the default here, so with the built-in policy the first retry waits between 0 and 100 ms. Spring's `@Retryable` uses no jitter by default; Oxbloom spreads load unless you ask for exact delays.
+- `equal` waits half the delay plus a random time up to the other half, so the wait is never below half the delay.
+
+When the attempts run out, the error of the last attempt is returned. A panic is never retried and is not caught. Waiting uses `tokio::time::sleep`, so a test with paused tokio time runs without real waiting, and dropping the future of the call stops the retries.
+
+### Which errors to retry
+
+By default every `Err` is retried. `retry_if = "path::to::function"` names a `fn(&E) -> bool` that decides per error: when it returns `false`, that error is returned at once, without a delay and without a log line. Use it to separate a failure that may pass (an outage, a timeout) from one that never will (a rejected card, a validation error).
+
+### Defaults and the `tasks.retry.*` keys
+
+The omitted keys of every attribute come from one set of defaults. Without configuration they are the built-in values of the table above. With the feature `tasks` of `oxbloom-boot`, the `RetryAutoConfiguration` reads the `tasks.retry.*` keys and stores them as the defaults:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `tasks.retry.max-attempts` | `3` | At least 1. |
+| `tasks.retry.backoff` | `exponential` | `fixed` or `exponential`. |
+| `tasks.retry.initial` | `100ms` | The delay before the first retry. |
+| `tasks.retry.multiplier` | `2.0` | Finite and at least 1.0. |
+| `tasks.retry.max-delay` | `30s` | The cap on every delay; not below `initial`. |
+| `tasks.retry.jitter` | `full` | `none`, `full` or `equal`. |
+
+```toml
+[tasks.retry]
+max-attempts = 5
+backoff      = "fixed"
+initial      = "250ms"
+jitter       = "equal"
+```
+
+An unknown key directly under `tasks` or `tasks.retry`, a value of the wrong type, a bad duration, a `max-attempts` of 0, a `multiplier` below 1, an `initial` greater than `max-delay` and an unknown `backoff` or `jitter` name fail the startup with an error that names the key and never shows the value. Unlike the scheduler, `RetryAutoConfiguration` has no conditions: it runs with or without a `dyn Scheduling` bean and when `tasks.scheduling.enabled` is `false`, so the retry keys apply to every `#[retryable]` method in the application.
+
+The configuration form of durations is the richer one (`1.5s`), while the attribute takes only the short form.
+
+#### The cost: process-wide state
+
+The defaults live in one static value of the process, a `RwLock` that `oxbloom_tasks::set_defaults` writes and `oxbloom_tasks::defaults` reads. The attribute has to read them from somewhere, and a macro that rewrites one method has no field to keep a reference in. The price is that the state is global:
+
+- Each application context that runs `RetryAutoConfiguration` overwrites the values. Two contexts in one process share whatever was stored last.
+- A context without that auto-configuration keeps what the process stored before, and the built-in values when nothing was stored.
+- The values stay after the application stops. `oxbloom_tasks::reset_defaults()` restores the built-in values. `oxbloom-test` has no reset of its own, so a test that starts a context with retry keys calls `reset_defaults()` afterwards.
+- A context whose retry keys are invalid fails to start and leaves the defaults as they were.
+
+### Without the attribute
+
+`RetryPolicy` is a plain value. A bean can call `RetryPolicy::run(label, op, retry_if)` on any operation that returns a `Result`, with the fields of the table above; `RetryPolicy::default()` holds the built-in values and `defaults().policy()` the process-wide ones. `RetryPolicy::delay(retry_number, unit_random)` is the pure function behind the table, so a delay can be checked without waiting.
+
+### Combined with `#[scheduled]`
+
+`#[retryable]` and `#[scheduled]` can sit on the same method of a `#[scheduling]` impl, in either order:
+
+```rust
+use oxbloom_tasks::{retryable, scheduling};
+
+pub struct Puller;
+
+#[scheduling]
+impl Puller {
+    #[scheduled(fixed_delay = "5m")]
+    #[retryable(max_attempts = 4, initial = "1s")]
+    async fn pull(&self) -> Result<(), std::io::Error> {
+        Ok(())
+    }
+}
+```
+
+The retries happen inside one run of the task. The run ends when an attempt succeeds, when the attempts run out or when `retry_if` rejects an error, and only then does the scheduler see the outcome: a run whose attempts all failed is one failed run, logged at `error` by the scheduler on top of the `error` event of the retry. The whole run counts as the same run for the overlap rule. A trigger that fires while the retries still wait or run is skipped, counted in `TaskStatus::skipped` and logged at `warn`, exactly as for a slow run. A fixed delay starts counting at the end of the whole run, retries included.
+
+### Logging
+
+Retry events use the target `oxbloom::tasks`, the same as the scheduler:
+
+| Level | Event |
+|---|---|
+| `warn` | `attempt failed, retrying`, once per retry, with `method`, the failed `attempt`, `delay_ms` and the `error` text. |
+| `error` | `retry attempts exhausted`, once, with `method`, `attempts` and the `error` text of the last attempt. |
+
+A success at the first attempt logs nothing, and neither does an error that `retry_if` rejects. With `max_attempts = 1` there is no retry, so the first failure logs only the `error` event. The `method` field is the name of the method.
+
+### What is not covered
+
+- A circuit breaker and rate limiting.
+- Retry of a plain `fn`, which would block a thread while it waits, and retry on a result value instead of an `Err`.
+- A `&mut self` or `self` receiver, and consuming an argument in the body.
+- Different backoff for different errors, and named policies in configuration.
+- Metrics and an actuator view of retries.
+- A `recover` fallback method like Spring's `@Recover`; handle the final `Err` at the call site.
+- A reset of the process-wide defaults in `oxbloom-test`.
+
 ## The todos example
 
 `examples/todos` has a `TodoCleanup` bean in `cleanup.rs`. Its method `cleanup` is `#[scheduled(fixed_delay = "1m")]` and removes todos that have been done for longer than `todos.cleanup.max-age` (default `24h`). The bean is registered with `.provides(.. -> Arc<dyn Scheduling>)`, the application enables the feature `tasks`, and the task is named `TodoCleanup::cleanup`. Because a fixed delay without a history runs at the start, the first cleanup happens when the scheduler starts, and then one minute after the end of each run.
+
+The store access of the cleanup, `purge_at`, carries `#[retryable(max_attempts = 3, initial = "50ms")]`, so a failing store is called again up to three times before the run reports the error. The test helper `TodoStore::fail_next(n)` makes the next `n` calls fail.
 
 ## Limits and deferred work
 
@@ -172,7 +360,7 @@ All events use the target `oxbloom::tasks`:
 - A `#[cfg]`-gated `#[scheduled]` method and an `unsafe fn` are not supported.
 - The return type is checked by shape: `()` or a path that ends in `Result<..>`. The compiler then checks `Display` of the error.
 - When one method of an impl has an error, the whole impl is left out of the output, so the compiler can report extra "no method found" errors next to the real one.
-- A task that panics or returns an error does not stop its schedule, and there is no retry or backoff. Retry is the next slice, C9b.
+- A task that panics or returns an error does not stop its schedule. Retry is a separate attribute, `#[retryable]`, which a task can carry (see [Retry](#retry)).
 - Missed runs are not caught up, there is no persistence, and several application instances all run every task; there is no distributed lock.
 - Tasks cannot be added or removed at run time, and the concurrency limit is global, not per task.
 - There is no actuator endpoint for the tasks yet; use `Scheduler::tasks()`.
