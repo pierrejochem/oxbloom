@@ -1,0 +1,5 @@
+error: #[auto_configuration] requires an inherent impl such as `impl AppConfig { .. }`, not a trait impl
+ --> tests/ui/autoconfig/trait_impl_rejected.rs:6:6
+  |
+6 | impl Named for Auto {}
+  |      ^^^^^

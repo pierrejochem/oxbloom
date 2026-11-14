@@ -1,0 +1,5 @@
+error: `provides` takes trait objects such as `dyn Trait`
+ --> tests/ui/configuration/bean_provides_non_dyn.rs:8:21
+  |
+8 |     #[bean(provides(Pool))]
+  |                     ^^^^

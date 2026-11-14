@@ -1,0 +1,5 @@
+error: unknown #[component] option; expected `provides(dyn Trait, ..)`, `primary`, `order = n`, `lazy`, `lifecycle` or `profile = "name"`
+ --> tests/ui/args_given.rs:5:13
+  |
+5 | #[component(x)]
+  |             ^

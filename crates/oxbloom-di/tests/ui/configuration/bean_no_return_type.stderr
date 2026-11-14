@@ -1,0 +1,5 @@
+error: a #[bean] method must return the bean, e.g. `fn pool(&self) -> Pool`
+ --> tests/ui/configuration/bean_no_return_type.rs:9:8
+  |
+9 |     fn pool(&self) {}
+  |        ^^^^

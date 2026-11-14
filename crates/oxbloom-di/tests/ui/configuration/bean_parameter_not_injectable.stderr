@@ -1,0 +1,19 @@
+error[E0277]: `u32` cannot be injected into a bean
+ --> tests/ui/configuration/bean_parameter_not_injectable.rs:9:26
+  |
+9 |     fn pool(&self, size: u32) -> Pool { let _ = size; Pool }
+  |                          ^^^ not an injectable shape
+  |
+  = help: the trait `Inject` is not implemented for `u32`
+  = note: bean parameters must be `Arc<T>`, `Arc<dyn Trait>`, `Option<Arc<..>>` or `Vec<Arc<..>>`; register a value with `.instance(..)` and take it as `Arc<..>`
+help: the following other types implement trait `Inject`
+ --> src/beans.rs
+  |
+  | impl<T: ?Sized + Send + Sync + 'static> Inject for Arc<T> {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Arc<T>`
+...
+  | impl<T: ?Sized + Send + Sync + 'static> Inject for Option<Arc<T>> {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Option<Arc<T>>`
+...
+  | impl<T: ?Sized + Send + Sync + 'static> Inject for Vec<Arc<T>> {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Vec<Arc<T>>`

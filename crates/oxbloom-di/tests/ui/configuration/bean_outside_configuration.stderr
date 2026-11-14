@@ -1,0 +1,7 @@
+error: #[bean] is only valid on methods inside a #[configuration] impl block
+ --> tests/ui/configuration/bean_outside_configuration.rs:7:5
+  |
+7 |     #[bean]
+  |     ^^^^^^^
+  |
+  = note: this error originates in the attribute macro `bean` (in Nightly builds, run with -Z macro-backtrace for more info)

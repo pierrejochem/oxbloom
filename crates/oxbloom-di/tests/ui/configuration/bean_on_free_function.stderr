@@ -1,0 +1,7 @@
+error: #[bean] is only valid on methods inside a #[configuration] impl block
+ --> tests/ui/configuration/bean_on_free_function.rs:6:1
+  |
+6 | #[bean(lazy)]
+  | ^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `bean` (in Nightly builds, run with -Z macro-backtrace for more info)

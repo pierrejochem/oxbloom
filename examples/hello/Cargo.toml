@@ -1,0 +1,22 @@
+[package]
+name = "hello"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+oxbloom-boot = { version = "0.1.0", path = "../../crates/oxbloom-boot", features = ["web", "security", "logging"] }
+oxbloom-config = { version = "0.1.0", path = "../../crates/oxbloom-config", features = ["di"] }
+oxbloom-di = { version = "0.1.0", path = "../../crates/oxbloom-di" }
+oxbloom-security = { version = "0.1.0", path = "../../crates/oxbloom-security", features = ["di"] }
+oxbloom-web = { version = "0.1.0", path = "../../crates/oxbloom-web" }
+serde = { version = "1.0.229", features = ["derive"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros"] }
+
+[dev-dependencies]
+oxbloom-test = { path = "../../crates/oxbloom-test", features = ["web"] }
+tempfile = "3.27.0"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "time"] }
+jsonwebtoken = { version = "11.1.0", features = ["rust_crypto"] }
+serde_json = "1.0.154"

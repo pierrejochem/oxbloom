@@ -1,0 +1,5 @@
+error: #[component] `profile` needs at least one name
+ --> tests/ui/empty_profile_list.rs:3:23
+  |
+3 | #[component(profile = [])]
+  |                       ^^

@@ -1,0 +1,5 @@
+error: `provides` takes trait objects such as `dyn Trait`
+ --> tests/ui/provides_non_dyn.rs:5:22
+  |
+5 | #[component(provides(X))]
+  |                      ^

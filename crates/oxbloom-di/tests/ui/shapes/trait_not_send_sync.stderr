@@ -1,0 +1,29 @@
+error[E0277]: `dyn Plain` cannot be sent between threads safely
+ --> tests/ui/shapes/trait_not_send_sync.rs:7:21
+  |
+7 |     let _ = c.get::<dyn Plain>();
+  |               ---   ^^^^^^^^^ `dyn Plain` cannot be sent between threads safely
+  |               |
+  |               required by a bound introduced by this call
+  |
+  = help: the trait `Send` is not implemented for `dyn Plain`
+note: required by a bound in `Container::get`
+ --> src/container.rs
+  |
+  |     pub fn get<T: ?Sized + Send + Sync + 'static>(&self) -> Result<Arc<T>, DiError> {
+  |                            ^^^^ required by this bound in `Container::get`
+
+error[E0277]: `dyn Plain` cannot be shared between threads safely
+ --> tests/ui/shapes/trait_not_send_sync.rs:7:21
+  |
+7 |     let _ = c.get::<dyn Plain>();
+  |               ---   ^^^^^^^^^ `dyn Plain` cannot be shared between threads safely
+  |               |
+  |               required by a bound introduced by this call
+  |
+  = help: the trait `Sync` is not implemented for `dyn Plain`
+note: required by a bound in `Container::get`
+ --> src/container.rs
+  |
+  |     pub fn get<T: ?Sized + Send + Sync + 'static>(&self) -> Result<Arc<T>, DiError> {
+  |                                   ^^^^ required by this bound in `Container::get`

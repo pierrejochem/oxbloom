@@ -1,0 +1,38 @@
+error[E0277]: a `#[bean(fallible)]` method must return `Result<T, DiError>`, not `Pool`
+ --> tests/ui/configuration/bean_fallible_not_result.rs:9:23
+  |
+9 |     fn pool(&self) -> Pool { Pool }
+  |                       ^^^^ not `Result<T, DiError>`
+  |
+help: the trait `oxbloom_di::__private::Fallible` is not implemented for `Pool`
+ --> tests/ui/configuration/bean_fallible_not_result.rs:4:1
+  |
+4 | struct Pool;
+  | ^^^^^^^^^^^
+  = note: drop `fallible` to register `Pool` itself as the bean
+help: the trait `oxbloom_di::__private::Fallible` is implemented for `Result<T, DiError>`
+ --> src/private.rs
+  |
+  | impl<T> Fallible for Result<T, DiError> {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0277]: a `#[bean(fallible)]` method must return `Result<T, DiError>`, not `Pool`
+ --> tests/ui/configuration/bean_fallible_not_result.rs:9:8
+  |
+9 |     fn pool(&self) -> Pool { Pool }
+  |        ^^^^^^^^^^^^^^^----
+  |        |              |
+  |        |              required by a bound introduced by this call
+  |        not `Result<T, DiError>`
+  |
+help: the trait `oxbloom_di::__private::Fallible` is not implemented for `Pool`
+ --> tests/ui/configuration/bean_fallible_not_result.rs:4:1
+  |
+4 | struct Pool;
+  | ^^^^^^^^^^^
+  = note: drop `fallible` to register `Pool` itself as the bean
+help: the trait `oxbloom_di::__private::Fallible` is implemented for `Result<T, DiError>`
+ --> src/private.rs
+  |
+  | impl<T> Fallible for Result<T, DiError> {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -1,0 +1,5 @@
+error: unknown #[bean] option; expected `fallible`, `provides(dyn Trait, ..)`, `primary`, `order = n`, `lazy`, `profile = "name"`, `on_bean(T)`, `on_missing_bean`, `on_missing_bean(T)`, `on_property("key")` or `on_property("key", "value")`
+ --> tests/ui/configuration/bean_lifecycle_option.rs:8:12
+  |
+8 |     #[bean(lifecycle)]
+  |            ^^^^^^^^^

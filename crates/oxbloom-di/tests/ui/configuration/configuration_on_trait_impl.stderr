@@ -1,0 +1,5 @@
+error: #[configuration] requires an inherent impl such as `impl AppConfig { .. }`, not a trait impl
+ --> tests/ui/configuration/configuration_on_trait_impl.rs:8:6
+  |
+8 | impl Make for Cfg {
+  |      ^^^^

@@ -1,0 +1,5 @@
+error: duplicate #[component] option `lazy`
+ --> tests/ui/duplicate_lazy.rs:3:19
+  |
+3 | #[component(lazy, lazy)]
+  |                   ^^^^

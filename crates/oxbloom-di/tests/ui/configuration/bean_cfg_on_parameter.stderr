@@ -1,0 +1,5 @@
+error: #[bean] does not support `#[cfg]` on parameters; take an `Option<Arc<..>>` or put the `#[cfg]` on the method
+ --> tests/ui/configuration/bean_cfg_on_parameter.rs:9:20
+  |
+9 |     fn pool(&self, #[cfg(test)] _n: Arc<u8>) -> Pool { Pool }
+  |                    ^^^^^^^^^^^^

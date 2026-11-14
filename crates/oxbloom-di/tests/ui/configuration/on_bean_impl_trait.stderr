@@ -1,0 +1,5 @@
+error: `on_bean` takes one type, e.g. `on_bean(Pool)` or `on_bean(dyn Store)`
+ --> tests/ui/configuration/on_bean_impl_trait.rs:8:20
+  |
+8 |     #[bean(on_bean(impl Store))]
+  |                    ^^^^^^^^^^

@@ -1,0 +1,5 @@
+error: #[configuration] takes no arguments
+ --> tests/ui/configuration/configuration_with_args.rs:6:17
+  |
+6 | #[configuration(lazy)]
+  |                 ^^^^

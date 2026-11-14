@@ -1,0 +1,16 @@
+error[E0277]: the trait bound `S: Lifecycle` is not satisfied
+ --> tests/ui/lifecycle_unimplemented.rs:3:13
+  |
+3 | #[component(lifecycle)]
+  |             ^^^^^^^^^ unsatisfied trait bound
+  |
+help: the trait `Lifecycle` is not implemented for `S`
+ --> tests/ui/lifecycle_unimplemented.rs:4:1
+  |
+4 | struct S;
+  | ^^^^^^^^
+note: required by a bound in `ContainerBuilder::lifecycle`
+ --> src/container.rs
+  |
+  |     pub fn lifecycle<T: Lifecycle>(self) -> Self {
+  |                         ^^^^^^^^^ required by this bound in `ContainerBuilder::lifecycle`

@@ -1,0 +1,21 @@
+[package]
+name = "oxbloom-macros"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+proc-macro2 = "1.0.107"
+quote = "1.0.47"
+syn = { version = "3.0.9", features = ["full"] }
+
+[lib]
+proc-macro = true
+
+[dev-dependencies]
+http = "1.5.0"
+oxbloom-boot = { path = "../oxbloom-boot" }
+oxbloom-di = { path = "../oxbloom-di" }
+oxbloom-web = { path = "../oxbloom-web" }
+tokio = { version = "1.54.1", features = ["rt", "macros"] }

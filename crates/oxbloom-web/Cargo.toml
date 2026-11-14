@@ -1,0 +1,45 @@
+[package]
+name = "oxbloom-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait = "0.1.92"
+brotli = { version = "9.0.0", default-features = false, features = ["std"], optional = true }
+bytes = "1.12.1"
+flate2 = { version = "1.1.10", optional = true }
+http = "1.5.0"
+http-body-util = "0.1.5"
+hyper = { version = "1.12.0", features = ["server", "http1"] }
+hyper-util = { version = "0.1.21", features = ["http1", "server", "server-graceful", "tokio"] }
+matchit = "0.9.2"
+oxbloom-core = { version = "0.1.0", path = "../oxbloom-core" }
+oxbloom-di = { version = "0.1.0", path = "../oxbloom-di", optional = true }
+oxbloom-macros = { version = "0.1.0", path = "../oxbloom-macros" }
+serde = { version = "1.0.229", optional = true }
+serde_json = { version = "1.0.154", optional = true }
+tokio = { version = "1.54.1", features = ["rt", "net", "signal", "macros", "time", "fs"] }
+tracing = "0.1.44"
+zstd = { version = "0.14.3", optional = true }
+
+[dev-dependencies]
+brotli = { version = "9.0.0", default-features = false, features = ["std"] }
+flate2 = "1.1.10"
+oxbloom-di = { path = "../oxbloom-di" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tokio = { version = "1.54.1", features = ["rt", "macros", "net", "io-util", "time", "rt-multi-thread", "sync"] }
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["std", "fmt"] }
+trybuild = "1.0.122"
+zstd = "0.14.3"
+
+[features]
+default = ["json", "compression"]
+compression = ["gzip", "brotli", "zstd"]
+gzip = ["dep:flate2"]
+brotli = ["dep:brotli"]
+zstd = ["dep:zstd"]
+json = ["dep:serde", "dep:serde_json"]
+di = ["dep:oxbloom-di"]

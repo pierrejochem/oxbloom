@@ -1,0 +1,5 @@
+error: #[bean] takes options in parentheses, e.g. `#[bean(lazy, primary)]`
+ --> tests/ui/configuration/bean_name_value.rs:8:7
+  |
+8 |     #[bean = "pool"]
+  |       ^^^^^^^^^^^^^

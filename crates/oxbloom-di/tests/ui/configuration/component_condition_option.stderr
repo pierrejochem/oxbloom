@@ -1,0 +1,5 @@
+error: unknown #[component] option; expected `provides(dyn Trait, ..)`, `primary`, `order = n`, `lazy`, `lifecycle` or `profile = "name"`
+ --> tests/ui/configuration/component_condition_option.rs:5:13
+  |
+5 | #[component(on_bean(Pool))]
+  |             ^^^^^^^

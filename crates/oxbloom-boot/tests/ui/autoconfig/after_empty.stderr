@@ -1,0 +1,5 @@
+error: `after` takes one or more configuration types, e.g. `after(DataSourceConfig)`
+ --> tests/ui/autoconfig/after_empty.rs:4:27
+  |
+4 | #[auto_configuration(after())]
+  |                           ^^

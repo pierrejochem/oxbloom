@@ -1,0 +1,13 @@
+error: route handler must be `async fn name(&self, req: Request) -> impl IntoResponse`
+ --> tests/ui/bad_signature.rs:6:5
+  |
+6 |     fn a(&self, _r: Request) -> &'static str { "x" }
+  |     ^^
+
+warning: unused imports: `IntoResponse` and `Request`
+ --> tests/ui/bad_signature.rs:1:31
+  |
+1 | use oxbloom_web::{controller, IntoResponse, Request};
+  |                               ^^^^^^^^^^^^  ^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

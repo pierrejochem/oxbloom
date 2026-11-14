@@ -1,0 +1,5 @@
+error: `after` takes one or more configuration types, e.g. `after(DataSourceConfig)`
+ --> tests/ui/autoconfig/after_non_type.rs:4:28
+  |
+4 | #[auto_configuration(after("Other"))]
+  |                            ^^^^^^^

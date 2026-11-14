@@ -1,0 +1,5 @@
+error: #[component] does not support generic structs
+ --> tests/ui/generic_struct.rs:6:9
+  |
+6 | struct T<G> { x: Arc<G> }
+  |         ^

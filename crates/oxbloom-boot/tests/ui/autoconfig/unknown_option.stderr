@@ -1,0 +1,5 @@
+error: unknown #[auto_configuration] option; expected `after(Config, ..)`, `before(Config, ..)`, `on_bean(T)`, `on_missing_bean(T)`, `on_property("key")` or `on_property("key", "value")`
+ --> tests/ui/autoconfig/unknown_option.rs:4:22
+  |
+4 | #[auto_configuration(on_class(Auto))]
+  |                      ^^^^^^^^

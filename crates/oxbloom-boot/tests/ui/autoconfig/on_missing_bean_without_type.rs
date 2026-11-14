@@ -1,0 +1,6 @@
+#![allow(unused_imports, dead_code)]
+use oxbloom_boot::auto_configuration;
+struct Auto;
+#[auto_configuration(on_missing_bean)]
+impl Auto {}
+fn main() {}

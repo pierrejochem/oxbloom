@@ -1,0 +1,5 @@
+error: `on_missing_bean` takes one type, e.g. `on_missing_bean(Pool)` or `on_missing_bean(dyn Store)`
+ --> tests/ui/configuration/on_missing_bean_non_type_argument.rs:7:28
+  |
+7 |     #[bean(on_missing_bean("Pool"))]
+  |                            ^^^^^^

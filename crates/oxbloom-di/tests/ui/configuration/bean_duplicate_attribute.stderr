@@ -1,0 +1,5 @@
+error: duplicate #[bean] attribute
+ --> tests/ui/configuration/bean_duplicate_attribute.rs:9:5
+  |
+9 |     #[bean(lazy)]
+  |     ^^^^^^^^^^^^^

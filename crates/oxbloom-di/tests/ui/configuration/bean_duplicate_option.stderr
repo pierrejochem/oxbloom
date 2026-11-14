@@ -1,0 +1,5 @@
+error: duplicate #[bean] option `lazy`
+ --> tests/ui/configuration/bean_duplicate_option.rs:8:27
+  |
+8 |     #[bean(lazy, primary, lazy)]
+  |                           ^^^^

@@ -1,0 +1,5 @@
+error: `on_missing_bean` on #[auto_configuration] needs a type, e.g. `on_missing_bean(Pool)`: there is no return type to default to
+ --> tests/ui/autoconfig/on_missing_bean_without_type.rs:4:22
+  |
+4 | #[auto_configuration(on_missing_bean)]
+  |                      ^^^^^^^^^^^^^^^

@@ -1,0 +1,5 @@
+error: an `on_property` key must not be empty
+ --> tests/ui/autoconfig/on_property_empty.rs:4:34
+  |
+4 | #[auto_configuration(on_property(""))]
+  |                                  ^^

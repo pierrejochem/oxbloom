@@ -1,0 +1,5 @@
+error: a profile name must not be empty
+ --> tests/ui/empty_profile.rs:3:23
+  |
+3 | #[component(profile = "")]
+  |                       ^^

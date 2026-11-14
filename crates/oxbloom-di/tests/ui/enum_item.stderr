@@ -1,0 +1,5 @@
+error: #[component] can only be used on structs
+ --> tests/ui/enum_item.rs:6:1
+  |
+6 | enum E { A }
+  | ^^^^

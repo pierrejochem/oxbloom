@@ -1,0 +1,8 @@
+# The `dev` profile: merged over `application.toml` when the application runs
+# with `--oxbloom.profiles.active=dev`.
+
+[hello]
+greeting = "Hi from dev"
+
+[server]
+port = 8081

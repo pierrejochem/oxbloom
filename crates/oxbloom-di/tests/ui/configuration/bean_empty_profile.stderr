@@ -1,0 +1,5 @@
+error: a profile name must not be empty
+ --> tests/ui/configuration/bean_empty_profile.rs:8:30
+  |
+8 |     #[bean(profile = ["dev", "!"])]
+  |                              ^^^
