@@ -12,7 +12,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use common::{TestCa, ca, handshake, write};
+use common::{
+    TestCa, ca, handshake, pkcs12_certificates_only, pkcs12_with_key, write, write_pkcs12,
+};
 use oxbloom_config::Config;
 use oxbloom_ssl::{SslBundles, SslError};
 use rustls::{ClientConfig, RootCertStore, ServerConfig};
@@ -514,4 +516,126 @@ fn a_panicking_pass_is_logged_and_the_next_tick_tries_again() {
         "no panic warning: {warnings:?}"
     );
     task.stop();
+}
+
+/// A configuration with `ssl.reload-interval = "<interval>"` and a PKCS#12 bundle `web` read
+/// from the file `p12` with the password `changeit`.
+fn pkcs12_toml(interval: &str, p12: &Path) -> String {
+    format!(
+        "[ssl]\nreload-interval = \"{interval}\"\n\
+         [ssl.bundle.pkcs12.web]\npath = \"{}\"\npassword = \"changeit\"",
+        toml_path(p12)
+    )
+}
+
+#[test]
+fn certificate_only_pkcs12_replacement_keeps_the_old_identity_and_warns_once() {
+    let (events, _guard) = capture();
+    let dir = tempfile::tempdir().unwrap();
+    let old_ca = ca();
+    let old = old_ca.issue(&["localhost"]);
+    let p12 = write_pkcs12(dir.path(), "server.p12", &old, &old_ca, "changeit");
+    let bundles = load(&pkcs12_toml("50ms", &p12));
+    let web = bundles.get("web").unwrap();
+    let server = web.server_config().unwrap();
+    assert_eq!(
+        served_leaf(server.clone(), &old_ca),
+        Some(old.cert_der.clone())
+    );
+    let task = bundles.start_reload();
+
+    // The operator exports the new certificate without its key.
+    let new_ca = ca();
+    let new = new_ca.issue(&["localhost"]);
+    replace(
+        &p12,
+        pkcs12_certificates_only(&[&new.cert_der, &new_ca.cert_der], "changeit"),
+    );
+    assert!(
+        wait_for(|| events.ssl(Level::WARN).len() == 1),
+        "no warning within five seconds"
+    );
+    let_ticks_pass(3);
+
+    let warnings = events.ssl(Level::WARN);
+    assert_eq!(warnings.len(), 1, "warned more than once: {warnings:?}");
+    let text = &warnings[0].text;
+    assert!(text.contains("no-identity"), "unexpected warning: {text}");
+    assert!(!text.contains("changeit"), "password in: {text}");
+    assert!(!text.contains(&*toml_path(&p12)), "file path in: {text}");
+    assert!(
+        events
+            .ssl(Level::INFO)
+            .iter()
+            .all(|e| !e.text.contains("reloaded"))
+    );
+    assert!(web.has_identity());
+    assert_eq!(served_leaf(server, &old_ca), Some(old.cert_der));
+
+    let results = bundles.reload();
+    assert!(
+        matches!(&results[0].1, Err(SslError::NoIdentity { bundle }) if bundle == "web"),
+        "{:?}",
+        results[0].1
+    );
+    task.stop();
+}
+
+#[test]
+fn pkcs12_replacement_without_trust_certificates_keeps_the_old_trust_store() {
+    let dir = tempfile::tempdir().unwrap();
+    let old_ca = ca();
+    let old = old_ca.issue(&["localhost"]);
+    let p12 = write_pkcs12(dir.path(), "server.p12", &old, &old_ca, "changeit");
+    let bundles = load(&pkcs12_toml("0s", &p12));
+    let web = bundles.get("web").unwrap();
+    assert!(web.has_trust());
+
+    // The new file has the key and its certificate, but no CA certificate any more.
+    let new_ca = ca();
+    let new = new_ca.issue(&["localhost"]);
+    replace(&p12, pkcs12_with_key(&new, &[], "changeit"));
+
+    let results = bundles.reload();
+    assert!(
+        matches!(&results[0].1, Err(SslError::EmptyBundle { bundle }) if bundle == "web"),
+        "{:?}",
+        results[0].1
+    );
+    assert!(web.has_trust());
+    let server = web.server_config().unwrap();
+    assert_eq!(served_leaf(server, &old_ca), Some(old.cert_der));
+    // Client configurations built now still verify against the old trust store.
+    let client = web.client_config().unwrap();
+    assert!(handshake(web.server_config().unwrap(), client, "localhost").is_ok());
+}
+
+#[test]
+fn pkcs12_replacement_that_adds_a_trust_store_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let old_ca = ca();
+    let old = old_ca.issue(&["localhost"]);
+    let p12 = write(
+        dir.path(),
+        "server.p12",
+        pkcs12_with_key(&old, &[], "changeit"),
+    );
+    let bundles = load(&pkcs12_toml("0s", &p12));
+    let web = bundles.get("web").unwrap();
+    assert!(!web.has_trust());
+
+    let new = old_ca.issue(&["localhost"]);
+    replace(&p12, pkcs12_with_key(&new, &[&old_ca.cert_der], "changeit"));
+
+    let results = bundles.reload();
+    assert!(
+        matches!(&results[0].1, Err(SslError::ShapeChanged { bundle }) if bundle == "web"),
+        "{:?}",
+        results[0].1
+    );
+    assert!(!web.has_trust());
+    assert_eq!(
+        served_leaf(web.server_config().unwrap(), &old_ca),
+        Some(old.cert_der)
+    );
 }

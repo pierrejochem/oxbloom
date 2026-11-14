@@ -169,22 +169,47 @@ pub fn write_pkcs12(
     ca: &TestCa,
     password: &str,
 ) -> PathBuf {
+    write(
+        dir,
+        name,
+        pkcs12_with_key(issued, &[&ca.cert_der], password),
+    )
+}
+
+/// The bytes of a PKCS#12 file holding the key of `issued` with a chain of its certificate
+/// followed by `chain`, encrypted with `password`. Without `chain` the file has no
+/// certificate besides the leaf, so a bundle loaded from it has no trust store.
+pub fn pkcs12_with_key(issued: &Issued, chain: &[&[u8]], password: &str) -> Vec<u8> {
     use p12_keystore::{Certificate, KeyStore, KeyStoreEntry, PrivateKey, PrivateKeyChain};
 
     let key = PrivateKey::from_der(&issued.key_der).expect("pkcs8 key");
     let leaf = Certificate::from_der(&issued.cert_der).expect("leaf certificate");
-    let root = Certificate::from_der(&ca.cert_der).expect("root certificate");
+    let others = chain
+        .iter()
+        .map(|der| Certificate::from_der(der).expect("chain certificate"));
     let mut store = KeyStore::new();
     store.add_entry(
         "server",
         KeyStoreEntry::PrivateKeyChain(PrivateKeyChain::new(
             b"server-key".to_vec(),
             key,
-            [leaf, root],
+            std::iter::once(leaf).chain(others),
         )),
     );
-    let bytes = store.writer(password).write().expect("pkcs12 encoding");
-    write(dir, name, bytes)
+    store.writer(password).write().expect("pkcs12 encoding")
+}
+
+/// The bytes of a PKCS#12 file holding only the certificates `certs`, without a key bag,
+/// encrypted with `password`: a certificate-only export.
+pub fn pkcs12_certificates_only(certs: &[&[u8]], password: &str) -> Vec<u8> {
+    use p12_keystore::{Certificate, KeyStore, KeyStoreEntry};
+
+    let mut store = KeyStore::new();
+    for (i, der) in certs.iter().enumerate() {
+        let cert = Certificate::from_der(der).expect("certificate");
+        store.add_entry(&format!("cert-{i}"), KeyStoreEntry::Certificate(cert));
+    }
+    store.writer(password).write().expect("pkcs12 encoding")
 }
 
 /// Runs a TLS handshake in memory and returns the finished client connection.

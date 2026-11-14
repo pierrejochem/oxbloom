@@ -112,7 +112,8 @@ pub(crate) enum Outcome {
     Changed { key: String },
 }
 
-/// Rebuilds `bundle` from all its sources and swaps the result in.
+/// Rebuilds `bundle` from all its sources and swaps the result in, unless the new material
+/// has other parts than the current one (see [`same_shape`]).
 ///
 /// Without `force`, nothing is read when the watched files still have the stamps of the last
 /// success or of the last failure. The stamps are taken before and after the read; when they
@@ -136,7 +137,7 @@ pub(crate) fn rebuild(bundle: &SslBundle, force: bool, hook: Option<&ReadHook>) 
             key: inner.source.key(leaf),
         };
     }
-    match loaded {
+    match loaded.and_then(|material| same_shape(bundle, &inner.material.load(), material)) {
         Ok(material) => {
             inner.material.store(Arc::new(material));
             state.last_good = after;
@@ -149,6 +150,28 @@ pub(crate) fn rebuild(bundle: &SslBundle, force: bool, hook: Option<&ReadHook>) 
             }
             Outcome::Failed(e)
         }
+    }
+}
+
+/// Checks that `new` has the same parts as `current`: an identity exactly when `current`
+/// has one, and a trust store exactly when `current` has one. A reload never changes the
+/// shape of a bundle, so a certificate-only file can never drop the identity a server
+/// presents, and a file without CA certificates can never move a client to the platform
+/// verifier.
+fn same_shape(
+    bundle: &SslBundle,
+    current: &bundle::Material,
+    new: bundle::Material,
+) -> Result<bundle::Material, SslError> {
+    let name = || bundle.name().to_string();
+    match (
+        (current.identity.is_some(), new.identity.is_some()),
+        (current.trust.is_some(), new.trust.is_some()),
+    ) {
+        ((true, false), _) => Err(SslError::NoIdentity { bundle: name() }),
+        (_, (true, false)) => Err(SslError::EmptyBundle { bundle: name() }),
+        ((false, true), _) | (_, (false, true)) => Err(SslError::ShapeChanged { bundle: name() }),
+        _ => Ok(new),
     }
 }
 
@@ -179,6 +202,8 @@ fn kind(error: &SslError) -> String {
         SslError::KeyMismatch { .. } => "key-mismatch".to_string(),
         SslError::Pkcs12 { .. } => "pkcs12".to_string(),
         SslError::EmptyBundle { .. } => "empty-bundle".to_string(),
+        SslError::NoIdentity { .. } => "no-identity".to_string(),
+        SslError::ShapeChanged { .. } => "shape-changed".to_string(),
         _ => "other".to_string(),
     }
 }
@@ -468,6 +493,12 @@ mod tests {
                 bundle: "web".into()
             }),
             "key-mismatch"
+        );
+        assert_eq!(
+            kind(&SslError::NoIdentity {
+                bundle: "web".into()
+            }),
+            "no-identity"
         );
     }
 

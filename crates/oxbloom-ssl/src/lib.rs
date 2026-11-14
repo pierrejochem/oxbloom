@@ -338,6 +338,11 @@ impl SslBundles {
     /// [`SslError::Io`] with [`ErrorKind::Interrupted`](std::io::ErrorKind::Interrupted) and
     /// the key of the file that kept changing while it was read three times.
     ///
+    /// A reload never changes the parts a bundle has. New files without the identity the
+    /// bundle has (a certificate-only PKCS#12 export) fail with [`SslError::NoIdentity`], new
+    /// files without its trust store with [`SslError::EmptyBundle`], and new files that add
+    /// an identity or a trust store with [`SslError::ShapeChanged`]; the old material stays.
+    ///
     /// # Examples
     ///
     /// ```
@@ -382,7 +387,9 @@ impl SslBundles {
     /// Kubernetes secret mount that swaps a symlink is seen. Inline PEM and PKCS#12 passwords
     /// are not watched. When a file changed, the whole bundle is rebuilt and swapped in for
     /// the next handshake; when a file changes during the read, the task tries again on the
-    /// next tick. A failed reload keeps the old material and logs one warning on target
+    /// next tick. New files that would add or remove the identity or the trust store fail
+    /// like broken files (see [`SslBundles::reload`]). A failed reload keeps the old material
+    /// and logs one warning on target
     /// `oxbloom::ssl` with the bundle name and the error kind, and logs again only after the
     /// files change again. As with [`SslBundles::reload`], a client configuration built
     /// earlier keeps its trust store.

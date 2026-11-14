@@ -56,7 +56,8 @@ pub enum SslError {
         /// The full configuration key, such as `ssl.bundle.pem.web.private-key`.
         key: String,
     },
-    /// A server configuration was requested from a bundle without a certificate and key.
+    /// A server configuration was requested from a bundle without a certificate and key. A
+    /// reload also reports it when the new files would remove the identity the bundle has.
     NoIdentity {
         /// The bundle name.
         bundle: String,
@@ -72,8 +73,26 @@ pub enum SslError {
         /// The bundle name.
         bundle: String,
     },
-    /// The bundle has neither an identity nor a trust store.
+    /// The bundle has neither an identity nor a trust store. A reload also reports it when
+    /// the new files would remove the trust store the bundle has.
     EmptyBundle {
+        /// The bundle name.
+        bundle: String,
+    },
+    /// A reload would add an identity or a trust store the bundle did not have. The parts a
+    /// bundle has are fixed when it is first loaded; changing them needs a restart.
+    ///
+    /// ```
+    /// use oxbloom_ssl::SslError;
+    ///
+    /// let err = SslError::ShapeChanged { bundle: "web".into() };
+    /// assert_eq!(
+    ///     err.to_string(),
+    ///     "the new files of SSL bundle `web` add an identity or a trust store it did not \
+    ///      have; restart the application to change the parts of a bundle"
+    /// );
+    /// ```
+    ShapeChanged {
         /// The bundle name.
         bundle: String,
     },
@@ -137,6 +156,11 @@ impl fmt::Display for SslError {
             Self::EmptyBundle { bundle } => write!(
                 f,
                 "SSL bundle `{bundle}` has neither an identity nor a trust store"
+            ),
+            Self::ShapeChanged { bundle } => write!(
+                f,
+                "the new files of SSL bundle `{bundle}` add an identity or a trust store it did \
+                 not have; restart the application to change the parts of a bundle"
             ),
             Self::DuplicateName { name } => write!(
                 f,

@@ -5266,7 +5266,9 @@ Rebuilds every bundle now from all its sources, inline PEM included, and returns
 name order. A bundle that loads is swapped in for the next handshake and checked against the clock; a bundle
 that fails keeps its old material. Nothing calls it automatically. It does blocking file I/O, so in async
 code run it on `tokio::task::spawn_blocking`. A file that keeps changing during three reads gives
-`SslError::Io` with kind `Interrupted`.
+`SslError::Io` with kind `Interrupted`. A reload never changes the parts a bundle has: new files without its
+identity (a certificate-only PKCS#12 export) fail with `NoIdentity`, new files without its trust store with
+`EmptyBundle`, and new files that add an identity or a trust store with `ShapeChanged`.
 
 ```rust
 // `ca_path` names a PEM file with the CA certificate.
@@ -5286,7 +5288,7 @@ following symlinks, so a Kubernetes secret mount that swaps a symlink is seen. I
 password are not watched. A changed bundle is rebuilt whole and swapped in for the next handshake; a file
 that changes during the read is tried again on the next tick. A failed reload keeps the old material and
 logs one `warn` on target `oxbloom::ssl` with the bundle name and an error kind (`pem`, `key-mismatch`,
-`io (...)`, ...), and logs again only after the files change again. Each tick also runs the validity check.
+`no-identity`, `io (...)`, ...), and logs again only after the files change again. Each tick also runs the validity check.
 With an interval of zero the task does nothing. Inside a Tokio runtime the task runs on it, outside one on
 its own thread. `ReloadTask::stop` ends it (it may wait for a pass that is reading files), dropping it does
 the same, and `is_running` says whether it polls. With the feature `di`, register the bundles with
@@ -5366,7 +5368,8 @@ assert!(!client.client_auth_cert_resolver.has_certs()); // trust only, no client
 The error of loading a bundle or building a configuration from it: `#[non_exhaustive]`, `Send + Sync +
 'static`, with fixed texts. Variants: `Io { bundle, key, kind }` (names the key, not the path), `Pem {
 bundle, key }` (empty, malformed or encrypted PEM, or an unsupported key type), `NoIdentity { bundle }`,
-`KeyMismatch { bundle }`, `Pkcs12 { bundle }`, `EmptyBundle { bundle }`, `DuplicateName { name }`,
+`KeyMismatch { bundle }`, `Pkcs12 { bundle }`, `EmptyBundle { bundle }`, `ShapeChanged { bundle }` (a
+reload would add an identity or a trust store), `DuplicateName { name }`,
 `UnknownBundle { name, available }` and `Config(ConfigError)` (shown unchanged; also `From<ConfigError>`).
 
 ```rust
