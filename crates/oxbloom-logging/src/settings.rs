@@ -846,7 +846,7 @@ fn json_options(raw: &RawJson) -> Result<JsonOptions, LoggingError> {
 
 const JSON_FIELD_RULE: &str = "a field is one of timestamp, level, target, message, span or thread";
 
-fn check_target(name: &str) -> Result<(), LoggingError> {
+pub(crate) fn check_target(name: &str) -> Result<(), LoggingError> {
     if is_target(name) {
         Ok(())
     } else {

@@ -27,7 +27,7 @@ The crate dependency direction is fixed by [ADR 0033](0033-boot-entry-point-and-
 - `management.endpoints.enabled` is a condition on the text `true` (`on_property_value_or_missing`). The DI conditions have no "not equal", so every other value skips the group, silently, and the conditions report names the skip. The alternative of reading any value as on fails open.
 - The group is skipped when the application registers no `dyn Controller` (`on_bean`), the condition `WebServerAutoConfiguration` uses. Otherwise the actuator alone would turn a run without a web application into a server.
 - `management.endpoints.health.public = true` registers a `SecurityCustomizer` that permits `GET <base-path>/health/**` and requires authentication for everything else. It adds its own `authorize` section, so an application customizer that also calls `authorize` fails with `DuplicateAuthorizeSection`; such an application opens the health path in its own customizer, as `examples/todos` does.
-- Log targets of `/loggers` use `::` as the separator, as the logging system does; a dotted target is a 400. `configuredLevel: null` is a 400, not a reset.
+- Log targets of `/loggers` use `::` as the separator, as the logging system does; a dotted target is a 400 on `GET` and `POST`, checked by `LoggingSystem::validate_target`. `configuredLevel: null` is a 400, not a reset. `POST` requires `Content-Type: application/json` and answers 415 otherwise, so a cross-origin simple request cannot change a level.
 
 ## Consequences
 

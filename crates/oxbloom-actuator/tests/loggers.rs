@@ -97,8 +97,32 @@ async fn post_with_bad_json_is_400_and_changes_nothing() {
         assert_eq!(code, 400, "{body}");
         assert!(text.contains("\"status\":400"), "{text}");
     }
-    let (code, _) = call(&app, HttpMethod::Post, "/actuator/loggers/app", None).await;
-    assert_eq!(code, 400);
+    assert_eq!(logging.levels(), before);
+}
+
+#[tokio::test]
+async fn post_without_json_content_type_is_415_and_changes_nothing() {
+    let (app, logging, _d) = app();
+    let before = logging.levels();
+    for content_type in [
+        None,
+        Some("text/plain"),
+        Some("application/x-www-form-urlencoded"),
+    ] {
+        let mut req = Request::new(HttpMethod::Post, "/actuator/loggers/app");
+        if let Some(content_type) = content_type {
+            req.headers.insert(
+                http::header::CONTENT_TYPE,
+                http::HeaderValue::from_static(content_type),
+            );
+        }
+        req.body = r#"{"configuredLevel":"DEBUG"}"#.to_string().into();
+        let res = app.handle(req).await;
+        assert_eq!(res.status().as_u16(), 415, "{content_type:?}");
+        let text = String::from_utf8(res.body().to_vec()).unwrap();
+        assert!(text.contains("\"status\":415"), "{text}");
+        assert!(text.contains("application/json"), "{text}");
+    }
     assert_eq!(logging.levels(), before);
 }
 
@@ -144,6 +168,16 @@ async fn post_with_invalid_target_is_400() {
     .await;
     assert_eq!(code, 400);
     assert_eq!(logging.levels(), before);
+}
+
+#[tokio::test]
+async fn get_with_dotted_target_is_400() {
+    let (app, _logging, _d) = app();
+    for path in ["/actuator/loggers/a.b", "/actuator/loggers/not,a,target"] {
+        let (code, text) = call(&app, HttpMethod::Get, path, None).await;
+        assert_eq!(code, 400, "{path}");
+        assert!(text.contains("the logger name is not valid"), "{text}");
+    }
 }
 
 #[tokio::test]

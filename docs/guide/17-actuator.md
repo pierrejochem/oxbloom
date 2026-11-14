@@ -228,11 +228,12 @@ curl -X POST -H 'content-type: application/json' \
 
 The rules:
 
-- Targets are written with `::` as the separator, for example `oxbloom::web`. A dotted target such as `app.db` is not a valid target and is rejected with 400.
+- Targets are written with `::` as the separator, for example `oxbloom::web`. A dotted target such as `app.db` is not a valid target and is rejected with 400, by `GET` and `POST` alike. The rule is the one `LoggingSystem::validate_target` checks: letters, digits, `_`, `-` and `:` only.
+- `POST` needs the header `Content-Type: application/json` (a `+json` type works too). A missing or other type is a 415 and changes nothing, so a cross-origin form or `text/plain` request cannot change a level without a CORS preflight.
 - The level is one of `OFF`, `ERROR`, `WARN`, `INFO`, `DEBUG` and `TRACE`, in any case. Any other level is a 400.
 - A body that is not a JSON object with a `configuredLevel` string, or that is larger than 1 KiB, is a 400. `{"configuredLevel":null}` is a 400 too: there is no way to reset a level to its inherited value in this slice.
 - An empty target is a 400.
-- A 400 changes nothing. The error is a problem+json answer.
+- A 400 or 415 changes nothing. The error is a problem+json answer.
 - The change is the one `LoggingSystem::set_level` makes. It is not persisted: a restart returns to the configured levels.
 
 ## Security

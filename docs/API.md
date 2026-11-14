@@ -4696,6 +4696,18 @@ assert_eq!(logging.level("oxbloom_web::router"), Level::Trace);
 assert!(logging.set_level("not,a,target", Level::Trace).is_err());
 ```
 
+#### `LoggingSystem::validate_target(target)`
+
+Checks a target against the rule of `set_level` without changing anything and without an installed
+subscriber: an empty name or one with a character outside letters, digits, `_`, `-` and `:` (a dotted name
+such as `a.b` included) is a `LoggingError::Config` naming `logging.level.<target>`. The actuator uses it
+to reject an invalid target on `GET {base}/loggers/{target}` as well as on `POST`.
+
+```rust
+assert!(LoggingSystem::validate_target("oxbloom_web::router").is_ok());
+assert!(LoggingSystem::validate_target("a.b").is_err());
+```
+
 #### `LoggingSystem::reset(target)`
 
 Returns the target to its level from the last `init` or `reload`. For a group it restores the group
@@ -5457,7 +5469,8 @@ guide chapter is [Actuator](guide/17-actuator.md#actuator). The crate has the fe
   `management.health.readiness.include`.
 - An indicator that exceeds `management.health.timeout` or panics is `DOWN` with an `error` detail, never a
   500. Indicators must not block the thread, because the timeout cannot interrupt them.
-- Log targets use `::`; a dotted target is a 400, and `configuredLevel: null` is a 400.
+- Log targets use `::`; a dotted target is a 400 on `GET` and `POST`, and `configuredLevel: null` is a 400.
+  `POST` needs `Content-Type: application/json`; any other type is a 415 that changes nothing.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -5620,7 +5633,9 @@ an `Arc<HealthRunner>` and an `Arc<Info>`. It implements `oxbloom_web::Controlle
 `GET {base}/health`, `{base}/health/liveness`, `{base}/health/readiness` and `{base}/info`. With the feature
 `logging`, `with_loggers(Arc<LoggingSystem>)` adds `GET {base}/loggers`, `GET {base}/loggers/{target}` and
 `POST {base}/loggers/{target}` with the body `{"configuredLevel":"DEBUG"}` (204; 400 for a bad body, a body
-over 1 KiB, an unknown level, an empty or dotted target or `null`).
+over 1 KiB, an unknown level, an empty or dotted target or `null`; 415 when the `Content-Type` is not
+`application/json` or a `+json` type). `GET {base}/loggers/{target}` answers 400 for an empty or dotted target
+too.
 
 ```rust
 use oxbloom_web::{App, Controller, HttpMethod, Request};

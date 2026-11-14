@@ -17,7 +17,7 @@ use crate::error::LoggingError;
 use crate::file::file_layer;
 use crate::json::{JsonFields, JsonFormat};
 use crate::level::Level;
-use crate::settings::{ConsoleColor, ConsoleFormat, JsonOptions, Settings};
+use crate::settings::{ConsoleColor, ConsoleFormat, JsonOptions, Settings, check_target};
 
 /// The registry with the reloadable level filter: what the console layer sits on.
 pub(crate) type Filtered = Layered<reload::Layer<EnvFilter, Registry>, Registry>;
@@ -212,6 +212,28 @@ impl LoggingSystem {
             }),
         };
         Ok((dispatch, system))
+    }
+
+    /// Checks that `target` is a name that [`set_level`](Self::set_level) accepts: not
+    /// empty, and only letters, digits, `_`, `-` and `:`. A dotted name such as `a.b` is
+    /// rejected. The check changes nothing and needs no installed subscriber.
+    ///
+    /// # Errors
+    ///
+    /// [`LoggingError::Config`] naming `logging.level.<target>` when the name breaks the rule.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_logging::LoggingSystem;
+    ///
+    /// assert!(LoggingSystem::validate_target("oxbloom_web::router").is_ok());
+    /// assert!(LoggingSystem::validate_target("root").is_ok());
+    /// assert!(LoggingSystem::validate_target("a.b").is_err());
+    /// assert!(LoggingSystem::validate_target("").is_err());
+    /// ```
+    pub fn validate_target(target: &str) -> Result<(), LoggingError> {
+        check_target(target)
     }
 
     /// Sets the level of `target` at runtime. `root` is the default level; a group name
@@ -446,5 +468,25 @@ where
             .event_format(JsonFormat::new(json.clone(), clock))
             .fmt_fields(JsonFields)
             .boxed(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_target_accepts_the_names_set_level_accepts() {
+        for name in ["root", "app", "my-app", "oxbloom_web::router"] {
+            assert!(LoggingSystem::validate_target(name).is_ok(), "{name}");
+        }
+    }
+
+    #[test]
+    fn validate_target_rejects_dotted_empty_and_directive_characters() {
+        for name in ["", "a.b", "a,b", "a=b", "a[b]", "a b"] {
+            let error = LoggingSystem::validate_target(name).unwrap_err();
+            assert!(matches!(error, LoggingError::Config(_)), "{name}");
+        }
     }
 }

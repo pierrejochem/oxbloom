@@ -410,7 +410,7 @@ Limits that users must know (also in the guide):
 - `management.endpoints.enabled` switches the group on only with the value `true` or a missing key; any other value skips the group silently (visible in the conditions report).
 - The group is skipped when the application registers no `dyn Controller`.
 - A health indicator must not block the thread; the timeout cannot interrupt a blocking call.
-- `/loggers` targets use `::`; a dotted target is a 400, and `configuredLevel: null` is a 400, not a reset.
+- `/loggers` targets use `::`; a dotted target is a 400 on `GET` and `POST`, and `configuredLevel: null` is a 400, not a reset. `POST` requires `Content-Type: application/json` (415 otherwise).
 - The build script of the application reruns when `build.rs`, the git `HEAD`, the current branch ref or `packed-refs` changes, so a new commit refreshes the git sha of `/info`; a change that touches none of these files (such as a fetch that only updates a remote ref) does not.
 
 Follow-ups from C8, not yet scheduled:

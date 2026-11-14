@@ -25,11 +25,18 @@ fn name(level: Level) -> String {
     level.to_string().to_uppercase()
 }
 
-/// The target of the request, or the 400 that answers an empty one.
+/// The target of the request, or the 400 that answers an empty or invalid one.
+///
+/// A valid target holds only letters, digits, `_`, `-` and `:`, as
+/// [`LoggingSystem::validate_target`] checks; reads and writes share the rule.
 #[allow(clippy::result_large_err)] // `HttpError` is the error type of handlers.
 fn target(req: &Request) -> Result<String, HttpError> {
     match req.param("target") {
-        Some(t) if !t.is_empty() => Ok(t.to_string()),
+        Some(t) if !t.is_empty() => {
+            LoggingSystem::validate_target(t)
+                .map_err(|_| bad_request("the logger name is not valid"))?;
+            Ok(t.to_string())
+        }
         _ => Err(bad_request("the logger name is empty")),
     }
 }
@@ -40,8 +47,15 @@ fn change(logging: &LoggingSystem, req: &Request) -> Result<(), HttpError> {
     if req.body_too_large() || req.body.len() > MAX_BODY {
         return Err(bad_request("the request body is too large"));
     }
-    let change: Change = serde_json::from_slice(&req.body)
-        .map_err(|_| bad_request("the body must be {\"configuredLevel\": \"<level>\"}"))?;
+    // `Request::json` answers a missing or non-JSON `Content-Type` with a 415, so a
+    // cross-origin form or `text/plain` POST cannot change a level without a CORS preflight.
+    let change: Change = req.json().map_err(|error| {
+        if error.clone().into_response().status() == StatusCode::UNSUPPORTED_MEDIA_TYPE {
+            error
+        } else {
+            bad_request("the body must be {\"configuredLevel\": \"<level>\"}")
+        }
+    })?;
     let level: Level = change.configured_level.parse().map_err(|_| {
         bad_request("configuredLevel must be one of OFF, ERROR, WARN, INFO, DEBUG, TRACE")
     })?;
