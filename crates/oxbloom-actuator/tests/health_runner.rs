@@ -95,3 +95,29 @@ async fn no_indicators_is_up() {
     assert_eq!(status, Status::Up);
     assert!(parts.is_empty());
 }
+
+#[tokio::test]
+async fn duplicate_names_do_not_mask_a_down_indicator() {
+    for order in [[Status::Down, Status::Up], [Status::Up, Status::Down]] {
+        let (status, _) = runner(vec![
+            Arc::new(Fixed("same", order[0])),
+            Arc::new(Fixed("same", order[1])),
+        ])
+        .run(None)
+        .await;
+        assert_eq!(status, Status::Down, "{order:?}");
+    }
+}
+
+#[tokio::test]
+async fn duplicate_names_keep_both_entries() {
+    let (_, parts) = runner(vec![
+        Arc::new(Fixed("same", Status::Up)),
+        Arc::new(Fixed("same", Status::Down)),
+    ])
+    .run(None)
+    .await;
+    assert_eq!(parts.keys().collect::<Vec<_>>(), ["same", "same#2"]);
+    assert_eq!(parts["same"].status, Status::Up);
+    assert_eq!(parts["same#2"].status, Status::Down);
+}

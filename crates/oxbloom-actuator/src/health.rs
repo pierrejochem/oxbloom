@@ -201,7 +201,8 @@ pub trait HealthIndicator: Send + Sync {
 ///
 /// An indicator that exceeds the timeout or panics is reported `Down` with an `error`
 /// detail of `timed out` or `panicked`. Each indicator runs in its own task, so a panic
-/// never reaches the caller.
+/// never reaches the caller. Indicators with the same name get the keys `name`, `name#2`,
+/// `name#3` and so on, and every one counts towards the overall status.
 ///
 /// # Examples
 ///
@@ -269,27 +270,39 @@ impl HealthRunner {
         let handles: Vec<_> =
             self.indicators
                 .iter()
-                .filter(|i| only.is_none_or(|names| names.iter().any(|n| n == i.name())))
-                .map(|indicator| {
+                .filter_map(|indicator| {
                     let name = indicator.name().to_string();
+                    if only.is_some_and(|names| !names.contains(&name)) {
+                        return None;
+                    }
                     let indicator = Arc::clone(indicator);
                     let timeout = self.timeout;
                     let handle = tokio::spawn(async move {
                         tokio::time::timeout(timeout, indicator.health()).await
                     });
-                    (name, handle)
+                    Some((name, handle))
                 })
                 .collect();
         let mut parts = BTreeMap::new();
+        let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+        let mut status = Status::Up;
         for (name, handle) in handles {
             let health = match handle.await {
                 Ok(Ok(health)) => health,
                 Ok(Err(_elapsed)) => Health::down().detail("error", "timed out"),
-                Err(_join_error) => Health::down().detail("error", "panicked"),
+                Err(e) if e.is_panic() => Health::down().detail("error", "panicked"),
+                Err(_) => Health::down().detail("error", "cancelled"),
             };
-            parts.insert(name, health);
+            status = Status::worst([status, health.status]);
+            let count = counts.entry(name.clone()).or_insert(0);
+            *count += 1;
+            let key = if *count == 1 {
+                name
+            } else {
+                format!("{name}#{count}")
+            };
+            parts.insert(key, health);
         }
-        let status = Status::worst(parts.values().map(|h| h.status));
         (status, parts)
     }
 }
