@@ -16,10 +16,11 @@ TLS uses rustls 0.23 with the `aws-lc-rs` crypto provider, the same one `reqwest
 
 Good:
 
-- One TLS stack and one crypto provider in the dependency tree.
+- One TLS stack (rustls) and one TLS crypto provider (`aws-lc-rs`, no `ring`) in the dependency tree. The PKCS#12 reader brings its own RustCrypto primitives (`aes`, `cbc`, `des`, `rc2`, `sha1`, `sha2`, `hmac`, `pbkdf2`, `scrypt`), used only to decrypt and check PKCS#12 files, never for TLS ([ADR 0082](0082-c7-dependencies.md)).
 - No OpenSSL dependency and no own cryptography.
 
 Bad:
 
 - `aws-lc-rs` needs a C toolchain to build.
 - Users with JKS keystores must convert them.
+- The PKCS#12 reader adds a second set of cryptographic primitives to the tree.

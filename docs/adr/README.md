@@ -125,3 +125,4 @@ considered`.
 | [0079](0079-shutdown-drops-pending-tls-handshakes.md) | Shutdown drops TLS handshakes that are still running | Accepted | 2026-11-14 | [2026-11-14-ssl-bundles-design.md](../superpowers/specs/2026-11-14-ssl-bundles-design.md) |
 | [0080](0080-zero-reload-interval-has-no-validity-repeat.md) | With `ssl.reload-interval = 0s` there is no 24 hour repeat of validity warnings | Accepted | 2026-11-14 | [2026-11-14-ssl-bundles-design.md](../superpowers/specs/2026-11-14-ssl-bundles-design.md) |
 | [0081](0081-transport-scheme-is-default-for-missing-forwarded-proto.md) | The transport scheme is the default for a missing forwarded proto | Accepted | 2026-11-14 | [2026-11-14-ssl-bundles-design.md](../superpowers/specs/2026-11-14-ssl-bundles-design.md) |
+| [0082](0082-c7-dependencies.md) | C7 dependencies | Accepted | 2026-11-14 | [2026-11-14-ssl-bundles-design.md](../superpowers/specs/2026-11-14-ssl-bundles-design.md) |
