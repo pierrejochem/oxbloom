@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Oxbloom — GitHub social preview</title>
+<link rel="stylesheet" href="../tokens.css">
+<style>body{margin:0}</style>
+</head>
+<body>
+<div style="position: relative; width: 1280px; height: 640px; overflow: hidden; background: #fbf7f2; color: #1c1714; font-family: 'IBM Plex Sans', system-ui, sans-serif; box-sizing: border-box; padding: 80px; display: flex; gap: 56px; align-items: center">
+  <svg aria-hidden="true" viewBox="0 0 400 400" style="position: absolute; left: -170px; bottom: -230px; width: 520px; height: 520px">
+    <g transform="translate(200 200)" fill="#f3ece3">
+      <path transform="rotate(0) translate(0 -24)" d="M0 0C-50-28-58-116-30-144C-16-158 16-158 30-144C58-116 50-28 0 0Z"/>
+      <path transform="rotate(72) translate(0 -24)" d="M0 0C-50-28-58-116-30-144C-16-158 16-158 30-144C58-116 50-28 0 0Z"/>
+      <path transform="rotate(144) translate(0 -24)" d="M0 0C-50-28-58-116-30-144C-16-158 16-158 30-144C58-116 50-28 0 0Z"/>
+      <path transform="rotate(216) translate(0 -24)" d="M0 0C-50-28-58-116-30-144C-16-158 16-158 30-144C58-116 50-28 0 0Z"/>
+      <path transform="rotate(288) translate(0 -24)" d="M0 0C-50-28-58-116-30-144C-16-158 16-158 30-144C58-116 50-28 0 0Z"/>
+    </g>
+  </svg>
+  <div style="position: relative; flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 28px">
+    <img src="../logos/oxbloom-lockup.svg" alt="Oxbloom" style="height: 64px; width: auto; align-self: flex-start">
+    <h1 style="margin: 0; font-family: Fraunces, Georgia, serif; font-weight: 600; font-size: 52px; line-height: 58px; letter-spacing: -0.015em">Spring-style productivity. Rust-grade guarantees.</h1>
+    <p style="margin: 0; font-size: 22px; line-height: 32px; color: #66594f">Dependency injection, typed configuration, auto-configuration, web and security.</p>
+    <div style="display: flex; gap: 10px; font-family: 'JetBrains Mono', monospace; font-size: 16px">
+      <span style="padding: 6px 12px; border-radius: 6px; background: #f4b39a">MIT OR Apache-2.0</span>
+      <span style="padding: 6px 12px; border-radius: 6px; border: 1px solid #56722b; color: #56722b">rust 1.99+</span>
+    </div>
+  </div>
+  <div style="position: relative; flex: 0 0 470px; background: #1c1714; color: #f3ece5; border-radius: 14px; box-shadow: 0 24px 48px rgba(28,23,20,0.16); overflow: hidden; font-family: 'JetBrains Mono', monospace; font-size: 17px; line-height: 27px">
+    <div style="display: flex; align-items: center; gap: 7px; padding: 14px 18px; border-bottom: 1px solid rgba(243,236,229,0.08)">
+      <span style="width: 11px; height: 11px; border-radius: 6px; background: #b5462a"></span>
+      <span style="width: 11px; height: 11px; border-radius: 6px; background: rgba(243,236,229,0.18)"></span>
+      <span style="width: 11px; height: 11px; border-radius: 6px; background: rgba(243,236,229,0.18)"></span>
+      <span style="margin-left: 10px; font-size: 14px; color: #9a8c80">src/main.rs</span>
+    </div>
+<pre style="margin: 0; padding: 22px"><span style="color: #ec8a6a">use</span> oxbloom_boot::OxbloomApplication;
+
+<span style="color: #ec8a6a">#[tokio::main]</span>
+<span style="color: #ec8a6a">async fn</span> main() -&gt; ExitCode {
+    OxbloomApplication::builder()
+        .args(std::env::args().skip(<span style="color: #b5d48a">1</span>))
+        .config(|b| b.dir(<span style="color: #b5d48a">"config"</span>))
+        .run_and_exit()
+        .<span style="color: #ec8a6a">await</span>
+}</pre>
+  </div>
+</div>
+</body>
+</html>
