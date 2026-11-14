@@ -448,7 +448,7 @@ Done on 2026-11-14; the design is the C9a spec `2026-11-14-tasks-scheduling-desi
 Delivered:
 - The crate `oxbloom-tasks`: `Trigger` (`FixedRate`, `FixedDelay`, `Cron`), `CronExpr`, `Zone`, `TriggerError`, `parse_duration`, `Task`, `Scheduling`, `Outcome`, `TaskError`, `Scheduler`, `SchedulerConfig`, `TaskStatus` and `TasksSettings`.
 - The macros `#[scheduling]` and `#[scheduled(..)]` in `oxbloom-macros`, re-exported by `oxbloom-tasks`, without a feature flag. They generate `impl Scheduling` for an inherent impl block, with compile errors that name the method, and the application registers the bean with `.provides(.. -> Arc<dyn Scheduling>)`.
-- Cron expressions with six fields, seconds first, Spring numbering of the day of the week (translated before the `cron` crate), IANA zones, and daylight saving rules: a skipped local time does not fire and a repeated one fires once.
+- Cron expressions with six fields, seconds first, Spring numbering and names of the day of the week (mixed freely and translated before the `cron` crate), IANA zones, and daylight saving rules: a skipped local time does not fire and a repeated one fires once.
 - A scheduler with one loop per task, driven only by the injected `Clock` in chunks of at most one second; skip on overlap, logged at `warn` and counted; failures and panics logged at `error` with the schedule continuing; a global concurrency bound; `initial_delay`; and a shutdown that waits up to `tasks.scheduling.shutdown-timeout` and then aborts the runs, also when the `stop` future is dropped.
 - Startup errors that name the task and the key (`cron`, `zone`, `fixed_rate`, `fixed_delay`, `initial_delay` or `name`) and never the value, and a rejection of duplicate task names.
 - `Scheduler::tasks()` as a snapshot for inspection and `Scheduler::is_running()`.
@@ -456,8 +456,8 @@ Delivered:
 - The `TodoCleanup` task in `examples/todos` (a fixed delay of one minute that removes done todos older than `todos.cleanup.max-age`), its tests and its README, and the CI matrix.
 - ADR 0084 and the guide chapter 18 (the roadmap chapter is now 19).
 
-Gate numbers at the end of C9a (as measured by the implementers of Tasks 4 to 6; the controller re-measures at the end):
-- `cargo test --workspace --all-features`: 2611 passed, 0 failed, 8 ignored (2481 before C9a).
+Gate numbers at the end of C9a (re-measured at the final gate on the final tree):
+- `cargo test --workspace --all-features`: 2612 passed, 0 failed, 8 ignored (2481 before C9a).
 - Boot feature matrix (`cargo test -p oxbloom-boot`): `--no-default-features` 447, `--features web` 447, `--features logging` 467, `--features security` 447, `--features ssl` 447, `--features actuator` 460, `--features tasks` 462, `--all-features` 496; each with 0 failed and 1 ignored (the probe).
 - `cargo test -p oxbloom-tasks --all-features` 106, `cargo test -p oxbloom-macros` 21, `make check-examples` 50 (44 before).
 - Stack probes: boot needs 238 KB without the feature `logging` and 239 KB with it (237 and 238 overflow), unchanged from C8.
@@ -466,7 +466,7 @@ Limits that users must know (also in the guide):
 - A trigger that finds the previous run still active is skipped and not made up later.
 - A forward clock jump gives one run, never a burst. A backward jump delays a fixed-rate or fixed-delay task by at most one period. A cron task has no backward clamp, so an NTP step back stalls a per-second cron task for that span.
 - Sub-hourly cron expressions have a gap of about 75 minutes on a fall-back day.
-- A day-of-week range that mixes a name and a number, such as `MON-3`, is not translated; use names or numbers in a range. Cron evaluation ends at the year 2100.
+- Cron evaluation ends at the year 2100.
 - A plain `fn` runs in `spawn_blocking` and cannot be aborted: `stop` returns at the deadline, the thread is leaked until the work finishes, and the tokio runtime shutdown still waits for it.
 - Unknown keys under `tasks` are rejected only when the group runs. With `tasks.scheduling.enabled = false`, or with no `dyn Scheduling` bean, `tasks.typo` is accepted silently, and any value of `enabled` other than `true` switches the group off silently.
 - The configuration duration grammar (`1.5s`) is richer than the one of the attribute literals and `parse_duration` (a whole number with `ms`, `s`, `m`, `h` or `d`).
@@ -482,15 +482,14 @@ Follow-ups from C9a, not yet scheduled:
 - A backward clamp for cron tasks.
 - One duration grammar for configuration and attributes.
 - `#[diagnostic::on_unimplemented]` on `RunResult`, for a clearer error when a task returns an error type that is not `Display`.
-- Rejecting a day-of-week range that mixes a name and a number.
 - Fully qualified calls (`Self::method(&*this)`) in the macro output, so a method named `clone`, `to_string` or `scheduled` works.
 - Re-emitting the impl block when the macro reports an error, so the compiler does not add "no method found" errors.
 
 Deferred minors from the C9a reviews:
 - Task 1: the branch `_ => cursor = now` of the loop-stall guard in the cron evaluation should return `None` (it cannot be reached with the current `cron` crate). Coverage gaps remain for zones with a half-hour offset, a `last_end` earlier than `last_start`, and the `if let Some(far)` assertion. The crates `tokio`, `tracing` and `oxbloom-core` were unused until Task 2 (they are used now). Duplicate expansion in a day-of-week field (`0-7`, `1,1`) is untested.
 - Task 2: the log recorder helper in the tests captures events only on the test thread, so there is no multi-thread capture. A cancelled run is recorded as `Failed` without a log line. The skip event has no field with the count of skipped triggers. There is no test of `stop` called twice, of `start` after `stop`, or of a `spawn_blocking` call inside a user future, where the runtime shutdown waits for the blocking thread. `SchedulerConfig::zone` is read by `Scheduler::try_new` only to fill cron triggers without a zone.
-- Task 3: there is no test of a panicking plain `fn` reaching `Outcome::Panicked`. The error for a repeated trigger key reads "two triggers `cron` and `cron`". There is no custom message for an error type that is not `Display`.
-- Task 4: the start-order test passes even without `.order(i32::MAX)`, so registering a neighbouring service with `.order(1)` would pin it. A `fixed_delay` of `0s` is untested at the boot level.
+- Task 3: the error for a repeated trigger key reads "two triggers `cron` and `cron`". There is no custom message for an error type that is not `Display`.
+- Task 4: a `fixed_delay` of `0s` is untested at the boot level.
 - Task 5: the jump of the workspace test count from 2481 to 2611 is not attributed in the implementer's report (Task 4 added 15 under `--all-features` and Task 5 about 6), so the controller re-verifies it at the final gate. The test `the_max_age_comes_from_configuration` stores its result in a field called `removed_with`, which is misleading. The wording of the `done_at` doc is cosmetic. There is no scheduler-level run test of the example, because the attribute period is the literal `1m`. Some lines in the example's README, `cleanup.rs` and `application.toml` are long. The new `delete` test is sequential, so it is a regression guard and not a race test.
 
 Rulings made during C9a:

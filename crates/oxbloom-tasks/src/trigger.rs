@@ -112,11 +112,14 @@ impl fmt::Display for Zone {
 /// such as `@daily`. Months are `1`-`12` or `JAN`-`DEC`.
 ///
 /// Days of the week follow Spring: `1` is Monday through `6` Saturday, and both `0` and `7`
-/// are Sunday; the names `SUN`-`SAT` (any case) work too. Numeric days are translated to the
-/// evaluating library's own numbering (which starts at Sunday = `1`), so `1-5` means Monday to
-/// Friday, `5-7` Friday to Sunday, and a step such as `*/2` counts from Monday (Monday,
-/// Wednesday, Friday, Sunday). A day number of `8` or more is an error. [`CronExpr::as_str`]
-/// returns the expression as written, not the translation.
+/// are Sunday. The three-letter names `MON`-`SUN` (any case) stand for `1`-`7` and can be
+/// mixed with numbers, so `MON-3` and `1-FRI` work and a named range may end at Sunday
+/// (`SAT-SUN` is the weekend). `SUN` at the start of a range is `0`, so `SUN-TUE` runs from
+/// Sunday to Tuesday. Every day is translated to the evaluating library's own numbering
+/// (which starts at Sunday = `1`): `1-5` means Monday to Friday, `5-7` Friday to Sunday, and
+/// a step such as `*/2` counts from Monday (Monday, Wednesday, Friday, Sunday). A range that
+/// runs backwards (`5-1`, `FRI-MON`), a day number of `8` or more and an unknown name are
+/// errors. [`CronExpr::as_str`] returns the expression as written, not the translation.
 ///
 /// ```
 /// use std::time::{Duration, UNIX_EPOCH};
@@ -502,26 +505,61 @@ pub fn parse_duration(text: &str) -> Result<Duration, TriggerError> {
 const DAY_NAMES: [&str; 7] = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
 
 /// Translates a Spring day-of-week field (`0`/`7` = Sunday, `1` = Monday) into one the `cron`
-/// crate reads the same way. Wildcards and elements with day names pass through unchanged;
-/// numeric elements (single, range, step) become explicit day-name lists, which also keeps a
-/// range such as `5-7` that crosses Sunday intact.
+/// crate reads the same way. A lone `*` or `?` passes through unchanged; every element
+/// (single, range, step, with names, numbers or both) becomes an explicit day-name list,
+/// which also keeps a range such as `5-7` or `SAT-SUN` that crosses Sunday intact.
 fn translate_day_of_week(field: &str) -> Result<String, TriggerError> {
-    if field == "*" || field == "?" || !field.bytes().any(|b| b.is_ascii_digit()) {
+    if field == "*" || field == "?" {
         return Ok(field.to_owned());
     }
     let mut out = Vec::new();
     for element in field.split(',') {
-        if element.bytes().any(|b| b.is_ascii_alphabetic()) {
-            out.push(element.to_owned());
-            continue;
-        }
-        let days = spring_days(element)?;
+        let days = spring_days(&numeric_element(element)?)?;
         out.extend(
             days.into_iter()
                 .map(|day| DAY_NAMES[day as usize % 7].to_owned()),
         );
     }
     Ok(out.join(","))
+}
+
+/// One day-of-week element with its day names replaced by Spring numbers: `MON` = 1 through
+/// `SAT` = 6 and `SUN` = 7, except that `SUN` starting a range is 0 so the range runs
+/// forward from Sunday. Names are three letters in any case; the step stays as written.
+fn numeric_element(element: &str) -> Result<String, TriggerError> {
+    const UNKNOWN: TriggerError =
+        TriggerError::new("invalid day of week, expected 0-7 (0 and 7 are Sunday) or SUN-SAT");
+    const NAMES: [&str; 7] = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+    let name_or_number = |token: &str, starts_range: bool| -> Result<String, TriggerError> {
+        if !token.bytes().any(|b| b.is_ascii_alphabetic()) {
+            return Ok(token.to_owned());
+        }
+        let index = NAMES
+            .iter()
+            .position(|name| name.eq_ignore_ascii_case(token))
+            .ok_or(UNKNOWN)?;
+        Ok(match (index, starts_range) {
+            (0, true) => "0".to_owned(),
+            (0, false) => "7".to_owned(),
+            (day, _) => day.to_string(),
+        })
+    };
+    let (base, step) = match element.split_once('/') {
+        Some((base, step)) => (base, Some(step)),
+        None => (element, None),
+    };
+    let base = match base.split_once('-') {
+        Some((from, to)) => format!(
+            "{}-{}",
+            name_or_number(from, true)?,
+            name_or_number(to, false)?
+        ),
+        None => name_or_number(base, false)?,
+    };
+    Ok(match step {
+        Some(step) => format!("{base}/{step}"),
+        None => base,
+    })
 }
 
 /// The Spring day numbers (0-7) one numeric day-of-week element selects.
@@ -878,11 +916,74 @@ mod tests {
     }
 
     #[test]
-    fn names_are_untouched() {
+    fn day_names_select_the_same_days_as_their_numbers() {
         assert_eq!(weekdays_fired("MON-FRI"), vec![1, 2, 3, 4, 5]);
-        assert_eq!(weekdays_fired("mon-fri"), vec![1, 2, 3, 4, 5]);
         assert_eq!(weekdays_fired("SUN"), vec![0]);
         assert_eq!(weekdays_fired("SAT,SUN"), vec![0, 6]);
+        assert_eq!(weekdays_fired("MON-SUN"), vec![0, 1, 2, 3, 4, 5, 6]);
+        // SUN at the start of a range is day 0, so the range runs forward from Sunday.
+        assert_eq!(weekdays_fired("SUN-TUE"), vec![0, 1, 2]);
+        assert_eq!(weekdays_fired("SUN-SAT"), vec![0, 1, 2, 3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn named_range_sat_sun_is_the_weekend() {
+        let friday_noon = utc(2026, 11, 20, 12, 0, 0);
+        assert_eq!(
+            next_utc("0 0 9 * * SAT-SUN", friday_noon),
+            Some(utc(2026, 11, 21, 9, 0, 0))
+        );
+        let saturday_nine = utc(2026, 11, 21, 9, 0, 0);
+        assert_eq!(
+            next_utc("0 0 9 * * SAT-SUN", saturday_nine),
+            Some(utc(2026, 11, 22, 9, 0, 0))
+        );
+        assert_eq!(weekdays_fired("SAT-SUN"), vec![0, 6]);
+        assert_eq!(weekdays_fired("FRI-SUN"), vec![0, 5, 6]);
+        // As in Spring, FRI-MON (5-1) runs backwards and is rejected, like `5-1`.
+        assert!(CronExpr::parse("0 0 9 * * FRI-MON").is_err());
+        assert!(CronExpr::parse("0 0 9 * * 5-1").is_err());
+    }
+
+    #[test]
+    fn mixed_name_and_number_range_matches_the_numeric_range() {
+        let saturday = utc(2026, 11, 14, 12, 0, 0);
+        let monday_nine = Some(utc(2026, 11, 16, 9, 0, 0));
+        assert_eq!(next_utc("0 0 9 * * MON-3", saturday), monday_nine);
+        assert_eq!(next_utc("0 0 9 * * 1-FRI", saturday), monday_nine);
+        assert_eq!(weekdays_fired("MON-3"), weekdays_fired("1-3"));
+        assert_eq!(weekdays_fired("1-FRI"), weekdays_fired("1-5"));
+        assert_eq!(weekdays_fired("6-SUN"), vec![0, 6]);
+        assert_eq!(weekdays_fired("TUE,4,SAT-7"), vec![0, 2, 4, 6]);
+    }
+
+    #[test]
+    fn named_step_range_keeps_working() {
+        assert_eq!(weekdays_fired("MON-FRI/2"), vec![1, 3, 5]);
+        assert_eq!(weekdays_fired("MON/3"), vec![0, 1, 4]);
+        let tuesday_nine = utc(2026, 11, 17, 9, 0, 0);
+        assert_eq!(
+            next_utc("0 0 9 * * MON-FRI/2", tuesday_nine),
+            Some(utc(2026, 11, 18, 9, 0, 0))
+        );
+    }
+
+    #[test]
+    fn names_are_case_insensitive() {
+        assert_eq!(weekdays_fired("mon-fri"), vec![1, 2, 3, 4, 5]);
+        assert_eq!(weekdays_fired("Sat-Sun"), vec![0, 6]);
+        assert_eq!(weekdays_fired("wEd"), vec![3]);
+    }
+
+    #[test]
+    fn unknown_day_name_is_an_error_without_the_value() {
+        for bad in [
+            "XYZ", "MONDAY", "MO", "MON-XYZ", "QQQ/2", "MON/TUE", "M0N", "MON-",
+        ] {
+            let err = CronExpr::parse(&format!("0 0 9 * * {bad}")).unwrap_err();
+            assert!(!err.to_string().contains(bad), "{bad:?}: {err}");
+            assert!(!format!("{err:?}").contains(bad), "{bad:?}: {err:?}");
+        }
     }
 
     #[test]

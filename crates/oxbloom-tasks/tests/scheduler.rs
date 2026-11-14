@@ -337,6 +337,33 @@ async fn stop_aborts_at_the_deadline_and_does_not_hang() {
     assert!(abandoned, "a warn names the abandoned task");
 }
 
+#[tokio::test(start_paused = true)]
+async fn absurd_shutdown_timeout_does_not_panic() {
+    let clock = ManualClock::new();
+    let done = Arc::new(AtomicBool::new(false));
+    let task = {
+        let done = done.clone();
+        Task::new("long", Trigger::fixed_rate(secs(60)).unwrap(), move || {
+            let done = done.clone();
+            Box::pin(async move {
+                tokio::time::sleep(secs(3)).await;
+                done.store(true, Ordering::SeqCst);
+                Ok(())
+            })
+        })
+    };
+    // The configuration grammar accepts up to `u64::MAX` seconds.
+    let config = SchedulerConfig {
+        shutdown_timeout: Duration::MAX,
+        ..SchedulerConfig::default()
+    };
+    let scheduler = scheduler(vec![task], config, &clock);
+    scheduler.start().await;
+    settle().await;
+    scheduler.stop().await;
+    assert!(done.load(Ordering::SeqCst), "stop waited for the run");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stop_returns_with_a_blocked_thread() {
     let clock = ManualClock::new();

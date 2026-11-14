@@ -67,7 +67,7 @@ Without `initial_delay`, the first run of a fixed rate or fixed delay task is at
 
 ### Cron expressions
 
-An expression has six fields: second, minute, hour, day of month, month and day of week. Five-field Unix expressions, seven-field expressions with a year and macros such as `@daily` are rejected.
+An expression has six fields: second, minute, hour, day of month, month and day of week. Five-field Unix expressions, seven-field expressions with a year and macros such as `@daily` are rejected. Spring's `L`, `W` and `#` forms in the day-of-month and day-of-week fields are not supported either, and like the macros they fail at startup with "invalid cron expression".
 
 ```text
 0 0 9 * * 1-5        09:00:00 on Monday to Friday
@@ -75,9 +75,9 @@ An expression has six fields: second, minute, hour, day of month, month and day 
 30 0 0 1 * *         00:00:30 on the first day of every month
 ```
 
-Days of the week follow Spring: `1` is Monday through `6` for Saturday, and both `0` and `7` are Sunday. The names `SUN` to `SAT` work in any case. Numbers are translated before the expression reaches the `cron` crate, which counts Sunday as 1, so `1-5` means Monday to Friday, `5-7` means Friday to Sunday, and a step such as `*/2` counts from Monday. A number of 8 or more is an error. Names are passed through untouched.
+Days of the week follow Spring: `1` is Monday through `6` for Saturday, and both `0` and `7` are Sunday. The three-letter names `MON` to `SUN` work in any case and stand for `1` to `7`. Every day is translated before the expression reaches the `cron` crate, which counts Sunday as 1, so `1-5` means Monday to Friday, `5-7` means Friday to Sunday, and a step such as `*/2` counts from Monday. A number of 8 or more and an unknown name are errors.
 
-A single range that mixes a name and a number, such as `MON-3` or `1-FRI`, is not translated, and the `cron` crate may read the digit in its own numbering. Use names or numbers in a range, never both.
+Names and numbers can be mixed, also within one range: `MON-3` means Monday to Wednesday and `1-FRI` means Monday to Friday. A named range may end at Sunday, so `SAT-SUN` is the weekend and `FRI-SUN` is Friday to Sunday. `SUN` at the start of a range counts as `0`, so `SUN-TUE` means Sunday to Tuesday. As in Spring, a range that runs backwards, such as `5-1` or `FRI-MON`, is an error.
 
 The `cron` crate evaluates dates up to the year 2100. After that, a cron task has no next fire time, which is logged at `info` and ends that task's loop.
 

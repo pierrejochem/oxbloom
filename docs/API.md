@@ -5732,8 +5732,8 @@ macros `#[scheduling]` and `#[scheduled]`. In an application, `TasksAutoConfigur
 flag and are re-exported by this crate. Rules to remember:
 
 - A cron expression has six fields, seconds first. Days of the week follow Spring: `0` and `7` are Sunday, `1`
-  is Monday, and the names `SUN` to `SAT` work. A range that mixes a name and a number is not translated; use
-  one kind in a range. Cron evaluation ends at the year 2100.
+  is Monday, and the names `MON` to `SUN` work in any case. Names and numbers can be mixed, also in one range
+  (`MON-3`), and a named range may end at Sunday (`SAT-SUN`). Cron evaluation ends at the year 2100.
 - A cron trigger without a zone uses the zone of the scheduler (`tasks.scheduling.zone`, default UTC). A local
   time skipped by daylight saving time does not fire, and a repeated one fires once; sub-hourly expressions have
   a gap of about 75 minutes on a fall-back day.

@@ -19,6 +19,10 @@ const TARGET: &str = "oxbloom::tasks";
 /// is noticed within this time.
 const MAX_CHUNK: Duration = Duration::from_secs(1);
 
+/// The stop deadline used when `shutdown_timeout` is too large to add to now: thirty years,
+/// the same fallback as boot's stop deadline.
+const FAR_FUTURE: Duration = Duration::from_secs(60 * 60 * 24 * 365 * 30);
+
 /// Settings for a [`Scheduler`], bound from `tasks.scheduling.*` by the boot integration.
 ///
 /// # Examples
@@ -367,7 +371,12 @@ impl Scheduler {
                 })
                 .collect(),
         );
-        let deadline = tokio::time::Instant::now() + self.shutdown_timeout;
+        // A timeout too large to represent (the grammar accepts up to `u64::MAX` seconds)
+        // waits practically forever instead of overflowing, like boot's stop deadline.
+        let now = tokio::time::Instant::now();
+        let deadline = now
+            .checked_add(self.shutdown_timeout)
+            .unwrap_or_else(|| now + FAR_FUTURE);
         for (name, handle) in &mut in_flight.0 {
             if tokio::time::timeout_at(deadline, &mut *handle)
                 .await

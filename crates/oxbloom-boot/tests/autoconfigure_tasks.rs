@@ -263,7 +263,7 @@ impl RunListener for Order {
     }
 }
 
-/// A service in the web server's phase with the default order, like the server itself.
+/// A service in the web server's phase, registered with order 1 (see the test).
 struct Neighbour(Order);
 
 #[oxbloom_boot::async_trait]
@@ -299,7 +299,9 @@ async fn tasks_start_before_ready_and_stop_before_the_server() {
         .listener(order.clone())
         .configure(hourly(Hourly::default()))
         .configure(move |b| {
+            // A positive order of its own: only the scheduler's `i32::MAX` keeps it last.
             b.instance(neighbour)
+                .order(1)
                 .provides(|n: Arc<Neighbour>| -> Arc<dyn Service> { n })
         })
         .start()

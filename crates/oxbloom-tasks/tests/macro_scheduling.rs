@@ -356,3 +356,25 @@ fn spelled_out_self_and_result_aliases_are_accepted() {
 
     assert_eq!(Arc::new(Shapes).scheduled().len(), 2);
 }
+
+#[tokio::test]
+async fn a_panicking_plain_fn_is_a_panicked_run() {
+    struct Exploding;
+
+    #[scheduling]
+    impl Exploding {
+        #[scheduled(fixed_rate = "1h")]
+        fn explode(&self) {
+            panic!("plain method panicked on purpose");
+        }
+    }
+
+    let scheduler = try_scheduler(Arc::new(Exploding).scheduled()).expect("valid tasks");
+    scheduler.start().await;
+    wait_until(|| scheduler.tasks()[0].last_outcome.is_some()).await;
+    scheduler.stop().await;
+
+    let status = &scheduler.tasks()[0];
+    assert_eq!(status.name, "Exploding::explode");
+    assert_eq!(status.last_outcome, Some(Outcome::Panicked));
+}
