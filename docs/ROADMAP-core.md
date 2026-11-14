@@ -4,7 +4,7 @@ Date: 2026-10-24
 
 Source: the module and package names under `spring-projects/spring-boot/core` (`spring-boot`, `spring-boot-autoconfigure`, `spring-boot-autoconfigure-processor`, `spring-boot-test`, `spring-boot-test-autoconfigure`, `spring-boot-docker-compose`, `spring-boot-testcontainers`, `spring-boot-properties-migrator`). The GitHub listing shows names only. What each package does is taken from knowledge of Spring Boot, so each slice's design step must re-check Spring Boot's reference documentation before the spec is written.
 
-Each item below becomes its own slice with its own spec, plan and review, as in Slices 1 to 5. Slices marked done are implemented; the rest are not. Existing crates: `oxbloom-core`, `-macros`, `-web`, `-di`, `-cli`, `-config`, `-security`, `-boot`.
+Each item below becomes its own slice with its own spec, plan and review, as in Slices 1 to 5. Slices marked done are implemented; the rest are not. Existing crates: `oxbloom-core`, `-macros`, `-web`, `-di`, `-cli`, `-config`, `-security`, `-boot`, `-logging`, `-test`, `-ssl`.
 
 ## What Spring Boot core has, and what we have
 
@@ -17,7 +17,7 @@ Each item below becomes its own slice with its own spec, plan and review, as in 
 | `logging` | Logging system abstraction, levels and groups from properties, file and structured (JSON) output | `oxbloom-logging` (C5a and C5b done): `tracing` subscriber from `logging.*` keys, levels, groups, console format and color, rotating file output, JSON lines with configurable fields, runtime level change through `LoggingSystem`, startup events in `oxbloom-boot` (feature `logging`); `RequestLogFilter` in `oxbloom-web` and `RequestLogAutoConfiguration` in `oxbloom-boot` (feature `web`). Size-based rotation and runtime changes of the output layers are open |
 | `availability`, `info`, `admin`, `cloud` | Liveness and readiness state, build and git info, platform detection (Kubernetes) | None |
 | `web` (server properties, error handling, forwarded headers, compression, static resources, JSON) | `server.*` properties, error attributes and problem details, content negotiation, JSON conversion | `oxbloom-web` (C6a, C6b-1 and C6b-2 done): router, Hyper server, ordered `Filter` chain (`order` module), `HttpError` and `ErrorRenderer` with problem+json, `server.*` limits, shutdown timeout and forwarded headers. It also has `Json<T>`, `Request::json` and `Accept` negotiation (feature `json`). It also has a CORS filter, a compression filter (gzip, brotli, zstd) and static resources (disk and embedded). |
-| `ssl` | SSL bundles from PEM or keystores, reloadable | None |
+| `ssl` | SSL bundles from PEM or keystores, reloadable | `oxbloom-ssl` (C7 done): named bundles from PEM and PKCS#12, polling reload, validity warnings; HTTPS for the web server (`server.ssl.bundle`), a bundle for the JWKS fetcher (`security.jwt.jwks-ssl-bundle`) and `TestClient::connect_tls`. No mutual TLS, no JKS, no client reload |
 | `task`, `thread`, `retry` | Task executor and scheduler properties, retry policy | None (jobs, queue, worker, scheduler are planned in `IDEA.md`) |
 | `json` | Mapper configuration, JSON parser abstraction | `serde_json` used directly |
 | `diagnostics` (`FailureAnalyzer`) | Human-readable startup failure reports with a suggested action | `oxbloom-boot` (C3b, C4b and C5a done): `FailureAnalyzer`, `FailureAnalysis`, built-in analyzers for a missing config key, bean wiring, port in use, security build errors, invalid `security.jwt` configuration and invalid `logging` configuration (the last two are internal analyzers, not public items) |
@@ -311,10 +311,75 @@ Deferred minors from the C6b-2 reviews:
 - Boot: `StaticResources::index()` silently drops an invalid name.
 - Cargo: brotli is pinned to 9.0.0 in `Cargo.lock` because 9.1.1 was under two weeks old; `Cargo.toml` keeps a caret requirement.
 
-### C7: SSL bundles (`oxbloom-ssl`)
-- Named bundles from PEM files or inline PEM via config (`ssl.bundle.pem.<name>`), keys as `Secret`.
-- Hot reload on file change; validity warnings.
-- Consumers: web server TLS, the JWKS fetcher, later database and HTTP clients.
+### C7: SSL bundles (`oxbloom-ssl`) — done
+Done on 2026-11-14; design in `docs/superpowers/specs/2026-11-14-ssl-bundles-design.md`, plan in `docs/superpowers/plans/2026-11-14-ssl-bundles.md`, usage in the guide chapter `docs/guide/16-ssl-bundles.md` and `docs/API.md` (section 4.11), decisions in ADRs 0068 to 0080.
+
+Delivered:
+- The crate `oxbloom-ssl`: `SslBundles` (`from_config`, `with_clock`, `get`, `names`, `reload_interval`, `expiry_warning`, `reload`, `start_reload`), `SslBundle` (`name`, `has_identity`, `has_trust`, `validity`, `server_config`, `client_config`), `CertValidity`, `ReloadTask`, `SslError` and `PROPERTIES`. Bundles come from `ssl.bundle.pem.<name>` (files or inline PEM, `certificate`, `private-key` as a `Secret`, `trust`) and `ssl.bundle.pkcs12.<name>` (`path`, `password` as a `Secret`), with rustls 0.23 and the `aws-lc-rs` provider only (no `ring` in the tree). Errors name the bundle and the key, never a key, a password, a path or file contents. Feature `di` implements `Lifecycle` for `SslBundles`.
+- Reload by polling file metadata every `ssl.reload-interval` (default `30s`, `0s` off): size, modification time and, on Unix, device and inode, with symlinks followed; metadata compared before and after the read; the whole bundle rebuilt and swapped atomically behind an `ArcSwap` that the certificate resolver reads at every handshake; a failed reload keeps the old material and warns once per file change on `oxbloom::ssl`. `SslBundles::reload()` does the same on demand.
+- Validity warnings (expired, not yet valid, expiring within `ssl.expiry-warning`, default `14d`) against the `Clock`, at load, after each successful reload and every 24 hours while the condition holds. They never stop the startup.
+- `App::serve_tls(listener, acceptor, shutdown)` in `oxbloom-web` behind the feature `tls` (`tokio-rustls` without a provider; `oxbloom-web` does not depend on `oxbloom-ssl`): handshake per connection task with a 10 second timeout, pending handshakes dropped at shutdown, handshake failures at `debug` on `oxbloom::web` with the peer and the error kind, scheme `https`, any negotiated protocol other than `http/1.1` closed.
+- Boot feature `ssl` (turns `web` on, enables `oxbloom-ssl/di` and `oxbloom-web/tls`, and `oxbloom-security/jwks` when `security` is on): `SslAutoConfiguration` (condition `on_property("ssl.bundle")`, optional `dyn Clock` bean, `on_missing_bean::<SslBundles>()`), the built-in SSL analyzer, `WebServer::with_ssl` and `server.ssl.bundle` (the port then speaks only HTTPS). `WebServer::new` refuses a set `server.ssl.bundle`.
+- `ReqwestJwksFetcher::with_tls(client_config)` and `jwks_ssl_bundle(&config)` in `oxbloom-security`; boot resolves `security.jwt.jwks-ssl-bundle` against the `SslBundles` bean (ADR 0074). An unknown name, the key without `ssl`, and the key together with a `JwksFetcher` bean are `ConfigError::Invalid` on the key.
+- `TestClient::connect_tls(addr, ca_pem)` and `RunningApp::client_tls(ca_pem)` in `oxbloom-test` behind the feature `tls`; the server name is always `localhost`.
+- Property metadata for every new key, the conditions report entry, and test certificates generated at test time with `rcgen` (no key material committed).
+
+Gate numbers at the end of C7 (all measured in Task 8):
+- `cargo test --workspace --all-features`: 2356 passed, 0 failed, 8 ignored (2224 before C7).
+- Boot feature matrix (`cargo test -p oxbloom-boot`), re-baselined because boot's `oxbloom-test` dev-dependency now enables `tls` and with it boot's `ssl` (ADR 0075): `--no-default-features` 420 -> 447, `--features web` 420 -> 447, `--features logging` 440 -> 467, `--features security` 420 -> 447, `--all-features` 440 -> 467, and the new `--features ssl` 447; each with 0 failed and 1 ignored (the probe). No `cargo test -p oxbloom-boot` run builds boot without `ssl` any more; the compile-only builds (now also `--no-default-features --features ssl`) compile those paths, and `cargo test -p oxbloom-test --features web` is the only test run that executes boot without `ssl`.
+- `cargo test -p oxbloom-web --no-default-features` 357 (356 before C7, one new unit test), `cargo test -p oxbloom-web --features tls` 422, `cargo test -p oxbloom-ssl --all-features` 83, `cargo test -p oxbloom-test --features web` 155, `cargo test -p oxbloom-test --features web,tls` 161, `make check-examples` 41.
+- Stack probes unchanged: the DI minima are 206, 277, 230 and 194 KB, and boot needs 238 KB without the feature `logging` (also with `ssl`) and 239 KB with it (also with all features); each value passes and one KB less overflows.
+
+Limits that users must know (also in the guide):
+- No mutual TLS and no `client-auth`, no HTTP to HTTPS redirect, no ALPN `h2`.
+- The JWKS client does not hot reload; a client configuration fixes its trust store when it is built.
+- No OCSP stapling and no revocation checks. JKS keystores and encrypted PEM keys are not supported.
+- Reload polls, so a change applies within `ssl.reload-interval`; with `0s` there is no 24 hour repeat of validity warnings either (ADR 0080).
+- Expired certificates only warn.
+- No limit on concurrent connections or half-open handshakes beyond the 10 second handshake timeout.
+
+Follow-ups from C7, not yet scheduled:
+- Bundles for database and HTTP clients.
+- Mutual TLS on the server, an HTTP to HTTPS redirect, HTTP/2.
+- A reloading JWKS client.
+- Expose `SslBundle::validity()` through a health or info endpoint (C8).
+
+Deferred minors from the C7 reviews:
+- Task 1: `p12-keystore` 0.4.1 pulls in the pre-release crates `cms 0.3.0-rc.2` and `pkcs12 0.2.0-rc.0` through caret ranges on pre-releases; record it in the spec's limits or decisions. The `pbes1` feature is enabled but no test reads a PBES1 file; add a test or drop the feature.
+- Task 1: a failure to set up the platform verifier is reported as `SslError::Io` with kind `Other` on the trust key, which is misleading; add a dedicated variant (and amend the spec's variant list).
+- Task 1: several private keys in one PEM value or PKCS#12 file silently use the first; reject it or document it, and add a test.
+- Task 1: missing tests for a legacy OpenSSL encrypted key (`Proc-Type`/`DEK-Info`) and for a `certificate` value that holds only a key.
+- Task 1: every non-leaf certificate of a PKCS#12 file becomes a trust anchor; document it on `has_trust` and `client_config`.
+- Task 1: `client_config` fixes its verifier at call time, so later trust changes are not seen; out of scope per the spec (the JWKS client does not reload).
+- Task 1: the test `missing_file_is_an_io_error...` in `tests/bundles.rs` keeps a useless `ca()` setup.
+- Task 1 (unverified): bundle names that differ only by case or `-`/`_` under the same kind (`pem.web` and `pem.Web`); `DuplicateName` compares only across kinds. The final reviewer was to check it.
+- Task 2: `stop()` and `Drop` can block on a hung read; document or bound it.
+- Task 2: the bundle state mutex is held across file I/O, so `reload()` blocks; document it.
+- Task 2: separate replacement of the certificate and key files can warn once with `key-mismatch`; document the atomic swap.
+- Task 2 (unverified): no explicit test that a handshake in progress is unaffected by a reload; it relies on the per-handshake resolver reading the `ArcSwap`.
+- Task 2: `reload_global.rs` has `mod common;` but uses only `ca` and `write`, which can give `dead_code` warnings in that test binary.
+- Task 3: `from_config` warns with the system clock before `with_clock`, so with a far-off injected clock both clocks warn; add an internal `from_config_with_clock` path.
+- Task 3: a certificate that does not parse is silently left out of `validity()`; add a `warn` or `debug` event naming the bundle.
+- Task 3: the certificate subject is logged raw; strip control characters (log-line injection under plain-text formatters).
+- Task 3: the validity tests lack `ExpiresSoon` to `Expired` as the clock advances, a condition that clears and then warns again, a file-change reload through a tick that warns at once, and they use 200 ms sleeps in negative assertions.
+- Task 3: a repeat warning can run up to one reload interval late (documented).
+- Task 4: the `serve_tls` doc example used `rustls::` (a dev-dependency); it now uses `tokio_rustls::rustls::` so it copies as is (fixed in Task 8).
+- Task 4: a drop for an ALPN mismatch is logged as "TLS handshake failed" with kind `Unsupported` and is untested; give it its own message and a test with a configuration offering `[h2, http/1.1]`.
+- Task 4: on TLS, a trusted proxy sending `X-Forwarded-For` without `X-Forwarded-Proto` yields `Scheme::Http` (documented and tested); Spring keeps the request's own scheme. The final reviewer was to decide whether the transport should be the default.
+- Task 4: no cap on concurrent connections or half-open handshakes (the same exposure as plain `serve`); recorded as a known limit.
+- Task 4: `tests/tls.rs` asserts that a connect fails after shutdown, which risks ephemeral port reuse.
+- Task 5: `tls_acceptor` maps every `server_config` error to "has no certificate and private key"; match `NoIdentity` explicitly.
+- Task 5: the unknown-bundle message lacks the requested name.
+- Task 5: `write_leaf` in `autoconfigure_ssl.rs` renames the key before the certificate, which gives a window for one spurious `KeyMismatch` warning; comment it.
+- Task 5: `clock_bean_reaches_the_ssl_bundles` uses `reload-interval = 0s`, so it cannot show that the clock is set before the task starts.
+- Task 5: spec line 87 said `WebServer::new` serves HTTPS (aligned with the `with_ssl` ruling in Task 8); the "Web server listening" event shows no scheme (still open).
+- Task 6: an overlong line and an ambiguous sentence in `docs/API.md` about which run covers boot without `ssl` (fixed in Task 8: only `cargo test -p oxbloom-test --features web`); an optional `connect_stream` helper; the `wrong_ca` test ties to the word "certificate" in the rustls text.
+- Task 7: `map_err(|_| unusable())` in `jwt.rs` drops the `SslError` or reqwest cause; keep it as the source or name its kind.
+- Task 7: the bundle is resolved before the decoder's "only valid with `jwk-set-uri`" check; the error order is cosmetic.
+- Task 7: the tests use `localhost` and reqwest honours `HTTPS_PROXY`, so they break on runners with a proxy and no `NO_PROXY`; use `127.0.0.1` with an IP SAN or document `NO_PROXY`.
+- Task 7: spec line ~125 still said `jwt_decoder_from_config` takes an optional `SslBundles`, contradicting the "As built" bullet below it (struck in Task 8).
+- Task 7: the client-certificate path (an identity in `client_config`) is not tested end to end.
+- Task 7: the trust replacement of a bundle with a trust store (rejecting a public-CA certificate) is documented but untested.
 
 ### C8: Availability, info and health (`oxbloom-actuator`, small)
 - Liveness and readiness state, flipped during startup and graceful shutdown.
@@ -385,7 +450,7 @@ Deferred minors from the C10b reviews:
 5. **C5 Logging** (C5a and C5b done), then **C6 Web server properties, errors and JSON** (C6a, C6b-1 and C6b-2 done).
 6. **C4 Conditions and auto-configuration** (C4a, the mechanism, and C4b, auto-configuring the existing wiring with property metadata, done).
 7. **C10 Test support** (C10a, the context runner and clock, and C10b, `TestApp`, `TestClient` and slicing, done).
-8. **C7 SSL, C8 Availability, C9 Tasks and retry.**
+8. **C7 SSL bundles** (done), then **C8 Availability, C9 Tasks and retry.**
 9. Security Slices 7 to 9, then `oxbloom-ai`, database, jobs and the rest of `IDEA.md`.
 10. **C11 Service connections** after the database and queue crates exist.
 

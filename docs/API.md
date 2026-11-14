@@ -10,26 +10,32 @@ Only what is implemented and tested is documented as available. Anything else is
 |---|---|---|
 | `oxbloom-core` | Shared types | `HttpMethod`, `InvalidHttpMethod`, `Clock`, `SystemClock` |
 | `oxbloom-macros` | Procedural macros | `#[controller]`, `#[get]`, `#[post]`, `#[put]`, `#[patch]`, `#[delete]`, `#[head]`, `#[options]`, `#[component]`, `#[configuration]`, `#[bean]` (with condition options), `#[auto_configuration]` (used through `oxbloom-boot`) |
-| `oxbloom-web` | Router, request/response, Hyper server, filters | `App`, `Router`, `RouterConfig`, `Route`, `Request`, `Response`, `IntoResponse`, `Controller`, `RouteError`, `Filter`, `Next`, `Ordered`, `order` (with `order::CORS`, `order::NEGOTIATION` and `order::COMPRESSION`), `RequestLogFilter`, `CorsConfig`, `CorsFilter`, `CorsError`, `CompressionConfig`, `CompressionLevel`, `CompressionFilter`, `codecs`, `StaticResources`, `ResourceSource`, `DiskResources`, `EmbeddedResources`, `Resource`, `ResourceError`, `Json` and `JsonBody` (feature `json`), `HttpError`, `ErrorValue`, `ErrorAttributes`, `RequestInfo`, `ErrorRenderer`, `ProblemRenderer`, `ClientInfo`, `Scheme`, `ForwardedConfig`, `ForwardStrategy`, `TrustedProxies`, `ProxyParseError` |
+| `oxbloom-web` | Router, request/response, Hyper server, filters | `App`, `Router`, `RouterConfig`, `Route`, `Request`, `Response`, `IntoResponse`, `Controller`, `RouteError`, `Filter`, `Next`, `Ordered`, `order` (with `order::CORS`, `order::NEGOTIATION` and `order::COMPRESSION`), `RequestLogFilter`, `CorsConfig`, `CorsFilter`, `CorsError`, `CompressionConfig`, `CompressionLevel`, `CompressionFilter`, `codecs`, `StaticResources`, `ResourceSource`, `DiskResources`, `EmbeddedResources`, `Resource`, `ResourceError`, `Json` and `JsonBody` (feature `json`), `HttpError`, `ErrorValue`, `ErrorAttributes`, `RequestInfo`, `ErrorRenderer`, `ProblemRenderer`, `ClientInfo`, `Scheme`, `ForwardedConfig`, `ForwardStrategy`, `TrustedProxies`, `ProxyParseError`, `App::serve_tls` (feature `tls`) |
 | `oxbloom-di` | Singleton dependency injection: traits, collections, lifecycle, lazy beans, bean factories, profiles, conditions and groups | `ContainerBuilder`, `Container`, `Resolver`, `Component`, `Configuration`, `Lifecycle`, `ShutdownReport`, `DestroyFailure`, `Inject`, `BeanFn`, `TryBeanFn`, `DiError`, `ErrorSource`, `Environment`, `ConditionContext`, `ConditionOutcome`, `Conditions`, `ConditionReport`, `ConditionRecord` |
 | `oxbloom-config` | Typed config: TOML + imports, profiles, env and CLI sources, placeholders, origins | `Config`, `ConfigBuilder`, `Secret`, `ConfigError`, `Origin`, `DataSize`, `ConfigWarning` |
-| `oxbloom-security` | Filter-chain security, JWT resource server | `HttpSecurity`, `SecurityFilterChain`, `JwtDecoderBuilder`, `JwksSource`, `Authentication`, `jwt_decoder_from_config` |
-| `oxbloom-boot` | Application entry point: lifecycle events, runners, services, signals, exit codes, banner, failure analysis, auto-configuration and the conditions report | `OxbloomApplication`, `OxbloomApplicationBuilder`, `ApplicationArguments`, `RunListener`, `ApplicationRunner`, `CommandLineRunner`, `Service`, `ExitCodeGenerator`, `ShutdownHandle`, `StartupError`, `StartupPhase`, `ServiceError`, `RunnerError`, `ExitStatus`, `Banner`, `FailureAnalysis`, `FailureAnalyzer`, `AutoConfiguration`, `AutoConfigurations`, `ConfigRef`, `auto_configuration`, `Conditions`, `Configuration`, `PropertyMetadata`, `boot_properties`, `WebServer`, `BindError`, `WebServerAutoConfiguration` and `RequestLogAutoConfiguration` (feature `web`), `auto_configurations` (feature `security` or `web`), `JwtDecoderAutoConfiguration`, `SecurityAutoConfiguration` and `SecurityCustomizer` (feature `security`), `OxbloomApplicationBuilder::logging` (feature `logging`), `async_trait` |
+| `oxbloom-security` | Filter-chain security, JWT resource server | `HttpSecurity`, `SecurityFilterChain`, `JwtDecoderBuilder`, `JwksSource`, `Authentication`, `jwt_decoder_from_config`, `jwks_ssl_bundle`, `ReqwestJwksFetcher` with `with_tls` (feature `jwks`) |
+| `oxbloom-boot` | Application entry point: lifecycle events, runners, services, signals, exit codes, banner, failure analysis, auto-configuration and the conditions report | `OxbloomApplication`, `OxbloomApplicationBuilder`, `ApplicationArguments`, `RunListener`, `ApplicationRunner`, `CommandLineRunner`, `Service`, `ExitCodeGenerator`, `ShutdownHandle`, `StartupError`, `StartupPhase`, `ServiceError`, `RunnerError`, `ExitStatus`, `Banner`, `FailureAnalysis`, `FailureAnalyzer`, `AutoConfiguration`, `AutoConfigurations`, `ConfigRef`, `auto_configuration`, `Conditions`, `Configuration`, `PropertyMetadata`, `boot_properties`, `WebServer`, `BindError`, `WebServerAutoConfiguration` and `RequestLogAutoConfiguration` (feature `web`), `auto_configurations` (feature `security` or `web`), `JwtDecoderAutoConfiguration`, `SecurityAutoConfiguration` and `SecurityCustomizer` (feature `security`), `WebServer::with_ssl` and `SslAutoConfiguration` (feature `ssl`), `OxbloomApplicationBuilder::logging` (feature `logging`), `async_trait` |
 | `oxbloom-logging` | `tracing` subscriber from the `logging.*` keys: levels, groups, console format and color, rotating file output, JSON lines, runtime change | `Level`, `ParseLevelError`, `ConsoleFormat`, `ConsoleColor`, `FileRotation`, `FileFormat`, `JsonField`, `LoggingError`, `LoggingSystem`, `PROPERTIES` |
-| `oxbloom-test` | Test support (dev-dependency): run an application context through the real boot lifecycle, captured output, temporary config directories, controllable clocks | `ContextRunner`, `ContextView`, `FailureView`, `Captured`, `Log`, `TempConfigDir`, `FixedClock`, `ManualClock` |
+| `oxbloom-test` | Test support (dev-dependency): run an application context through the real boot lifecycle, captured output, temporary config directories, controllable clocks, a test client and whole applications on port 0 | `ContextRunner`, `ContextView`, `FailureView`, `Captured`, `Log`, `TempConfigDir`, `FixedClock`, `ManualClock`, `TestClient`, `TestResponse`, `TestApp` and `RunningApp` (feature `web`), `TestClient::connect_tls` and `RunningApp::client_tls` (feature `tls`) |
+| `oxbloom-ssl` | Named SSL bundles from the `ssl.*` keys (PEM and PKCS#12), reloaded when their files change, with certificate validity warnings | `SslBundles`, `SslBundle`, `SslError`, `CertValidity`, `ReloadTask`, `PROPERTIES` |
 | `oxbloom-cli` | `oxbloom` binary: project generator | `new`, `list` |
 | `examples/todos` | A CRUD REST API on the web, security and logging stack (controller with `#[post]`, `#[get]`, `#[put]`, `#[patch]`, `#[delete]`, a thread-safe in-memory store, `Json<T>` and `Request::json`, `tracing` events at the target `todos`) | `cargo run -p todos -- --server.port=0` or `make run-todos` |
 | `examples/hello` | A small application that uses the current features (configuration and beans, trait injection, lifecycle, runners, listeners, exit codes, security and `WebServer` auto-configured through a `SecurityCustomizer` and a `dyn Controller`, a custom failure analyzer, an auto-configuration with a user override) | `cargo run -p hello -- --server.port=0` |
 
 Feature flags: `oxbloom-web/json` (default) adds `Json`, `JsonBody`, `Request::json` and the built-in `Accept` check; `oxbloom-web/gzip`, `brotli` and `zstd` enable one codec each of the compression filter and `oxbloom-web/compression` (default) enables all three (CORS and static resources need no feature); `oxbloom-web/di` adds `App::controller` and `AppError`. `oxbloom-config/di`
 adds `ContainerBuilderExt::config`, `From<ConfigError> for DiError` and `impl Environment for Config`. `oxbloom-security/jwks` adds
-`ReqwestJwksFetcher`; `oxbloom-security/di` adds `SecurityContainerExt::security_chain` and
+`ReqwestJwksFetcher` (with `with_tls`); `oxbloom-security/di` adds `SecurityContainerExt::security_chain` and
 `From<SecurityBuildError> for DiError`. `oxbloom-boot/web` adds `WebServer`, `BindError` and the
 port-in-use analyzer and `WebServerAutoConfiguration`; `oxbloom-boot/security` enables
 `oxbloom-security/di` and adds the security analyzer, a built-in analyzer for invalid `security.jwt`
 configuration, `JwtDecoderAutoConfiguration`, `SecurityAutoConfiguration` and `SecurityCustomizer`;
 `oxbloom-boot/logging` adds `oxbloom-logging`, the `OxbloomApplicationBuilder::logging` method, the
-startup events, the `LoggingSystem` bean and a built-in analyzer for invalid `logging` configuration. With either
+startup events, the `LoggingSystem` bean and a built-in analyzer for invalid `logging` configuration;
+`oxbloom-boot/ssl` (it turns `web` on) enables `oxbloom-ssl/di` and `oxbloom-web/tls` and adds
+`SslAutoConfiguration`, `WebServer::with_ssl`, the `server.ssl.bundle` key and a built-in analyzer for
+SSL bundle errors. `oxbloom-web/tls` adds `App::serve_tls`. `oxbloom-ssl/di` implements
+`oxbloom_di::Lifecycle` for `SslBundles`. `oxbloom-test/tls` adds `TestClient::connect_tls` and
+`RunningApp::client_tls`. With either
 feature, `oxbloom_boot::auto_configurations()` lists the auto-configurations of the enabled
 features. `oxbloom-boot` always enables `oxbloom-config/di`.
 
@@ -1174,6 +1180,37 @@ let server = tokio::spawn(App::new().serve(listener, async { let _ = stopped.awa
 // ... send requests to `addr` ...
 stop.send(()).unwrap();
 server.await??;
+```
+
+#### `App::serve_tls(listener, acceptor, shutdown)` (feature `tls`)
+
+Serves HTTPS on a listener you own: `App::serve` with a TLS handshake in front of every connection. Use it
+when you build the `rustls::ServerConfig` yourself; in an application, `server.ssl.bundle` does this for
+you (see [`WebServer::with_ssl`](#webserverwith_sslapp-config-bundles-feature-ssl)). The feature `tls` is off
+by default and adds `tokio-rustls` without a crypto provider, so the caller's configuration decides it.
+
+- Shutdown, `shutdown_timeout`, the header read timeout, the body limit, the filters and the router work as
+  in `App::serve`.
+- Each connection is handshaken in its own task. A client that has not finished its handshake after
+  10 seconds is dropped, and a handshake still running when shutdown starts is dropped at once.
+- A failed handshake is logged at `debug` on target `oxbloom::web` with the peer address and the error kind,
+  never with bytes the client sent.
+- HTTP/1.1 only: set `alpn_protocols` to `http/1.1` alone, so an `h2`-only client fails the handshake. A
+  connection that still negotiates another protocol is closed; a client that offers no ALPN is served.
+- `Request::scheme()` is `Scheme::Https`, unless a trusted proxy's forwarded headers say otherwise.
+
+```rust
+use tokio_rustls::rustls::ServerConfig;
+use tokio_rustls::TlsAcceptor;
+
+// `certs` and `key` are the server's certificate chain and private key.
+let mut config = ServerConfig::builder().with_no_client_auth().with_single_cert(certs, key)?;
+config.alpn_protocols = vec![b"http/1.1".to_vec()];
+
+let app = App::new().route(Route::new(HttpMethod::Get, "/ping", |_| async { "pong" }))?;
+let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+let acceptor = TlsAcceptor::from(Arc::new(config));
+app.serve_tls(listener, acceptor, async { let _ = tokio::signal::ctrl_c().await; }).await?;
 ```
 
 HTTP behavior to remember: unknown path → 404; known path with wrong method → 405 plus `Allow`;
@@ -2917,6 +2954,33 @@ let source = JwksSource::builder(
 let decoder = JwtDecoderBuilder::with_jwks(source, vec![Algorithm::RS256]).build()?;
 ```
 
+#### `ReqwestJwksFetcher::with_tls(client_config)` (feature `jwks`)
+
+A fetcher that verifies the JWKS server with a `rustls::ClientConfig` you built instead of the platform
+certificate verifier. Use it when the issuer's certificate comes from a private CA, or when the issuer
+wants a client certificate. Everything else is as in `ReqwestJwksFetcher::new`: no redirects, no `Referer`,
+a 5 second timeout and a 1 MiB body cap. Trust follows `client_config` alone: a configuration with its own
+root store trusts only those CAs, so a certificate from a public CA is then rejected. The HTTP client is
+built once, so a later change of the configuration's certificates does not reach it. `FetchError::Network`
+when the client cannot be built. An `SslBundle` gives such a configuration with
+`SslBundle::client_config`; in an application, `security.jwt.jwks-ssl-bundle` does this for you.
+
+```rust
+use rustls::{ClientConfig, RootCertStore};
+
+// Trust only the corporate CA that signed the issuer's certificate.
+let mut roots = RootCertStore::empty();
+roots.add(corporate_ca())?;
+let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+let client_config = ClientConfig::builder_with_provider(provider)
+    .with_safe_default_protocol_versions()?
+    .with_root_certificates(roots)
+    .with_no_client_auth();
+
+let fetcher = ReqwestJwksFetcher::with_tls(Arc::new(client_config))?;
+let source = JwksSource::builder(Arc::new(fetcher), "https://issuer.corp.example/jwks.json").build()?;
+```
+
 Audit note: the `jsonwebtoken` backend `rust_crypto` pulls in `rsa` 0.9 (advisory RUSTSEC-2023-0071,
 private-key operations only). This crate only verifies signatures; `cargo audit` still reports it.
 
@@ -2938,6 +3002,27 @@ let config = Config::from_str(r#"
     secret = "an-example-secret-of-32-bytes!!!"
 "#)?;
 let decoder = jwt_decoder_from_config(&config, None)?;
+```
+
+#### `jwks_ssl_bundle(&config)`
+
+The name in `security.jwt.jwks-ssl-bundle`, or `None` when the key is not set. `oxbloom-security` does not
+load SSL bundles: the caller resolves the name, builds the fetcher with `ReqwestJwksFetcher::with_tls` and
+passes it to `jwt_decoder_from_config`. `oxbloom-boot` does this with its feature `ssl`, so call it yourself
+only when you build the decoder by hand. A value that is not a string, or an empty name, is
+`ConfigError::Invalid` on the key, and `jwt_decoder_from_config` refuses the key without `jwk-set-uri`. No
+message contains the value.
+
+```rust
+let config = Config::from_str("[security.jwt]\njwks-ssl-bundle = \"corporate\"")?;
+assert_eq!(jwks_ssl_bundle(&config)?.as_deref(), Some("corporate"));
+assert_eq!(jwks_ssl_bundle(&Config::from_str("")?)?, None); // the platform verifier stays
+
+let empty = Config::from_str("[security.jwt]\njwks-ssl-bundle = \"\"")?;
+assert!(matches!(
+    jwks_ssl_bundle(&empty),
+    Err(ConfigError::Invalid { key, .. }) if key == "security.jwt.jwks-ssl-bundle"
+));
 ```
 
 #### `RequestSecurityExt::authentication()`, `Authentication`, `GrantedAuthority`
@@ -3522,8 +3607,8 @@ assert!(PropertyMetadata::to_json(&list).starts_with("[{\"key\":"));
 
 `pub fn auto_configurations() -> AutoConfigurations`. The list of the built-in auto-configurations
 for the enabled features, in dependency order: `JwtDecoderAutoConfiguration` and
-`SecurityAutoConfiguration` with `security`, `RequestLogAutoConfiguration` and `WebServerAutoConfiguration`
-with `web`. Without
+`SecurityAutoConfiguration` with `security`, `SslAutoConfiguration` with `ssl`, then
+`RequestLogAutoConfiguration` and `WebServerAutoConfiguration` with `web`. Without
 either feature the function does not exist. Remove one entry with `exclude::<A>()`.
 
 ```rust
@@ -3667,6 +3752,40 @@ let keys: Vec<_> = OxbloomApplication::builder()
     .map(|p| p.key)
     .collect();
 assert!(keys.contains(&"logging.request.enabled") && keys.contains(&"logging.request.headers"));
+```
+
+#### `SslAutoConfiguration` (feature `ssl`)
+
+Registers the `oxbloom_ssl::SslBundles` of the `ssl.*` keys when the configuration has any `ssl.bundle.*`
+key (`on_property("ssl.bundle")`, which a `[ssl.bundle.pem.<name>]` or `[ssl.bundle.pkcs12.<name>]` section
+satisfies), with `on_missing_bean::<SslBundles>()` so your own bundles win. An optional `dyn Clock` bean
+replaces the system time in the validity checks; it is set before the container starts the reload task
+through the `Lifecycle` hook of `SslBundles`, and the task stops at shutdown. A bean of your own gets no
+lifecycle hook from boot, so you own its reload task. A bundle that cannot be loaded fails the `Container`
+phase with `DiError::Creation` whose source is the `SslError`; the built-in SSL analyzer names the bundle
+and the key to fix and never prints a private key, a password or a file path. `WebServerAutoConfiguration`
+and `JwtDecoderAutoConfiguration` run after it and use the bean for `server.ssl.bundle` and
+`security.jwt.jwks-ssl-bundle`. Its property metadata is `oxbloom_ssl::PROPERTIES`, so `exclude` drops the
+`ssl.*` keys; `server.ssl.bundle` stays in `boot_properties()`. The keys are listed under
+[`oxbloom-ssl`](#411-oxbloom-ssl).
+
+```rust
+use oxbloom_boot::{Banner, OxbloomApplication, SslAutoConfiguration, StartupPhase};
+use oxbloom_ssl::SslError;
+
+// A broken bundle fails the container with the `SslError` naming the key.
+let err = OxbloomApplication::builder()
+    .with_config(Config::from_str("[ssl.bundle.pem.web]\ntrust = \"no-such-file.pem\"")?)
+    .banner(Banner::off())
+    .output(std::io::sink())
+    .auto_configuration::<SslAutoConfiguration>()
+    .run()
+    .await
+    .unwrap_err();
+assert_eq!(err.phase(), StartupPhase::Container);
+assert!(matches!(err.find_cause::<SslError>(), Some(SslError::Io { .. })));
+assert!(err.analysis().unwrap().to_string().contains("ssl.bundle.pem.web.trust"));
+assert!(SslAutoConfiguration::properties().iter().any(|p| p.key == "ssl.reload-interval"));
 ```
 
 #### `OxbloomApplicationBuilder::listener(listener)`
@@ -4231,6 +4350,7 @@ strategy of the `App`.
 | `server.static.directory` | `static` | Must be an existing directory when enabled. |
 | `server.static.path`, `index` | `/`, `index.html` | Prefix and directory file; `index` must be a plain file name (1 to 255 bytes, not starting with `.`, without `/`, `\`, `%` or NUL) or startup fails. |
 | `server.static.cache-max-age`, `max-file-bytes` | `0s`, `10MiB` | `Cache-Control` max age and file size cap. |
+| `server.ssl.bundle` | unset | The SSL bundle to serve HTTPS with, read by `WebServer::with_ssl` (feature `ssl`). `WebServer::new` refuses a set key with a `ConfigError::Invalid` on it instead of serving plain HTTP. |
 
 The sub-keys (`server.compression.min-size`, `mime-types`, `level`, `max-body-bytes`; `server.cors.*` other than
 `allowed-origins`; `server.static.*` other than `enabled`) are validated but have no effect without their switch key
@@ -4268,6 +4388,39 @@ assert_eq!(builder.run().await?.code(), 0);
 
 let bad = Config::from_str("[server]\naddress = \"localhost\"")?;
 assert!(WebServer::new(App::new(), &bad).is_err());
+```
+
+#### `WebServer::with_ssl(app, &config, bundles)` (feature `ssl`)
+
+`WebServer::new` that serves HTTPS with the identity of the bundle that `server.ssl.bundle` names in
+`bundles: Option<&SslBundles>`. Without the key it is exactly `WebServer::new`, plain HTTP. With it the port
+speaks only HTTPS: there is no HTTP listener and no redirect. The TLS configuration is the bundle's
+`server_config()` (ALPN `http/1.1` only), which resolves the certificate at every handshake, so a reloaded
+bundle reaches the next connection without a restart. `WebServerAutoConfiguration` calls it with the
+`SslBundles` bean; call it yourself when you build the `WebServer` by hand. A `ConfigError::Invalid` on
+`server.ssl.bundle` when `bundles` is `None`, has no bundle of that name, or the bundle has no certificate
+and private key; the message lists the available bundle names and never a path or file content.
+`WebServer::new` refuses a set `server.ssl.bundle` for the same reason: a silent fallback to plain HTTP
+would break "HTTPS only when the key is set" ([ADR 0076](adr/0076-web-server-new-refuses-ssl-bundle.md)).
+The `Web server listening` event does not show the scheme.
+
+```rust
+use oxbloom_ssl::SslBundles;
+use oxbloom_web::App;
+
+// `cert` and `key` hold PEM text; a file path works the same way.
+let config = Config::from_str(&format!(
+    "[server]\nport = 0\n[server.ssl]\nbundle = \"web\"\n\
+     [ssl.bundle.pem.web]\ncertificate = '''\n{cert}'''\nprivate-key = '''\n{key}'''"
+))?;
+let bundles = SslBundles::from_config(&config)?;
+let server = WebServer::with_ssl(App::new(), &config, Some(&bundles))?;
+
+// An unknown name is an error on the key that lists the bundles.
+let typo = Config::from_str("[server.ssl]\nbundle = \"wbe\"")?;
+let err = WebServer::with_ssl(App::new(), &typo, Some(&bundles)).unwrap_err();
+assert!(matches!(err, ConfigError::Invalid { ref key, .. } if key == "server.ssl.bundle"));
+assert!(err.to_string().contains("available bundles: web"));
 ```
 
 #### `BindError`: `address`, `kind` (feature `web`)
@@ -4972,23 +5125,274 @@ examples keep their own start harness because `TestApp` cannot take an `OxbloomA
 ##### Features and dev-dependencies
 
 A crate that gives its `oxbloom-test` dev-dependency the features `web`, `security` or `tls` turns the
-same features of `oxbloom-boot` (`ssl` for `tls`) on for the crate's own test builds, because Cargo unifies the features of one
-build. So `cargo test -p <crate> --no-default-features` is no longer feature-off for the code it tests.
-`cargo test --no-default-features --lib` does not avoid the unification. For `oxbloom-boot`, feature-off
-coverage is (a) the compile-only builds `cargo build -p oxbloom-boot --no-default-features`,
-`--no-default-features --features logging`, `--no-default-features --features web` and
-`--no-default-features --features security`, which do not see dev-dependencies, and (b)
-`cargo test -p oxbloom-test --features web`, which builds boot with `web` and without `security` and runs
-`TestApp::web()`, `TestApp::full()` and the stop and drop tests against it. No `cargo test -p oxbloom-boot`
-run builds `web` without `security`. Oxbloom's own boot tests are an example: with `oxbloom-test` features `web` and
-`security`, the counts of `cargo test -p oxbloom-boot` moved from 298 to 420 (`--no-default-features`),
-370 to 420 (`--features web`), 317 to 440 (`--features logging`) and 329 to 420 (`--features security`),
-with 440 for `--all-features` unchanged. Boot's dev-dependency also has `tls` since C7, which turns boot's
-`ssl` on in every boot test build: the counts moved from 420 to 443 (`--no-default-features`, `--features
-web`, `--features security`) and from 440 to 463 (`--features logging`), with 443 for `--features ssl` and
-463 for `--all-features` unchanged. No `cargo test -p oxbloom-boot` run builds boot without `ssl` either;
-`cargo build -p oxbloom-boot --no-default-features --features ssl` and `cargo test -p oxbloom-test
---features web` (boot without `ssl`) cover the two sides.
+same features of `oxbloom-boot` on for the crate's own test builds (`tls` turns on boot's `ssl`), because
+Cargo unifies the features of one build. So `cargo test -p <crate> --no-default-features` is no longer
+feature-off for the code it tests, and `cargo test --no-default-features --lib` does not avoid the
+unification either.
+
+Boot's own dev-dependency has `web`, `security` and `tls`, so every `cargo test -p oxbloom-boot` run builds
+boot with `web`, `security` and `ssl`. No boot test run builds boot without `security` or without `ssl`.
+Feature-off coverage of boot comes from two places:
+
+- The compile-only builds `cargo build -p oxbloom-boot --no-default-features`, `--no-default-features
+  --features logging`, `--no-default-features --features web`, `--no-default-features --features security`
+  and `--no-default-features --features ssl`. They do not see dev-dependencies, so they compile each
+  feature set, but they run no test.
+- `cargo test -p oxbloom-test --features web`. It builds boot with `web` and without `security` and `ssl`,
+  and runs `TestApp::web()`, `TestApp::full()` and the stop and drop tests against it. It is the only test
+  run that executes boot without `ssl`.
+
+The counts of `cargo test -p oxbloom-boot` show the effect. With `oxbloom-test` features `web` and
+`security` (C10b) they moved from 298 to 420 (`--no-default-features`), 370 to 420 (`--features web`), 317
+to 440 (`--features logging`) and 329 to 420 (`--features security`), with 440 for `--all-features`
+unchanged. With `tls` (C7) they moved from 420 to 443 and from 440 to 463, and the new tests of C7 brought
+them to 447 for `--no-default-features`, `--features web`, `--features security` and `--features ssl`, and
+467 for `--features logging` and `--all-features`
+([ADR 0075](adr/0075-boot-tests-enable-oxbloom-test-tls.md)).
+
+### 4.11 `oxbloom-ssl`
+
+Named SSL bundles loaded from the `ssl.*` keys. A bundle has an identity (a certificate chain and its
+private key), a trust store (CA certificates), or both, from PEM values or files under
+`ssl.bundle.pem.<name>` or from a PKCS#12 file under `ssl.bundle.pkcs12.<name>`. A bundle turns into rustls
+server and client configurations that use the `aws-lc-rs` provider. A polling task swaps a bundle in when
+its files change, and certificates that are expired, not valid yet or expiring soon log warnings. In an
+application, `SslAutoConfiguration` (feature `ssl` of `oxbloom-boot`) does all of this; use the crate
+directly when you build TLS configurations yourself. The guide chapter is
+[SSL bundles](guide/16-ssl-bundles.md#ssl-bundles). Rules to remember:
+
+- A value that starts with `-----BEGIN` (after leading whitespace) is inline PEM; any other value is a file
+  path, relative to the process's current directory.
+- Errors, `Debug` output and log events name the bundle and the key to fix, never a private key, a
+  password, a file path or file contents.
+- Bundle names are unique across `pem` and `pkcs12` and match like configuration keys (case-insensitive,
+  ignoring `-` and `_`). An unknown key under a bundle is a configuration error that lists the valid keys.
+- Validity problems only warn; they never stop the startup.
+- The feature `di` implements `oxbloom_di::Lifecycle` for `SslBundles`.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `ssl.reload-interval` | `30s` | How often the files of every bundle are checked for changes; `0s` turns polling off (and with it the 24 hour repeat of validity warnings). |
+| `ssl.expiry-warning` | `14d` | A certificate that expires within this time produces a warning. |
+| `ssl.bundle.pem.<name>.certificate` | unset | The certificate chain of the identity, leaf first: a file path or inline PEM. Requires `private-key`. |
+| `ssl.bundle.pem.<name>.private-key` | unset | `Secret`. The unencrypted private key (PKCS#8, PKCS#1 or SEC1): a file path or inline PEM. Requires `certificate`. |
+| `ssl.bundle.pem.<name>.trust` | unset | The CA certificates the bundle trusts: a file path or inline PEM. |
+| `ssl.bundle.pkcs12.<name>.path` | unset | The PKCS#12 file. Its key and certificate chain are the identity; every other certificate is the trust store. |
+| `ssl.bundle.pkcs12.<name>.password` | empty | `Secret`. The password of the PKCS#12 file. |
+| `server.ssl.bundle` | unset | Boot (feature `ssl`): the bundle the web server serves HTTPS with. |
+| `security.jwt.jwks-ssl-bundle` | unset | Boot (features `ssl` and `security`): the bundle whose client configuration the JWKS client uses. |
+
+Imports for the examples below:
+
+```rust
+use std::sync::Arc;
+use oxbloom_config::{Config, ConfigError};
+use oxbloom_ssl::{CertValidity, SslBundles, SslError};
+// `cert` and `key` hold PEM text of a certificate and its key, `ca` the PEM of a CA certificate.
+```
+
+#### `SslBundles::from_config(&config)`
+
+Reads `ssl.*` and loads every bundle, reading the files they name. Without any `ssl` key the set is empty.
+The certificates are checked against the system time once, and each problem logs a warning. Errors:
+`SslError::Config` for an invalid value, an unknown key, or `ConfigError::Missing` when `certificate` is set
+without `private-key` (or the reverse); `DuplicateName`; `Io`, `Pem`, `Pkcs12`, `KeyMismatch` and
+`EmptyBundle` when a bundle's material cannot be loaded.
+
+```rust
+let config = Config::from_str(&format!("[ssl.bundle.pem.client]\ntrust = '''\n{ca}'''"))?;
+let bundles = SslBundles::from_config(&config)?;
+assert_eq!(bundles.names(), ["client"]);
+
+let half = Config::from_str("[ssl.bundle.pem.web]\ncertificate = \"web.crt\"")?;
+assert!(matches!(
+    SslBundles::from_config(&half),
+    Err(SslError::Config(ConfigError::Missing { key })) if key == "ssl.bundle.pem.web.private-key"
+));
+```
+
+A PKCS#12 bundle (`ssl.bundle.pkcs12.<name>`) is read the same way. A wrong password or a damaged file is
+`SslError::Pkcs12`; legacy files with 3DES or RC2 key bags are read as well.
+
+```rust
+let config = Config::from_str(
+    "[ssl.bundle.pkcs12.legacy]\npath = \"config/legacy.p12\"\npassword = \"${LEGACY_P12_PASSWORD}\"",
+)?;
+let legacy = SslBundles::from_config(&config)?.get("legacy")?;
+assert!(legacy.has_identity());
+```
+
+#### `SslBundles::with_clock(clock)`
+
+Uses `clock` (`oxbloom_core::Clock`) instead of the system time for the validity checks and checks every
+certificate against it at once. Call it before `start_reload`; the task checks with this clock on every
+tick. A warning for the same certificate and condition repeats only when the clock is 24 hours away from the
+last one, and a changed condition (expiring, then expired) warns at once. Boot passes the `dyn Clock` bean.
+
+```rust
+let in_a_week = SystemTime::now() + Duration::from_secs(7 * 24 * 60 * 60);
+let bundles = SslBundles::from_config(&config)?.with_clock(Arc::new(FixedClock(in_a_week)));
+let task = bundles.start_reload(); // checks with `FixedClock` on every tick
+task.stop();
+```
+
+#### `SslBundles::get(name)` and `SslBundles::names()`
+
+`get` returns the bundle named `name`, matched like configuration keys, or `SslError::UnknownBundle` with the
+sorted names. `names` lists every bundle name as written, sorted.
+
+```rust
+let bundles = SslBundles::from_config(&config)?;
+assert_eq!(bundles.get("client")?.name(), "client");
+
+let err = bundles.get("web").unwrap_err();
+assert_eq!(err.to_string(), "unknown SSL bundle `web`; available bundles: client");
+```
+
+#### `SslBundles::reload_interval()` and `SslBundles::expiry_warning()`
+
+The parsed `ssl.reload-interval` (default 30 seconds, zero means off) and `ssl.expiry-warning` (default
+14 days).
+
+```rust
+let bundles = SslBundles::from_config(&Config::from_str("[ssl]\nreload-interval = \"5s\"")?)?;
+assert_eq!(bundles.reload_interval(), Duration::from_secs(5));
+assert_eq!(bundles.expiry_warning(), Duration::from_secs(14 * 24 * 60 * 60));
+```
+
+#### `SslBundles::reload()`
+
+Rebuilds every bundle now from all its sources, inline PEM included, and returns the result per bundle in
+name order. A bundle that loads is swapped in for the next handshake and checked against the clock; a bundle
+that fails keeps its old material. Nothing calls it automatically. It does blocking file I/O, so in async
+code run it on `tokio::task::spawn_blocking`. A file that keeps changing during three reads gives
+`SslError::Io` with kind `Interrupted`.
+
+```rust
+// `ca_path` names a PEM file with the CA certificate.
+let config = Config::from_str(&format!("[ssl.bundle.pem.client]\ntrust = \"{ca_path}\""))?;
+let bundles = SslBundles::from_config(&config)?;
+assert!(bundles.reload()[0].1.is_ok());
+
+// After the file was broken: the error is reported and the bundle keeps its trust store.
+assert!(matches!(bundles.reload()[0].1, Err(SslError::Pem { .. })));
+assert!(bundles.get("client")?.has_trust());
+```
+
+#### `SslBundles::start_reload()` and `ReloadTask`
+
+Starts the task that checks the size and modification time of every bundle file every `reload_interval`,
+following symlinks, so a Kubernetes secret mount that swaps a symlink is seen. Inline PEM and the PKCS#12
+password are not watched. A changed bundle is rebuilt whole and swapped in for the next handshake; a file
+that changes during the read is tried again on the next tick. A failed reload keeps the old material and
+logs one `warn` on target `oxbloom::ssl` with the bundle name and an error kind (`pem`, `key-mismatch`,
+`io (...)`, ...), and logs again only after the files change again. Each tick also runs the validity check.
+With an interval of zero the task does nothing. Inside a Tokio runtime the task runs on it, outside one on
+its own thread. `ReloadTask::stop` ends it (it may wait for a pass that is reading files), dropping it does
+the same, and `is_running` says whether it polls. With the feature `di`, register the bundles with
+`ContainerBuilder::lifecycle::<SslBundles>()` and the container starts and stops the task.
+
+```rust
+let config = Config::from_str(&format!(
+    "[ssl]\nreload-interval = \"5s\"\n[ssl.bundle.pem.client]\ntrust = '''\n{ca}'''"
+))?;
+let bundles = SslBundles::from_config(&config)?;
+let task = bundles.start_reload();
+assert!(task.is_running());
+task.stop();
+
+let container = oxbloom_di::ContainerBuilder::new()
+    .instance(SslBundles::from_config(&config)?)
+    .lifecycle::<SslBundles>()
+    .build()?;
+container.shutdown(); // stops the reload task
+```
+
+Replace a certificate file and its key file together (a directory or symlink swap): replaced one after the
+other, the task can see the first write alone and log one `key-mismatch` warning.
+
+#### `SslBundle`: `name`, `has_identity`, `has_trust`, `validity`
+
+One named bundle. Cloning is cheap and clones share the material. `validity()` lists a `CertValidity`
+(`subject`, `not_before`, `not_after`) for every distinct certificate: the identity chain, leaf first, then
+the trust certificates. The subject is the common name, else the first DNS name, else `(no subject)`. A later
+health or info endpoint can read it. `Debug` shows only the name and which parts exist.
+
+```rust
+let web = SslBundles::from_config(&Config::from_str(&format!(
+    "[ssl.bundle.pem.web]\ncertificate = '''\n{cert}'''\nprivate-key = '''\n{key}'''"
+))?)?
+.get("web")?;
+assert!(web.has_identity() && !web.has_trust());
+for cert in web.validity() {
+    println!("{} is valid until {:?}", cert.subject, cert.not_after);
+}
+assert_eq!(format!("{web:?}"), "SslBundle { name: \"web\", identity: true, trust: false }");
+```
+
+#### `SslBundle::server_config()`
+
+A `rustls::ServerConfig` that presents the bundle's identity, without client authentication, with ALPN
+`http/1.1` only. The certificate is resolved at every handshake from the current material, so the
+configuration stays valid for the life of the bundle and serves a reloaded certificate. Use it with
+`App::serve_tls` through `tokio_rustls::TlsAcceptor::from`. `SslError::NoIdentity` for a trust-only bundle.
+
+```rust
+let server = bundles.get("web")?.server_config()?;
+assert_eq!(server.alpn_protocols, [b"http/1.1".to_vec()]);
+let acceptor = tokio_rustls::TlsAcceptor::from(server);
+
+let err = bundles.get("client")?.server_config().unwrap_err();
+assert!(matches!(err, SslError::NoIdentity { .. }));
+```
+
+#### `SslBundle::client_config()`
+
+A `rustls::ClientConfig` that verifies servers against the bundle's trust store, or with the platform
+verifier when the bundle has none, and presents the identity as a client certificate when the bundle has
+one. The client certificate is resolved at every handshake; the trust store is fixed when the method is
+called, so after a reload only configurations built afterwards see a new trust store. Every certificate of a
+PKCS#12 file other than the leaf becomes a trust anchor. `SslError::Io` naming the `trust` key (`path` for
+PKCS#12) when the bundle has no trust store and the platform verifier cannot be set up. Use it with
+`ReqwestJwksFetcher::with_tls`.
+
+```rust
+let client = bundles.get("client")?.client_config()?;
+assert!(!client.client_auth_cert_resolver.has_certs()); // trust only, no client certificate
+```
+
+#### `SslError`
+
+The error of loading a bundle or building a configuration from it: `#[non_exhaustive]`, `Send + Sync +
+'static`, with fixed texts. Variants: `Io { bundle, key, kind }` (names the key, not the path), `Pem {
+bundle, key }` (empty, malformed or encrypted PEM, or an unsupported key type), `NoIdentity { bundle }`,
+`KeyMismatch { bundle }`, `Pkcs12 { bundle }`, `EmptyBundle { bundle }`, `DuplicateName { name }`,
+`UnknownBundle { name, available }` and `Config(ConfigError)` (shown unchanged; also `From<ConfigError>`).
+
+```rust
+let err = SslError::KeyMismatch { bundle: "web".into() };
+assert_eq!(err.to_string(), "the private key of SSL bundle `web` does not match its certificate");
+
+fn bundle_name(err: &SslError) -> Option<&str> {
+    match err {
+        SslError::NoIdentity { bundle } | SslError::KeyMismatch { bundle } => Some(bundle),
+        _ => None, // the enum is non-exhaustive
+    }
+}
+```
+
+#### `PROPERTIES`
+
+The `ssl.*` keys as `(key, type, default, description)` tuples, the same shape as
+`oxbloom_logging::PROPERTIES`. `SslAutoConfiguration::properties()` turns them into `PropertyMetadata`.
+
+```rust
+use oxbloom_ssl::PROPERTIES;
+
+let (key, _, default, _) = PROPERTIES[0];
+assert_eq!((key, default), ("ssl.reload-interval", Some("30s")));
+assert!(PROPERTIES.iter().any(|p| p.0 == "ssl.bundle.pem.<name>.private-key"));
+```
 
 ## 5. Recipe: a complete small service
 
@@ -5082,12 +5486,16 @@ Compile-fail tests use `trybuild` (`tests/ui/*.rs` with `.stderr` snapshots). Re
 
 ## Not implemented
 
-Sessions, password login, CSRF, method security, OAuth2 login, database, jobs/queue/scheduler, file and JSON log output with rotation, a request logging filter, an HTTP endpoint for log levels, observability, a test client and sliced tests (`TestApp`, `TestClient`), React
-integration, `oxbloom-ai`, `oxbloom add`, MVC web style. In boot: analysis of failures after startup,
-a report format other than text. In DI: transient and request scopes,
+Sessions, password login, CSRF, method security, OAuth2 login, database, jobs/queue/scheduler, an HTTP endpoint for log
+levels, observability, health and info endpoints, React integration, `oxbloom-ai`, `oxbloom add`, MVC web style. In
+boot: analysis of failures after startup, a report format other than text. In DI: transient and request scopes,
 injection of single configuration properties, qualifiers by name, async lifecycle hooks and
 automatic shutdown on drop. For conditions and auto-configuration: condition options on
 `#[component(..)]`, discovery of auto-configurations at link time (only explicit lists exist),
 exclusion through configuration keys, a runtime `on_feature` condition (use `#[cfg(feature = "..")]`),
-and naming condition-skipped registrations in the missing-bean failure report. Do not document these as available.
+and naming condition-skipped registrations in the missing-bean failure report. For TLS and SSL bundles: mutual
+TLS and `client-auth`, an HTTP to HTTPS redirect, ALPN `h2` (HTTP/2), hot reload of the JWKS client (it is built
+once at startup), OCSP stapling, revocation checks, JKS keystores, encrypted PEM private keys, a file-system
+watcher (reload polls), SSL bundles for database or HTTP clients, and a limit on concurrent TLS handshakes.
+Do not document these as available.
 When you build one, start with a spec in `docs/superpowers/specs`.

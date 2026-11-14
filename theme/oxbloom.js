@@ -55,7 +55,7 @@
     ["06-conditions", "branch"], ["07-logging", "file"], ["08-security", "shield"],
     ["09-errors", "alert"], ["10-json", "braces"], ["11-cors", "globe"],
     ["12-compression", "archive"], ["13-static", "folder"], ["14-example", "code"],
-    ["15-http", "network"], ["16-roadmap", "map"], ["API", "book"], ["ROADMAP-core", "map"],
+    ["15-http", "network"], ["16-ssl", "shield"], ["17-roadmap", "map"], ["API", "book"], ["ROADMAP-core", "map"],
     ["ROADMAP-modules", "map"],
   ];
   function iconFor(href) {

@@ -633,8 +633,8 @@ impl App {
     /// ```
     /// use std::sync::Arc;
     /// use oxbloom_web::{App, HttpMethod, Route};
-    /// use rustls::ServerConfig;
-    /// use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
+    /// use tokio_rustls::rustls::ServerConfig;
+    /// use tokio_rustls::rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
     /// use tokio::net::{TcpListener, TcpStream};
     /// use tokio_rustls::TlsAcceptor;
     ///
