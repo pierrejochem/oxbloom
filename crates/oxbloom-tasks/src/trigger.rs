@@ -109,8 +109,25 @@ impl fmt::Display for Zone {
 /// A six-field cron expression: second, minute, hour, day of month, month, day of week.
 ///
 /// Five-field (Unix) and seven-field (with a year) expressions are rejected, as are macros
-/// such as `@daily`. Days of the week are `1`-`7` with Sunday as `1`, or the names
-/// `SUN`-`SAT`; months are `1`-`12` or `JAN`-`DEC`.
+/// such as `@daily`. Months are `1`-`12` or `JAN`-`DEC`.
+///
+/// Days of the week follow Spring: `1` is Monday through `6` Saturday, and both `0` and `7`
+/// are Sunday; the names `SUN`-`SAT` (any case) work too. Numeric days are translated to the
+/// evaluating library's own numbering (which starts at Sunday = `1`), so `1-5` means Monday to
+/// Friday, `5-7` Friday to Sunday, and a step such as `*/2` counts from Monday (Monday,
+/// Wednesday, Friday, Sunday). A day number of `8` or more is an error. [`CronExpr::as_str`]
+/// returns the expression as written, not the translation.
+///
+/// ```
+/// use std::time::{Duration, UNIX_EPOCH};
+/// use oxbloom_tasks::{Trigger, Zone};
+///
+/// let weekdays = Trigger::cron("0 0 9 * * 1-5", Zone::Utc)?;
+/// let saturday_noon = UNIX_EPOCH + Duration::from_secs(1_794_657_600); // 2026-11-14 12:00Z
+/// let monday_nine = UNIX_EPOCH + Duration::from_secs(1_794_819_600); // 2026-11-16 09:00Z
+/// assert_eq!(weekdays.next(None, None, saturday_noon), Some(monday_nine));
+/// # Ok::<(), oxbloom_tasks::TriggerError>(())
+/// ```
 ///
 /// # Examples
 ///
@@ -154,7 +171,12 @@ impl CronExpr {
             ));
         }
         let source = fields.join(" ");
-        let schedule = cron::Schedule::from_str(&source)
+        let translated = format!(
+            "{} {}",
+            fields[..5].join(" "),
+            translate_day_of_week(fields[5])?
+        );
+        let schedule = cron::Schedule::from_str(&translated)
             .map_err(|_| TriggerError::new("invalid cron expression"))?;
         Ok(CronExpr {
             source,
@@ -438,6 +460,78 @@ pub fn parse_duration(text: &str) -> Result<Duration, TriggerError> {
         .ok_or(TOO_LARGE)
 }
 
+/// The day names in the evaluating library's order, Sunday first; index = Spring day % 7.
+const DAY_NAMES: [&str; 7] = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+
+/// Translates a Spring day-of-week field (`0`/`7` = Sunday, `1` = Monday) into one the `cron`
+/// crate reads the same way. Wildcards and elements with day names pass through unchanged;
+/// numeric elements (single, range, step) become explicit day-name lists, which also keeps a
+/// range such as `5-7` that crosses Sunday intact.
+fn translate_day_of_week(field: &str) -> Result<String, TriggerError> {
+    if field == "*" || field == "?" || !field.bytes().any(|b| b.is_ascii_digit()) {
+        return Ok(field.to_owned());
+    }
+    let mut out = Vec::new();
+    for element in field.split(',') {
+        if element.bytes().any(|b| b.is_ascii_alphabetic()) {
+            out.push(element.to_owned());
+            continue;
+        }
+        let days = spring_days(element)?;
+        out.extend(
+            days.into_iter()
+                .map(|day| DAY_NAMES[day as usize % 7].to_owned()),
+        );
+    }
+    Ok(out.join(","))
+}
+
+/// The Spring day numbers (0-7) one numeric day-of-week element selects.
+fn spring_days(element: &str) -> Result<Vec<u32>, TriggerError> {
+    const INVALID: TriggerError =
+        TriggerError::new("invalid day of week, expected 0-7 (0 and 7 are Sunday) or SUN-SAT");
+    let number = |text: &str| -> Result<u32, TriggerError> {
+        if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(INVALID);
+        }
+        match text.parse::<u32>() {
+            Ok(day) if day <= 7 => Ok(day),
+            _ => Err(INVALID),
+        }
+    };
+    let (base, step) = match element.split_once('/') {
+        Some((base, step)) => {
+            let step: u32 = step.parse().map_err(|_| INVALID)?;
+            if step == 0
+                || !element[base.len() + 1..]
+                    .bytes()
+                    .all(|b| b.is_ascii_digit())
+            {
+                return Err(INVALID);
+            }
+            (base, Some(step))
+        }
+        None => (element, None),
+    };
+    // Spring's full range for a wildcard or an open start runs from Monday (1) to Sunday (7).
+    let (start, end) = match base {
+        "*" | "?" => (1, 7),
+        _ => match base.split_once('-') {
+            Some((from, to)) => (number(from)?, number(to)?),
+            None if step.is_some() => (number(base)?, 7),
+            None => {
+                let day = number(base)?;
+                (day, day)
+            }
+        },
+    };
+    if start > end {
+        return Err(INVALID);
+    }
+    let step = step.unwrap_or(1) as usize;
+    Ok((start..=end).step_by(step).collect())
+}
+
 /// A [`SystemTime`] as a UTC date-time, or `None` outside chrono's range.
 fn to_utc(time: SystemTime) -> Option<DateTime<Utc>> {
     match time.duration_since(UNIX_EPOCH) {
@@ -676,6 +770,104 @@ mod tests {
         assert_eq!(from_utc(dt), Some(before_epoch));
         let after_epoch = UNIX_EPOCH + Duration::new(1_800_000_000, 123);
         assert_eq!(from_utc(to_utc(after_epoch).unwrap()), Some(after_epoch));
+    }
+
+    /// The next fire time of a UTC cron expression after `now`.
+    fn next_utc(expression: &str, now: SystemTime) -> Option<SystemTime> {
+        Trigger::cron(expression, Zone::Utc)
+            .unwrap()
+            .next(None, None, now)
+    }
+
+    /// Every fire time in the week starting on Sunday 2026-11-15 00:00 UTC, as weekday
+    /// numbers from Sunday (0) to Saturday (6), for a cron expression firing daily at 09:00.
+    fn weekdays_fired(day_of_week: &str) -> Vec<u32> {
+        let expression = format!("0 0 9 * * {day_of_week}");
+        let start = utc(2026, 11, 15, 0, 0, 0); // a Sunday
+        let end = start + Duration::from_secs(7 * 86_400);
+        let mut days = Vec::new();
+        let mut now = start;
+        while let Some(next) = next_utc(&expression, now) {
+            if next >= end {
+                break;
+            }
+            let dt = to_utc(next).unwrap();
+            days.push(dt.weekday().num_days_from_sunday());
+            now = next;
+        }
+        days
+    }
+
+    #[test]
+    fn spring_numeric_day_of_week_one_to_five_fires_on_monday_not_sunday() {
+        let saturday = utc(2026, 11, 14, 12, 0, 0);
+        let monday_nine = utc(2026, 11, 16, 9, 0, 0);
+        assert_eq!(next_utc("0 0 9 * * 1-5", saturday), Some(monday_nine));
+        let friday_nine = utc(2026, 11, 20, 9, 0, 0);
+        assert_eq!(
+            next_utc("0 0 9 * * 1-5", friday_nine),
+            Some(utc(2026, 11, 23, 9, 0, 0))
+        );
+        assert_eq!(weekdays_fired("1-5"), vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn zero_and_seven_are_sunday() {
+        assert_eq!(weekdays_fired("0"), vec![0]);
+        assert_eq!(weekdays_fired("7"), vec![0]);
+        assert_eq!(weekdays_fired("1"), vec![1]);
+        assert_eq!(weekdays_fired("6"), vec![6]);
+        assert_eq!(weekdays_fired("0-2"), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn list_range_and_step_forms_translate() {
+        assert_eq!(weekdays_fired("1,3,5"), vec![1, 3, 5]);
+        assert_eq!(weekdays_fired("5-7"), vec![0, 5, 6]);
+        assert_eq!(weekdays_fired("6-7"), vec![0, 6]);
+        // Spring steps over MON (1) to SUN (7).
+        assert_eq!(weekdays_fired("*/2"), vec![0, 1, 3, 5]);
+        assert_eq!(weekdays_fired("1-5/2"), vec![1, 3, 5]);
+        assert_eq!(weekdays_fired("1/2"), vec![0, 1, 3, 5]);
+        assert_eq!(weekdays_fired("2/3"), vec![2, 5]);
+        assert_eq!(weekdays_fired("0,6"), vec![0, 6]);
+        assert_eq!(weekdays_fired("MON,3,5-7"), vec![0, 1, 3, 5, 6]);
+        assert_eq!(weekdays_fired("*"), vec![0, 1, 2, 3, 4, 5, 6]);
+        assert_eq!(weekdays_fired("?"), vec![0, 1, 2, 3, 4, 5, 6]);
+        // The stored source stays the user's own expression.
+        let expr = CronExpr::parse("0 0 9 * *  1-5").unwrap();
+        assert_eq!(expr.as_str(), "0 0 9 * * 1-5");
+    }
+
+    #[test]
+    fn names_are_untouched() {
+        assert_eq!(weekdays_fired("MON-FRI"), vec![1, 2, 3, 4, 5]);
+        assert_eq!(weekdays_fired("mon-fri"), vec![1, 2, 3, 4, 5]);
+        assert_eq!(weekdays_fired("SUN"), vec![0]);
+        assert_eq!(weekdays_fired("SAT,SUN"), vec![0, 6]);
+    }
+
+    #[test]
+    fn out_of_range_day_number_is_an_error_without_the_value() {
+        for bad in [
+            "8",
+            "1-8",
+            "9,1",
+            "*/0",
+            "5-1",
+            "1-",
+            "-1",
+            "1/",
+            "1//2",
+            "12345678901",
+        ] {
+            let err = CronExpr::parse(&format!("0 0 9 * * {bad}")).unwrap_err();
+            let text = err.to_string();
+            assert!(!text.contains(bad), "{bad:?}: {text}");
+        }
+        let err = CronExpr::parse("0 0 9 * * 98765").unwrap_err();
+        assert!(!err.to_string().contains("98765"));
+        assert!(!format!("{err:?}").contains("98765"));
     }
 
     #[test]
