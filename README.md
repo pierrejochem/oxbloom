@@ -20,7 +20,7 @@ auto-configuration, a web server with filters and errors, security, logging and 
 
 The full developer documentation is at **<https://pierrejochem.github.io/oxbloom/>**:
 
-- [Guide](https://pierrejochem.github.io/oxbloom/guide/01-status.html): status, CLI, dependency injection, configuration, application lifecycle, conditions and auto-configuration, logging, security, web errors and filters, JSON, CORS, compression, static resources, the examples, SSL bundles and HTTPS, the actuator (health, info and log level endpoints), task scheduling (cron, fixed rate and fixed delay), and the roadmap.
+- [Guide](https://pierrejochem.github.io/oxbloom/guide/01-status.html): status, CLI, dependency injection, configuration, application lifecycle, conditions and auto-configuration, logging, security, web errors and filters, JSON, CORS, compression, static resources, the examples, SSL bundles and HTTPS, the actuator (health, info and log level endpoints), task scheduling (cron, fixed rate and fixed delay), password login with HTTP Basic, and the roadmap.
 - [API reference](https://pierrejochem.github.io/oxbloom/API.html): one runnable example per public function.
 - [Rustdoc](https://pierrejochem.github.io/oxbloom/api/oxbloom_boot/index.html): generated documentation of every crate.
 - [Architecture decisions](https://pierrejochem.github.io/oxbloom/adr/): the architecture decision records, one per design decision, in `docs/adr/`.

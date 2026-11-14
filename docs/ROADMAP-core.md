@@ -553,6 +553,51 @@ Rulings made during C9b:
 - The retry API is documented as a subsection of `docs/API.md` section 4.13, not as a new section 4.14, and `RetryAutoConfiguration` sits beside `TasksAutoConfiguration` in the boot section.
 - Work happens on the branch `c9b-retry`, which started from `c9a-tasks` because C9a was not merged to `main` yet.
 
+### Security Slice 6a: Password encoding, user details and HTTP Basic (`oxbloom-security`) — done
+Done on 2026-11-14; the design is the Slice 6a spec `2026-11-14-password-basic-design.md` and the plan is `2026-11-14-password-basic.md` (both local files under `docs/superpowers`, named here without a link), usage is in the guide chapter `docs/guide/19-password-login.md` and `docs/API.md` (section 4.7, the password login subsection, and `PasswordEncoderAutoConfiguration`), and decisions are in ADR 0086. Slice 6b (form login, sessions, logout) is open.
+
+Delivered:
+- In `oxbloom-security`: `PasswordEncoder`, `Argon2PasswordEncoder` (Argon2id, OWASP minimum by default, PHC strings) and `DelegatingPasswordEncoder` (`{id}hash`, only `argon2` today); `UserDetails`, `UserDetailsService`, `InMemoryUserDetailsService`; `DaoAuthenticationProvider` with a dummy-hash verification for unknown users and hashing in `spawn_blocking`; `HttpSecurity::http_basic` and `password_provider`; the settings readers `PasswordSettings`, `Argon2Settings`, `HttpBasicSettings` and `users_from_config`.
+- `AuthenticationRequest::UsernamePassword`, `AuthenticationError::{AccountDisabled, AccountLocked}` and `SecurityBuildError::{HttpBasicWithoutProvider, InvalidRealm}`.
+- In `oxbloom-boot` (feature `security`): `PasswordEncoderAutoConfiguration` (encoder, in-memory user store from `security.users`, DAO provider; ten property metadata entries including the two `security.http-basic.*` keys), HTTP Basic in `SecurityAutoConfiguration` when `security.http-basic.enabled = true`, and analyzer texts for the two new build errors.
+- `examples/todos`: `GET /api/admin/stats` behind HTTP Basic with two demo users, tests and README notes.
+- ADR 0086, the guide chapter 19 (the roadmap chapter is now 20) and the API section.
+
+Gate numbers at the end of Slice 6a: to be filled by the controller after the final gate.
+
+Limits that users must know (also in the guide):
+- The enums `AuthenticationRequest`, `AuthenticationError` and `SecurityBuildError` are not `#[non_exhaustive]`, so the added variants are a semver-breaking change.
+- `security.http-basic.enabled` defaults to `false`; adding users does not open Basic.
+- Keys under `security.users.<name>` are matched ignoring case, `-` and `_`: two names that differ only in these fail to load from one file (`DuplicateKey`) and merge across sources. The written spelling is kept and compared exactly at login.
+- With Basic on, the chain adds every `dyn AuthenticationProvider` bean as a password provider.
+- No rate limiting and no lockout counters; no database store; no re-encoding of a stale hash on login.
+- Each concurrent login uses the configured Argon2 memory (19 MiB by default). Many parallel logins use that much each; the ADR names this as the reason a login limit comes later.
+- A malformed `Authorization` header bypasses a custom `entry_point` and gets the built-in Basic challenge.
+- The timing of an unknown user is equalised with a dummy hash, but a user with a malformed stored hash answers faster (a narrow difference).
+
+Follow-ups from Slice 6a, not yet scheduled:
+- Form login, sessions and logout (Slice 6b).
+- Login rate limiting, a limit on concurrent logins and lockout counters.
+- A database-backed `UserDetailsService`.
+- Re-encoding a stale hash after a successful login.
+- bcrypt and other algorithms in the `DelegatingPasswordEncoder`, and account-expiry flags and password policy.
+- `#[non_exhaustive]` on the security enums.
+
+Deferred minors from the Slice 6a reviews:
+- Hostile stored hash parameters are not capped in `matches`.
+- `upgrade_encoding` ignores the algorithm variant and the version.
+- `Argon2PasswordEncoder::new` does not cap `memory_kib` upward beyond what the crate accepts.
+- `DelegatingPasswordEncoder::new` accepts ids with braces.
+- The config check accepts any PHC algorithm after `{argon2}`.
+- The raw password is not zeroized.
+- There is no failure-analyzer text for the new keys.
+
+Rulings made during Slice 6a:
+- Argon2 comes from the RustCrypto `argon2` crate, which is pure Rust, so the dependency tree stays free of `ring`.
+- Basic is opt-in through `security.http-basic.enabled`, because configured users must not open a route to passwords on their own.
+- Every failed login gets the same 401 and the same challenge, also for a disabled or locked account; the reason is only in the `debug` log.
+- Work happens on the branch `s6a-password-basic`, started from `main` after the local merge of C9a and C9b.
+
 ### C10: Test support (`oxbloom-test`)
 
 #### C10a: Context runner and clock — done
@@ -606,7 +651,7 @@ Deferred minors from the C10b reviews:
 
 1. **C2 Configuration v2.** Smallest dependencies, fixes open defects, and every other slice reads config.
 2. **C1 DI v2** (done). Required by C3, C4, C8 and C10.
-3. **Security Slice 6** (`PasswordEncoder`, `UserDetailsService`, Basic, form login and sessions). It needs beans with lifecycle and typed config, so it comes after C1 and C2.
+3. **Security Slice 6** (`PasswordEncoder`, `UserDetailsService`, Basic, form login and sessions): 6a (password encoding, user details, HTTP Basic) is done, 6b (form login and sessions) is open. It needs beans with lifecycle and typed config, so it comes after C1 and C2.
 4. **C3 Application lifecycle** with `FailureAnalyzer` (done: C3a and C3b).
 5. **C5 Logging** (C5a and C5b done), then **C6 Web server properties, errors and JSON** (C6a, C6b-1 and C6b-2 done).
 6. **C4 Conditions and auto-configuration** (C4a, the mechanism, and C4b, auto-configuring the existing wiring with property metadata, done).

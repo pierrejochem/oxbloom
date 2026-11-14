@@ -13,8 +13,8 @@ Only what is implemented and tested is documented as available. Anything else is
 | `oxbloom-web` | Router, request/response, Hyper server, filters | `App`, `Router`, `RouterConfig`, `Route`, `Request`, `Response`, `IntoResponse`, `Controller`, `RouteError`, `Filter`, `Next`, `Ordered`, `order` (with `order::CORS`, `order::NEGOTIATION` and `order::COMPRESSION`), `RequestLogFilter`, `CorsConfig`, `CorsFilter`, `CorsError`, `CompressionConfig`, `CompressionLevel`, `CompressionFilter`, `codecs`, `StaticResources`, `ResourceSource`, `DiskResources`, `EmbeddedResources`, `Resource`, `ResourceError`, `Json` and `JsonBody` (feature `json`), `HttpError`, `ErrorValue`, `ErrorAttributes`, `RequestInfo`, `ErrorRenderer`, `ProblemRenderer`, `ClientInfo`, `Scheme`, `ForwardedConfig`, `ForwardStrategy`, `TrustedProxies`, `ProxyParseError`, `App::serve_tls` (feature `tls`) |
 | `oxbloom-di` | Singleton dependency injection: traits, collections, lifecycle, lazy beans, bean factories, profiles, conditions and groups | `ContainerBuilder`, `Container`, `Resolver`, `Component`, `Configuration`, `Lifecycle`, `ShutdownReport`, `DestroyFailure`, `Inject`, `BeanFn`, `TryBeanFn`, `DiError`, `ErrorSource`, `Environment`, `ConditionContext`, `ConditionOutcome`, `Conditions`, `ConditionReport`, `ConditionRecord` |
 | `oxbloom-config` | Typed config: TOML + imports, profiles, env and CLI sources, placeholders, origins | `Config`, `ConfigBuilder`, `Secret`, `ConfigError`, `Origin`, `DataSize`, `ConfigWarning` |
-| `oxbloom-security` | Filter-chain security, JWT resource server | `HttpSecurity`, `SecurityFilterChain`, `JwtDecoderBuilder`, `JwksSource`, `Authentication`, `jwt_decoder_from_config`, `jwks_ssl_bundle`, `ReqwestJwksFetcher` with `with_tls` (feature `jwks`) |
-| `oxbloom-boot` | Application entry point: lifecycle events, runners, services, signals, exit codes, banner, failure analysis, auto-configuration and the conditions report | `OxbloomApplication`, `OxbloomApplicationBuilder`, `ApplicationArguments`, `RunListener`, `ApplicationRunner`, `CommandLineRunner`, `Service`, `ExitCodeGenerator`, `ShutdownHandle`, `StartupError`, `StartupPhase`, `ServiceError`, `RunnerError`, `ExitStatus`, `Banner`, `FailureAnalysis`, `FailureAnalyzer`, `AutoConfiguration`, `AutoConfigurations`, `ConfigRef`, `auto_configuration`, `Conditions`, `Configuration`, `PropertyMetadata`, `boot_properties`, `WebServer`, `BindError`, `WebServerAutoConfiguration` and `RequestLogAutoConfiguration` (feature `web`), `auto_configurations` (feature `security` or `web`), `JwtDecoderAutoConfiguration`, `SecurityAutoConfiguration` and `SecurityCustomizer` (feature `security`), `WebServer::with_ssl` and `SslAutoConfiguration` (feature `ssl`), `ActuatorAutoConfiguration` (feature `actuator`), `TasksAutoConfiguration`, `RetryAutoConfiguration` and `SchedulerService` (feature `tasks`), `OxbloomApplicationBuilder::logging` (feature `logging`), `async_trait` |
+| `oxbloom-security` | Filter-chain security, JWT resource server, password login with HTTP Basic | `HttpSecurity`, `PasswordEncoder`, `Argon2PasswordEncoder`, `DelegatingPasswordEncoder`, `UserDetails`, `UserDetailsService`, `InMemoryUserDetailsService`, `DaoAuthenticationProvider`, `SecurityFilterChain`, `JwtDecoderBuilder`, `JwksSource`, `Authentication`, `jwt_decoder_from_config`, `jwks_ssl_bundle`, `ReqwestJwksFetcher` with `with_tls` (feature `jwks`) |
+| `oxbloom-boot` | Application entry point: lifecycle events, runners, services, signals, exit codes, banner, failure analysis, auto-configuration and the conditions report | `OxbloomApplication`, `OxbloomApplicationBuilder`, `ApplicationArguments`, `RunListener`, `ApplicationRunner`, `CommandLineRunner`, `Service`, `ExitCodeGenerator`, `ShutdownHandle`, `StartupError`, `StartupPhase`, `ServiceError`, `RunnerError`, `ExitStatus`, `Banner`, `FailureAnalysis`, `FailureAnalyzer`, `AutoConfiguration`, `AutoConfigurations`, `ConfigRef`, `auto_configuration`, `Conditions`, `Configuration`, `PropertyMetadata`, `boot_properties`, `WebServer`, `BindError`, `WebServerAutoConfiguration` and `RequestLogAutoConfiguration` (feature `web`), `auto_configurations` (feature `security` or `web`), `JwtDecoderAutoConfiguration`, `PasswordEncoderAutoConfiguration`, `SecurityAutoConfiguration` and `SecurityCustomizer` (feature `security`), `WebServer::with_ssl` and `SslAutoConfiguration` (feature `ssl`), `ActuatorAutoConfiguration` (feature `actuator`), `TasksAutoConfiguration`, `RetryAutoConfiguration` and `SchedulerService` (feature `tasks`), `OxbloomApplicationBuilder::logging` (feature `logging`), `async_trait` |
 | `oxbloom-logging` | `tracing` subscriber from the `logging.*` keys: levels, groups, console format and color, rotating file output, JSON lines, runtime change | `Level`, `ParseLevelError`, `ConsoleFormat`, `ConsoleColor`, `FileRotation`, `FileFormat`, `JsonField`, `LoggingError`, `LoggingSystem`, `PROPERTIES` |
 | `oxbloom-test` | Test support (dev-dependency): run an application context through the real boot lifecycle, captured output, temporary config directories, controllable clocks, a test client and whole applications on port 0 | `ContextRunner`, `ContextView`, `FailureView`, `Captured`, `Log`, `TempConfigDir`, `FixedClock`, `ManualClock`, `TestClient`, `TestResponse`, `TestApp` and `RunningApp` (feature `web`), `TestClient::connect_tls` and `RunningApp::client_tls` (feature `tls`) |
 | `oxbloom-ssl` | Named SSL bundles from the `ssl.*` keys (PEM and PKCS#12), reloaded when their files change, with certificate validity warnings | `SslBundles`, `SslBundle`, `SslError`, `CertValidity`, `ReloadTask`, `PROPERTIES` |
@@ -2860,7 +2860,7 @@ example the target directory already exists).
 
 ### 4.7 `oxbloom-security`
 
-A `SecurityFilterChain` is a `Filter`. It extracts `Authorization: Bearer <token>`, authenticates it,
+A `SecurityFilterChain` is a `Filter`. It extracts `Authorization: Bearer <token>` (and, with HTTP Basic on, `Authorization: Basic <credentials>`), authenticates it,
 stores a `SecurityContext` in the request extensions and authorizes against ordered rules. Rules
 and limits to remember:
 
@@ -3109,9 +3109,48 @@ assert!(matcher.matches(&Request::new(HttpMethod::Get, "/api/users/1")));
 assert!(!matcher.matches(&Request::new(HttpMethod::Post, "/api/users/1")));
 ```
 
-Roadmap: slice 6 (`PasswordEncoder`, `UserDetailsService`, HTTP Basic, form login with sessions), 7 (CSRF, session management,
-security headers), 8 (method security), 9 (OAuth2 login and client). Not implemented: sessions, password login, CSRF,
-method security, OAuth2 login, opaque-token introspection, several chains per app.
+#### Password login: `PasswordEncoder`, `UserDetailsService`, `DaoAuthenticationProvider`, HTTP Basic (slice 6a)
+
+Guide: [Password login](guide/19-password-login.md). Decisions: [ADR 0086](adr/0086-password-login.md).
+
+```rust
+use std::sync::Arc;
+use oxbloom_security::{
+    Argon2PasswordEncoder, DaoAuthenticationProvider, DelegatingPasswordEncoder, HttpSecurity,
+    InMemoryUserDetailsService, PasswordEncoder, UserDetails,
+};
+
+let encoder = Arc::new(DelegatingPasswordEncoder::argon2(Argon2PasswordEncoder::new(8, 1, 1)?));
+let stored = encoder.encode("s3cret"); // `{argon2}$argon2id$v=19$...`
+assert!(encoder.matches("s3cret", &stored));
+
+let users = Arc::new(InMemoryUserDetailsService::new(vec![
+    UserDetails::new("alice", stored, []).roles(&["ADMIN"]),
+])?);
+let chain = HttpSecurity::new()
+    .http_basic(|b| b.realm("Admin area"))
+    .password_provider(Arc::new(DaoAuthenticationProvider::new(users, encoder)))
+    .authorize(|a| a.path("/admin/**").has_role("ADMIN").any_request().authenticated())
+    .build()?;
+```
+
+- `PasswordEncoder` (`Send + Sync`): `encode(&str) -> String`, `matches(&str, &str) -> bool` (a malformed hash never matches) and `upgrade_encoding(&str) -> bool` (true for weaker parameters or an unreadable hash).
+- `Argon2PasswordEncoder::new(memory_kib, iterations, parallelism)` returns `PasswordEncoderError::InvalidParameters` when Argon2 rejects the values; `default()` is 19456 KiB, 2 iterations and 1 lane; accessors `memory_kib()`, `iterations()`, `parallelism()`. It stores PHC strings.
+- `DelegatingPasswordEncoder::new(default_id, vec![(id, Arc<dyn PasswordEncoder>)])` and `::argon2(encoder)` (id `ARGON2_ID` = `"argon2"`) store `{id}hash`. An unknown or missing prefix never matches and always asks for an upgrade. Errors: `UnknownDefaultId`, `DuplicateId`.
+- `UserDetails::new(username, password_hash, authorities)` with `.roles(&["ADMIN"])` (adds `ROLE_ADMIN`), `.enabled(bool)` and `.locked(bool)`; getters `username()`, `password()`, `authorities()`, `is_enabled()`, `is_locked()`. `Debug` shows `[REDACTED]` for the password.
+- `UserDetailsService` (async trait): `load_user_by_username(&str) -> Result<Option<UserDetails>, UserDetailsError>`. `InMemoryUserDetailsService::new(Vec<UserDetails>)` fails with `UserStoreError::DuplicateUsername` or `EmptyUsername`; names are compared exactly.
+- `DaoAuthenticationProvider::new(users, encoder)` supports `AuthenticationRequest::UsernamePassword { username, password: Secret<String> }`. Order: a username or password over 1024 bytes, an empty username or an unknown user fail with `BadCredentials` (an unknown user is verified against a dummy hash first, made by the encoder when the provider is built); then the password is checked in `tokio::task::spawn_blocking`; an empty or wrong password is `BadCredentials`; only after a right password does a disabled user give `AccountDisabled` and a locked one `AccountLocked`; a store error or a failed hash task is `ProviderUnavailable`. Failures log at `debug` on `oxbloom::security` with the variant and the username length.
+- `HttpSecurity::http_basic(|b| b.realm(..))` turns Basic on (default realm `Oxbloom`); `password_provider(Arc<dyn AuthenticationProvider>)` adds a provider (Basic needs at least one). `build()` fails with `SecurityBuildError::HttpBasicWithoutProvider` or `InvalidRealm` (a realm with `"`, `\` or a control character). Without `http_basic`, a `Basic` header leaves the request anonymous.
+- Answers with Basic on: anonymous gives 401 with `WWW-Authenticate: Basic realm="..", charset="UTF-8"` (and `Bearer` after it when a bearer provider exists); every failed login, including a disabled or locked account, gives 401 with the Basic challenge; a malformed Basic header (bad Base64, no colon, not UTF-8, empty token) gives 401 and never 400; `ProviderUnavailable` gives 503 without a challenge; an authenticated user that a rule denies gives 403. A custom `entry_point` replaces the challenge, except for a malformed `Authorization` header, which the chain answers itself.
+- Settings readers: `PasswordSettings::from_config`, `Argon2Settings::from_config`, `HttpBasicSettings::from_config` and `users_from_config(&Config) -> Result<Vec<UserDetails>, ConfigError>`. A password under `security.users` must be `{argon2}` and a PHC string.
+- Keys: `security.password.default-encoder` (`argon2` only), `security.password.argon2.memory-kib` (8 to 1048576, default 19456, at least 8 per lane), `.iterations` (1 to 100, default 2), `.parallelism` (1 to 64, default 1), `security.http-basic.enabled` (default `false`), `security.http-basic.realm` (default `Oxbloom`), `security.users.<name>.password`, `.roles`, `.enabled` (default `true`) and `.locked` (default `false`). Unknown keys are rejected with the key named.
+- User names follow the configuration crate: keys are matched ignoring case, `-` and `_`, so two names that differ only in these fail to load from one file with `DuplicateKey` and merge across sources. The spelling written is kept and compared exactly at login.
+- Semver: `AuthenticationRequest::UsernamePassword`, `AuthenticationError::AccountDisabled` and `AccountLocked`, and `SecurityBuildError::HttpBasicWithoutProvider` and `InvalidRealm` were added to enums that are not `#[non_exhaustive]`. A `match` without a wildcard arm stops compiling.
+- Limits: no rate limiting or lockout counters, no database store, no re-encoding of a stale hash on login, no zeroizing of the raw password. Each concurrent login uses the configured Argon2 memory (19 MiB by default), so many parallel logins use that much each; a login limit comes later for this reason. A user with a malformed stored hash answers faster than other users.
+
+Roadmap: slice 6b (form login with sessions and logout), 7 (CSRF, session management,
+security headers), 8 (method security), 9 (OAuth2 login and client). Not implemented: sessions, form login, CSRF,
+method security, OAuth2 login, opaque-token introspection, several chains per app, login rate limiting, database user stores.
 
 ### 4.8 `oxbloom-boot`
 
@@ -3615,7 +3654,7 @@ assert!(PropertyMetadata::to_json(&list).starts_with("[{\"key\":"));
 #### `auto_configurations()` (features `security` or `web`)
 
 `pub fn auto_configurations() -> AutoConfigurations`. The list of the built-in auto-configurations
-for the enabled features, in dependency order: `JwtDecoderAutoConfiguration` and
+for the enabled features, in dependency order: `JwtDecoderAutoConfiguration`, `PasswordEncoderAutoConfiguration` and
 `SecurityAutoConfiguration` with `security`, `SslAutoConfiguration` with `ssl`,
 `ActuatorAutoConfiguration` with `actuator`, then
 `RequestLogAutoConfiguration` and `WebServerAutoConfiguration` with `web`, and last
@@ -3695,7 +3734,12 @@ Registers the `SecurityFilterChain` bean, processed after `JwtDecoderAutoConfigu
 `dyn SecurityCustomizer`; with none it adds the single rule `any_request().authenticated()`, a closed
 chain that answers 401. If a `dyn JwtDecoder` exists it then enables `oauth2_resource_server` with
 it, and calls `build()`. A customizer list that never calls `authorize` fails with
-`NoAuthorizeSection` (closed, not open). It declares no property keys.
+`NoAuthorizeSection` (closed, not open). It runs after `PasswordEncoderAutoConfiguration`. With
+`security.http-basic.enabled = true` it also calls `http_basic` with `security.http-basic.realm` and adds
+every `dyn AuthenticationProvider` bean with `password_provider`; the default is `false`, and
+configured users alone never open Basic. With Basic on and no provider bean the build fails with
+`HttpBasicWithoutProvider`. It declares no property keys itself: the two `security.http-basic.*` keys it
+reads are in the metadata of `PasswordEncoderAutoConfiguration`.
 
 ```rust
 use oxbloom_boot::{OxbloomApplication, SecurityAutoConfiguration};
@@ -3704,6 +3748,34 @@ let builder = OxbloomApplication::builder()
     .auto_configuration::<SecurityAutoConfiguration>()
     .exclude::<SecurityAutoConfiguration>();
 assert!(builder.property_metadata().iter().all(|p| !p.key.starts_with("security.")));
+```
+
+#### `PasswordEncoderAutoConfiguration` (feature `security`)
+
+Registers, in this order: a `DelegatingPasswordEncoder` from `security.password.*`, provided as
+`dyn PasswordEncoder` (`on_missing_bean`); an `InMemoryUserDetailsService` with the users of
+`security.users.<name>`, provided as `dyn UserDetailsService`, when the section `security.users` exists
+and no `dyn UserDetailsService` is registered; and a `DaoAuthenticationProvider`, provided as
+`dyn AuthenticationProvider`, when a `dyn UserDetailsService` and a `dyn PasswordEncoder` both exist. It has no
+group conditions. The keys of `security.password` are not read when the application registered its own
+encoder, and those of `security.users` are not read when it registered its own store. A bad value, an
+unknown key or a plain-text password fails the build with a `ConfigError` that names the key, never the value.
+The metadata lists ten keys: `security.http-basic.enabled` (`false`), `security.http-basic.realm` (`Oxbloom`),
+`security.password.default-encoder` (`argon2`), `security.password.argon2.memory-kib` (`19456`),
+`.iterations` (`2`), `.parallelism` (`1`) and `security.users.<name>.password`, `.roles`, `.enabled` and
+`.locked`. The guide chapter is [Password login](guide/19-password-login.md).
+
+```rust
+use oxbloom_boot::{OxbloomApplication, PasswordEncoderAutoConfiguration};
+
+let keys: Vec<_> = OxbloomApplication::builder()
+    .auto_configuration::<PasswordEncoderAutoConfiguration>()
+    .property_metadata()
+    .iter()
+    .map(|p| p.key)
+    .collect();
+assert!(keys.contains(&"security.http-basic.enabled"));
+assert!(keys.contains(&"security.users.<name>.password"));
 ```
 
 #### `WebServerAutoConfiguration` (feature `web`)
@@ -6231,7 +6303,7 @@ Compile-fail tests use `trybuild` (`tests/ui/*.rs` with `.stderr` snapshots). Re
 
 ## Not implemented
 
-Sessions, password login, CSRF, method security, OAuth2 login, database, jobs and queue, metrics and
+Sessions, form login, CSRF, method security, OAuth2 login, login rate limiting, database user stores, database, jobs and queue, metrics and
 other observability beyond the actuator, React integration, `oxbloom-ai`, `oxbloom add`, MVC web style. In
 boot: analysis of failures after startup, a report format other than text. In DI: transient and request scopes,
 injection of single configuration properties, qualifiers by name, async lifecycle hooks and
