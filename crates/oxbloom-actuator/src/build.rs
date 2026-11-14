@@ -25,10 +25,8 @@ fn git(args: &[&str]) -> Option<String> {
 /// # Examples
 ///
 /// ```no_run
-/// // In the application's build.rs:
-/// fn main() {
-///     oxbloom_actuator::build::emit();
-/// }
+/// // The body of `fn main` in the application's build.rs:
+/// oxbloom_actuator::build::emit();
 /// ```
 pub fn emit() {
     if let Ok(name) = std::env::var("CARGO_PKG_NAME") {
