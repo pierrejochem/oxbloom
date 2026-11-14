@@ -38,6 +38,15 @@ title() { sed -n 's/^# //p;T;q' "$1" | head -n 1; }
   echo "- [Core features](ROADMAP-core.md)"
   echo "- [Modules](ROADMAP-modules.md)"
   echo
+  echo "# Architecture decisions"
+  echo
+  echo "- [Architecture decision records](adr/README.md)"
+  echo "  - [ADR template](adr/0000-template.md)"
+  for f in docs/adr/[0-9][0-9][0-9][0-9]-*.md; do
+    case "$f" in docs/adr/0000-*) continue ;; esac
+    t=$(title "$f"); echo "  - [${t:-$(basename "$f" .md)}](${f#docs/})"
+  done
+  echo
   echo "# Design specs"
   echo
   for f in docs/superpowers/specs/*.md; do
