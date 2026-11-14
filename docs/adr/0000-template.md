@@ -2,7 +2,9 @@
 
 - **Status:** Proposed
 - **Date:** YYYY-MM-DD
-- **Source:** [the design spec](../superpowers/specs/YYYY-MM-DD-topic-design.md), [the implementation plan](../superpowers/plans/YYYY-MM-DD-topic.md)
+- **Source:** a relative link to the design spec, for example
+  `[C7 SSL bundles design](../superpowers/specs/2026-11-14-ssl-bundles-design.md)`, and, if useful, to
+  the plan in `../superpowers/plans/`
 
 ## Context
 
