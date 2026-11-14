@@ -27,6 +27,7 @@
 
 mod macro_support;
 mod retry;
+mod retry_settings;
 mod scheduler;
 mod settings;
 mod task;

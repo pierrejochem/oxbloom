@@ -97,3 +97,174 @@ fn bad_duration_names_the_key_not_the_value() {
         "the value is not echoed: {text}"
     );
 }
+
+mod retry {
+    use std::time::Duration;
+
+    use oxbloom_config::{Config, ConfigError};
+    use oxbloom_tasks::{Backoff, Jitter, RetryDefaults, TasksSettings};
+
+    fn read(toml: &str) -> Result<RetryDefaults, ConfigError> {
+        RetryDefaults::from_config(&Config::from_str(toml).unwrap())
+    }
+
+    fn rejected(toml: &str, key: &str, value: &str) {
+        let text = read(toml).unwrap_err().to_string();
+        assert!(text.contains(key), "{text}");
+        assert!(!text.contains(value), "{text}");
+    }
+
+    #[test]
+    fn retry_defaults_without_a_section_are_the_built_in_values() {
+        assert_eq!(read("").unwrap(), RetryDefaults::default());
+        assert_eq!(read("[tasks.retry]\n").unwrap(), RetryDefaults::default());
+        assert_eq!(
+            read("[tasks.scheduling]\nmax-concurrent = 2").unwrap(),
+            RetryDefaults::default()
+        );
+    }
+
+    #[test]
+    fn retry_keys_are_read() {
+        let defaults = read(
+            "[tasks.retry]\n\
+             backoff = \"fixed\"\n\
+             initial = \"250ms\"\n\
+             max-delay = \"5s\"\n\
+             multiplier = 3.0\n\
+             jitter = \"equal\"\n\
+             max-attempts = 4\n",
+        )
+        .unwrap();
+        assert_eq!(defaults.backoff, Backoff::Fixed);
+        assert_eq!(defaults.initial, Duration::from_millis(250));
+        assert_eq!(defaults.max_delay, Duration::from_secs(5));
+        assert_eq!(defaults.multiplier, 3.0);
+        assert_eq!(defaults.jitter, Jitter::Equal);
+        assert_eq!(defaults.max_attempts, 4);
+    }
+
+    #[test]
+    fn retry_rejects_zero_attempts() {
+        rejected(
+            "[tasks.retry]\nmax-attempts = 0",
+            "tasks.retry.max-attempts",
+            "= 0",
+        );
+    }
+
+    #[test]
+    fn retry_rejects_multiplier_below_one() {
+        rejected(
+            "[tasks.retry]\nmultiplier = 0.5",
+            "tasks.retry.multiplier",
+            "0.5",
+        );
+    }
+
+    #[test]
+    fn retry_rejects_nan_multiplier() {
+        rejected(
+            "[tasks.retry]\nmultiplier = nan",
+            "tasks.retry.multiplier",
+            "nan",
+        );
+        rejected(
+            "[tasks.retry]\nmultiplier = inf",
+            "tasks.retry.multiplier",
+            "inf",
+        );
+    }
+
+    #[test]
+    fn retry_rejects_initial_above_max_delay() {
+        rejected(
+            "[tasks.retry]\ninitial = \"7777ms\"\nmax-delay = \"1s\"",
+            "tasks.retry.initial",
+            "7777",
+        );
+    }
+
+    #[test]
+    fn retry_rejects_unknown_backoff_and_jitter_names() {
+        rejected(
+            "[tasks.retry]\nbackoff = \"zigzag\"",
+            "tasks.retry.backoff",
+            "zigzag",
+        );
+        rejected(
+            "[tasks.retry]\njitter = \"wobbly\"",
+            "tasks.retry.jitter",
+            "wobbly",
+        );
+    }
+
+    #[test]
+    fn retry_rejects_an_unknown_key_by_name() {
+        let text = read("[tasks.retry]\nattempts = 3").unwrap_err().to_string();
+        assert!(text.contains("attempts"), "{text}");
+    }
+
+    #[test]
+    fn both_sections_load_side_by_side() {
+        let toml = "[tasks.scheduling]\nmax-concurrent = 2\n[tasks.retry]\nmax-attempts = 5\n";
+        let config = Config::from_str(toml).unwrap();
+        assert_eq!(
+            TasksSettings::from_config(&config).unwrap().max_concurrent,
+            2
+        );
+        assert_eq!(RetryDefaults::from_config(&config).unwrap().max_attempts, 5);
+
+        let typo =
+            Config::from_str("[tasks.scheduling]\nmax-concurent = 2\n[tasks.retry]\n").unwrap();
+        assert!(
+            TasksSettings::from_config(&typo)
+                .unwrap_err()
+                .to_string()
+                .contains("max-concurent")
+        );
+        assert!(
+            RetryDefaults::from_config(&typo)
+                .unwrap_err()
+                .to_string()
+                .contains("max-concurent")
+        );
+
+        let typo = Config::from_str("[tasks.scheduling]\n[tasks.retry]\nattempts = 3\n").unwrap();
+        assert!(
+            TasksSettings::from_config(&typo)
+                .unwrap_err()
+                .to_string()
+                .contains("attempts")
+        );
+        assert!(
+            RetryDefaults::from_config(&typo)
+                .unwrap_err()
+                .to_string()
+                .contains("attempts")
+        );
+
+        let typo = Config::from_str("[tasks]\nretri = true\n").unwrap();
+        assert!(
+            TasksSettings::from_config(&typo)
+                .unwrap_err()
+                .to_string()
+                .contains("retri")
+        );
+        assert!(
+            RetryDefaults::from_config(&typo)
+                .unwrap_err()
+                .to_string()
+                .contains("retri")
+        );
+    }
+
+    #[test]
+    fn a_bad_duration_does_not_echo_the_value() {
+        let text = read("[tasks.retry]\ninitial = \"banana\"")
+            .unwrap_err()
+            .to_string();
+        assert!(text.contains("tasks.retry.initial"), "{text}");
+        assert!(!text.contains("banana"), "{text}");
+    }
+}

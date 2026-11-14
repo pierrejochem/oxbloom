@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use oxbloom_config::{Config, ConfigError};
 use serde::Deserialize;
+use serde::de::IgnoredAny;
 
 use crate::scheduler::SchedulerConfig;
 use crate::trigger::Zone;
@@ -17,7 +18,9 @@ use crate::trigger::Zone;
 /// `tasks.scheduling.initial-delay` (default 0). Durations take the configuration's duration
 /// form, such as `500ms`, `1.5s` or `2m`. A key that is not listed, directly under `tasks` or
 /// under `tasks.scheduling`, is a [`ConfigError`] that names the key, as under `management`.
-/// No error shows a configured value.
+/// The values of the `tasks.retry` table are ignored here, and its keys are only checked, because
+/// [`RetryDefaults::from_config`](crate::RetryDefaults::from_config) reads it. No error shows
+/// a configured value.
 ///
 /// # Examples
 ///
@@ -81,6 +84,22 @@ impl Default for TasksSettings {
 #[serde(default, deny_unknown_fields)]
 struct RawTasks {
     scheduling: RawScheduling,
+    // Read by `RetryDefaults::from_config`; only its key names are checked here, so a typo
+    // in either section is rejected by both readers.
+    #[allow(dead_code)]
+    retry: RetryKeys,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+#[allow(dead_code)]
+struct RetryKeys {
+    max_attempts: IgnoredAny,
+    backoff: IgnoredAny,
+    initial: IgnoredAny,
+    multiplier: IgnoredAny,
+    max_delay: IgnoredAny,
+    jitter: IgnoredAny,
 }
 
 #[derive(Default, Deserialize)]
