@@ -11,6 +11,8 @@ mkdir -p docs/assets
 cp branding/tokens.css docs/assets/tokens.css
 cp -r branding/fonts docs/assets/fonts
 cp branding/logos/oxbloom-lockup.svg docs/assets/logo.svg
+cp branding/logos/oxbloom-mark.svg docs/assets/mark.svg
+cp branding/logos/oxbloom-mark-reversed.svg docs/assets/mark-reversed.svg
 cp branding/logos/oxbloom-lockup-reversed.svg docs/assets/logo-reversed.svg
 cp branding/logos/oxbloom-favicon.svg theme/favicon.svg
 cp branding/logos/png/oxbloom-favicon-32.png theme/favicon.png
