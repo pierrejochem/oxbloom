@@ -47,16 +47,21 @@ title() { sed -n 's/^# //p;T;q' "$1" | head -n 1; }
     t=$(title "$f"); echo "  - [${t:-$(basename "$f" .md)}](${f#docs/})"
   done
   echo
-  echo "# Design specs"
-  echo
-  for f in docs/superpowers/specs/*.md; do
-    t=$(title "$f"); echo "- [${t:-$(basename "$f" .md)}](${f#docs/})"
-  done
-  echo
-  echo "# Implementation plans"
-  echo
-  for f in docs/superpowers/plans/*.md; do
-    case "$f" in *.progress.md) continue ;; esac
-    t=$(title "$f"); echo "- [${t:-$(basename "$f" .md)}](${f#docs/})"
-  done
+  # The specs and plans are not tracked in git, so a clean checkout has none: skip the empty sections.
+  if compgen -G "docs/superpowers/specs/*.md" > /dev/null; then
+    echo "# Design specs"
+    echo
+    for f in docs/superpowers/specs/*.md; do
+      t=$(title "$f"); echo "- [${t:-$(basename "$f" .md)}](${f#docs/})"
+    done
+    echo
+  fi
+  if compgen -G "docs/superpowers/plans/*.md" > /dev/null; then
+    echo "# Implementation plans"
+    echo
+    for f in docs/superpowers/plans/*.md; do
+      case "$f" in *.progress.md) continue ;; esac
+      t=$(title "$f"); echo "- [${t:-$(basename "$f" .md)}](${f#docs/})"
+    done
+  fi
 } > "$out"
