@@ -5465,6 +5465,11 @@ guide chapter is [Actuator](guide/17-actuator.md#actuator). The crate has the fe
 - The endpoints are under the base path, `/actuator` by default. `/health*` answers 200 only for `UP` and
   503 otherwise; an endpoint that is switched off answers 404.
 - `/health` shows the components only with `management.health.show-details = "always"`.
+- Without the `security` feature of `oxbloom-boot` every actuator endpoint is open to anyone, the write
+  endpoint `POST <base-path>/loggers/{target}` included; boot logs a `warn` event at `oxbloom::boot` when it
+  registers the loggers routes in that case. With security, `management.endpoints.health.public = true`
+  together with `show-details = "always"` gives the indicator details to anonymous callers, because this
+  slice has no `when-authorized` value.
 - Liveness never runs an indicator. Readiness runs only the indicators named in
   `management.health.readiness.include`.
 - An indicator that exceeds `management.health.timeout` or panics is `DOWN` with an `error` detail, never a

@@ -41,7 +41,9 @@ const READINESS_INCLUDE: &str = "management.health.readiness.include";
 /// - an [`Info`] with the application's [`BuildInfo`] bean (all fields absent without one), the
 ///   detected [`Platform`] and every `dyn InfoContributor` bean;
 /// - the [`ActuatorController`], which also serves `/loggers` with the feature `logging` when
-///   there is a `LoggingSystem` bean;
+///   there is a `LoggingSystem` bean. Without the feature `security` nothing authenticates the
+///   actuator endpoints, so boot logs a `warn` event at the target `oxbloom::boot` when it
+///   registers the loggers routes, which can change log levels;
 /// - with the feature `ssl` and an `SslBundles` bean, an [`SslHealthIndicator`](oxbloom_actuator::SslHealthIndicator)
 ///   as `dyn HealthIndicator`, reading the time from the `dyn Clock` bean when there is one;
 /// - with the feature `security` and `management.endpoints.health.public = true`, a
@@ -49,7 +51,8 @@ const READINESS_INCLUDE: &str = "management.health.readiness.include";
 ///   and requires authentication for every other request. It owns the authorization rules, so
 ///   an application with a customizer of its own that calls `authorize` should open the health
 ///   path there instead (two `authorize` sections fail the build). Without it, the default
-///   chain requires authentication for every actuator endpoint.
+///   chain requires authentication for every actuator endpoint. Without the feature
+///   `security` every actuator endpoint is open, the loggers `POST` included.
 ///
 /// It runs after `SslAutoConfiguration` and before `WebServerAutoConfiguration`, which collects
 /// its controller.
@@ -237,7 +240,19 @@ fn actuator_controller(
     let controller = ActuatorController::new((*settings).clone(), availability, runner, info);
     #[cfg(feature = "logging")]
     let controller = match logging {
-        Some(logging) => controller.with_loggers(logging),
+        Some(logging) => {
+            // Without `security` nothing authenticates the actuator routes, and the loggers
+            // endpoint is the one that changes state.
+            #[cfg(not(feature = "security"))]
+            if settings.loggers_enabled {
+                tracing::warn!(
+                    target: "oxbloom::boot",
+                    "the actuator loggers endpoint can change log levels and is unauthenticated \
+                     without the security feature"
+                );
+            }
+            controller.with_loggers(logging)
+        }
         None => controller,
     };
     controller

@@ -240,6 +240,10 @@ The rules:
 
 The actuator routes go through the normal filter chain. With `oxbloom-boot/security` and the default chain, every actuator endpoint requires authentication, as every other path does.
 
+Without the `security` feature every actuator endpoint is open to anyone who can reach the port, and that includes the write endpoint `POST <base-path>/loggers/{target}`, which changes log levels, and `/info`, which shows the build and platform facts. Boot logs a `warn` event at the target `oxbloom::boot` at startup when it registers the loggers routes without security. Turn on the `security` feature, switch the loggers endpoint off with `management.endpoint.loggers.enabled = false`, or keep the port away from untrusted networks.
+
+`management.endpoints.health.public = true` together with `management.health.show-details = "always"` gives the details of every health indicator to anonymous callers. This slice has no `when-authorized` value, so details are either shown to everyone who may call `/health` or to no one.
+
 `management.endpoints.health.public = true` opens only `GET <base-path>/health/**` (`/health`, `/health/liveness` and `/health/readiness`) and keeps `/info` and `/loggers` protected. It does that with a `SecurityCustomizer` that the actuator registers, and that customizer adds its own `authorize` section: permit the health path, authenticate every other request. A chain accepts only one `authorize` section, so an application with a customizer of its own that also calls `authorize` fails the startup with `DuplicateAuthorizeSection`. In that case leave `health.public` off and open the health path in your own customizer, as `examples/todos` does:
 
 ```rust
