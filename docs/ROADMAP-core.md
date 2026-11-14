@@ -312,7 +312,7 @@ Deferred minors from the C6b-2 reviews:
 - Cargo: brotli is pinned to 9.0.0 in `Cargo.lock` because 9.1.1 was under two weeks old; `Cargo.toml` keeps a caret requirement.
 
 ### C7: SSL bundles (`oxbloom-ssl`) — done
-Done on 2026-11-14; design in `docs/superpowers/specs/2026-11-14-ssl-bundles-design.md`, plan in `docs/superpowers/plans/2026-11-14-ssl-bundles.md`, usage in the guide chapter `docs/guide/16-ssl-bundles.md` and `docs/API.md` (section 4.11), decisions in ADRs 0068 to 0080.
+Done on 2026-11-14; design in `docs/superpowers/specs/2026-11-14-ssl-bundles-design.md`, plan in `docs/superpowers/plans/2026-11-14-ssl-bundles.md`, usage in the guide chapter `docs/guide/16-ssl-bundles.md` and `docs/API.md` (section 4.11), decisions in ADRs 0068 to 0082.
 
 Delivered:
 - The crate `oxbloom-ssl`: `SslBundles` (`from_config`, `with_clock`, `get`, `names`, `reload_interval`, `expiry_warning`, `reload`, `start_reload`), `SslBundle` (`name`, `has_identity`, `has_trust`, `validity`, `server_config`, `client_config`), `CertValidity`, `ReloadTask`, `SslError` and `PROPERTIES`. Bundles come from `ssl.bundle.pem.<name>` (files or inline PEM, `certificate`, `private-key` as a `Secret`, `trust`) and `ssl.bundle.pkcs12.<name>` (`path`, `password` as a `Secret`), with rustls 0.23 and the `aws-lc-rs` provider only (no `ring` in the tree). Errors name the bundle and the key, never a key, a password, a path or file contents. Feature `di` implements `Lifecycle` for `SslBundles`.
@@ -323,11 +323,13 @@ Delivered:
 - `ReqwestJwksFetcher::with_tls(client_config)` and `jwks_ssl_bundle(&config)` in `oxbloom-security`; boot resolves `security.jwt.jwks-ssl-bundle` against the `SslBundles` bean (ADR 0074). An unknown name, the key without `ssl`, and the key together with a `JwksFetcher` bean are `ConfigError::Invalid` on the key.
 - `TestClient::connect_tls(addr, ca_pem)` and `RunningApp::client_tls(ca_pem)` in `oxbloom-test` behind the feature `tls`; the server name is always `localhost`.
 - Property metadata for every new key, the conditions report entry, and test certificates generated at test time with `rcgen` (no key material committed).
+- Final fix wave: a reload can no longer change the parts of a bundle (`NoIdentity`, `EmptyBundle`, the new `SslError::ShapeChanged`; ADR 0070), the transport scheme is the default for a missing forwarded `proto` (ADR 0081), unknown keys directly under `ssl` are rejected, an unusable PKCS#12 trust certificate is `SslError::Pkcs12`, new PEM error tests, the PKCS#12 format claims cut to what is tested, and ADR 0082 records the C7 dependencies.
 
 Gate numbers at the end of C7 (all measured in Task 8):
 - `cargo test --workspace --all-features`: 2356 passed, 0 failed, 8 ignored (2224 before C7).
 - Boot feature matrix (`cargo test -p oxbloom-boot`), re-baselined because boot's `oxbloom-test` dev-dependency now enables `tls` and with it boot's `ssl` (ADR 0075): `--no-default-features` 420 -> 447, `--features web` 420 -> 447, `--features logging` 440 -> 467, `--features security` 420 -> 447, `--all-features` 440 -> 467, and the new `--features ssl` 447; each with 0 failed and 1 ignored (the probe). No `cargo test -p oxbloom-boot` run builds boot without `ssl` any more; the compile-only builds (now also `--no-default-features --features ssl`) compile those paths, and `cargo test -p oxbloom-test --features web` is the only test run that executes boot without `ssl`.
 - `cargo test -p oxbloom-web --no-default-features` 357 (356 before C7, one new unit test), `cargo test -p oxbloom-web --features tls` 422, `cargo test -p oxbloom-ssl --all-features` 83, `cargo test -p oxbloom-test --features web` 155, `cargo test -p oxbloom-test --features web,tls` 161, `make check-examples` 41.
+- After the final fix wave (re-measured): `cargo test --workspace --all-features` 2364 passed, 0 failed, 8 ignored; `cargo test -p oxbloom-ssl --all-features` 91; `cargo test --workspace` 2354; the boot matrix (447/447/467/447/467/447), `oxbloom-web` (357, 422 with `tls`), `oxbloom-test` (155, 161) and `make check-examples` (41) unchanged; stack probes unchanged.
 - Stack probes unchanged: the DI minima are 206, 277, 230 and 194 KB, and boot needs 238 KB without the feature `logging` (also with `ssl`) and 239 KB with it (also with all features); each value passes and one KB less overflows.
 
 Limits that users must know (also in the guide):
@@ -345,14 +347,14 @@ Follow-ups from C7, not yet scheduled:
 - Expose `SslBundle::validity()` through a health or info endpoint (C8).
 
 Deferred minors from the C7 reviews:
-- Task 1: `p12-keystore` 0.4.1 pulls in the pre-release crates `cms 0.3.0-rc.2` and `pkcs12 0.2.0-rc.0` through caret ranges on pre-releases; record it in the spec's limits or decisions. The `pbes1` feature is enabled but no test reads a PBES1 file; add a test or drop the feature.
+- Task 1: `p12-keystore` 0.4.1 pulls in the pre-release crates `cms 0.3.0-rc.2` and `pkcs12 0.2.0-rc.0` through caret ranges on pre-releases (recorded in ADR 0082 in the final fix wave). The `pbes1` feature is enabled but no test reads a PBES1 file; the docs now say so, and a test or dropping the feature is still open.
 - Task 1: a failure to set up the platform verifier is reported as `SslError::Io` with kind `Other` on the trust key, which is misleading; add a dedicated variant (and amend the spec's variant list).
 - Task 1: several private keys in one PEM value or PKCS#12 file silently use the first; reject it or document it, and add a test.
-- Task 1: missing tests for a legacy OpenSSL encrypted key (`Proc-Type`/`DEK-Info`) and for a `certificate` value that holds only a key.
+- Task 1: missing tests for a legacy OpenSSL encrypted key (`Proc-Type`/`DEK-Info`) and for a `certificate` value that holds only a key (fixed in the final fix wave).
 - Task 1: every non-leaf certificate of a PKCS#12 file becomes a trust anchor; document it on `has_trust` and `client_config`.
 - Task 1: `client_config` fixes its verifier at call time, so later trust changes are not seen; out of scope per the spec (the JWKS client does not reload).
 - Task 1: the test `missing_file_is_an_io_error...` in `tests/bundles.rs` keeps a useless `ca()` setup.
-- Task 1 (unverified): bundle names that differ only by case or `-`/`_` under the same kind (`pem.web` and `pem.Web`); `DuplicateName` compares only across kinds. The final reviewer was to check it.
+- Task 1 (unverified): bundle names that differ only by case or `-`/`_` under the same kind (`pem.web` and `pem.Web`); `DuplicateName` compares only across kinds. Closed by the final review: `oxbloom-config` rejects such keys within one source and merges them across sources, so two entries never exist.
 - Task 2: `stop()` and `Drop` can block on a hung read; document or bound it.
 - Task 2: the bundle state mutex is held across file I/O, so `reload()` blocks; document it.
 - Task 2: separate replacement of the certificate and key files can warn once with `key-mismatch`; document the atomic swap.
@@ -365,7 +367,7 @@ Deferred minors from the C7 reviews:
 - Task 3: a repeat warning can run up to one reload interval late (documented).
 - Task 4: the `serve_tls` doc example used `rustls::` (a dev-dependency); it now uses `tokio_rustls::rustls::` so it copies as is (fixed in Task 8).
 - Task 4: a drop for an ALPN mismatch is logged as "TLS handshake failed" with kind `Unsupported` and is untested; give it its own message and a test with a configuration offering `[h2, http/1.1]`.
-- Task 4: on TLS, a trusted proxy sending `X-Forwarded-For` without `X-Forwarded-Proto` yields `Scheme::Http` (documented and tested); Spring keeps the request's own scheme. The final reviewer was to decide whether the transport should be the default.
+- Task 4: on TLS, a trusted proxy sending `X-Forwarded-For` without `X-Forwarded-Proto` yields `Scheme::Http` (documented and tested); Spring keeps the request's own scheme. Fixed in the final fix wave: the transport scheme is the default (ADR 0081).
 - Task 4: no cap on concurrent connections or half-open handshakes (the same exposure as plain `serve`); recorded as a known limit.
 - Task 4: `tests/tls.rs` asserts that a connect fails after shutdown, which risks ephemeral port reuse.
 - Task 5: `tls_acceptor` maps every `server_config` error to "has no certificate and private key"; match `NoIdentity` explicitly.
@@ -378,6 +380,7 @@ Deferred minors from the C7 reviews:
 - Task 7: the bundle is resolved before the decoder's "only valid with `jwk-set-uri`" check; the error order is cosmetic.
 - Task 7: the tests use `localhost` and reqwest honours `HTTPS_PROXY`, so they break on runners with a proxy and no `NO_PROXY`; use `127.0.0.1` with an IP SAN or document `NO_PROXY`.
 - Task 7: spec line ~125 still said `jwt_decoder_from_config` takes an optional `SslBundles`, contradicting the "As built" bullet below it (struck in Task 8).
+- Final fix wave: a reload that drops the trust store fails with `SslError::EmptyBundle`, whose text ("has neither an identity nor a trust store") does not fit a bundle that keeps its identity; a dedicated text or variant would be clearer.
 - Task 7: the client-certificate path (an identity in `client_config`) is not tested end to end.
 - Task 7: the trust replacement of a bundle with a trust store (rejecting a public-CA certificate) is documented but untested.
 
