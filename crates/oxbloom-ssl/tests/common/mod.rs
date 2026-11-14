@@ -5,6 +5,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 use rcgen::{
     BasicConstraints, CertificateParams, CertifiedIssuer, DnType, IsCa, KeyPair, KeyUsagePurpose,
@@ -64,7 +65,61 @@ pub fn ca() -> TestCa {
     }
 }
 
+/// Sets the validity of `params` to run from `not_before` to `not_after`, cut to whole
+/// seconds as a certificate stores them.
+fn set_dates(params: &mut CertificateParams, not_before: SystemTime, not_after: SystemTime) {
+    let seconds = |time: SystemTime| {
+        let since = time
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("a test date after 1970");
+        Duration::from_secs(since.as_secs())
+    };
+    params.not_before = rcgen::date_time_ymd(1970, 1, 1) + seconds(not_before);
+    params.not_after = rcgen::date_time_ymd(1970, 1, 1) + seconds(not_after);
+}
+
+/// A new self-signed root authority named `common_name`, valid from `not_before` to
+/// `not_after`.
+pub fn ca_between(common_name: &str, not_before: SystemTime, not_after: SystemTime) -> TestCa {
+    let key = KeyPair::generate().expect("key generation");
+    let mut params = ca_params(common_name);
+    set_dates(&mut params, not_before, not_after);
+    let issuer = CertifiedIssuer::self_signed(params, key).expect("self-signed root");
+    TestCa {
+        cert_pem: issuer.pem(),
+        cert_der: issuer.der().to_vec(),
+        issuer,
+        parents_pem: String::new(),
+    }
+}
+
 impl TestCa {
+    /// A new leaf certificate for the DNS `names`, signed by this authority and valid from
+    /// `not_before` to `not_after`.
+    pub fn issue_between(
+        &self,
+        names: &[&str],
+        not_before: SystemTime,
+        not_after: SystemTime,
+    ) -> Issued {
+        let key = KeyPair::generate().expect("key generation");
+        let names: Vec<String> = names.iter().map(|n| n.to_string()).collect();
+        let mut params = CertificateParams::new(names.clone()).expect("names");
+        params.distinguished_name.push(
+            DnType::CommonName,
+            names.first().cloned().unwrap_or_default(),
+        );
+        set_dates(&mut params, not_before, not_after);
+        let cert = params.signed_by(&key, &self.issuer).expect("leaf");
+        Issued {
+            chain_pem: format!("{}{}{}", cert.pem(), self.cert_pem, self.parents_pem),
+            cert_pem: cert.pem(),
+            key_pem: key.serialize_pem(),
+            cert_der: cert.der().to_vec(),
+            key_der: key.serialize_der(),
+        }
+    }
+
     /// A new intermediate authority signed by this one.
     pub fn intermediate(&self) -> TestCa {
         let key = KeyPair::generate().expect("key generation");

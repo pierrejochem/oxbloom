@@ -5,12 +5,14 @@ use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime};
 
+use oxbloom_core::Clock;
 use tracing::Dispatch;
 
 use crate::SslBundle;
 use crate::bundle;
 use crate::error::SslError;
 use crate::settings::BundleSource;
+use crate::validity;
 
 /// The log target of every reload event.
 const TARGET: &str = "oxbloom::ssl";
@@ -181,18 +183,28 @@ fn kind(error: &SslError) -> String {
     }
 }
 
-/// What the polling task works on: the bundles and the test seam. It holds no [`ReloadTask`],
-/// so the task never keeps itself alive.
+/// Warns about the certificates of `bundle` that are not valid at the time of `clock` or
+/// expire within `window`, following the 24 hour repeat rule of [`validity::check`].
+pub(crate) fn check_validity(bundle: &SslBundle, clock: &dyn Clock, window: Duration) {
+    let material = bundle.inner.material.load();
+    validity::check(bundle.name(), &material, clock.now(), window);
+}
+
+/// What the polling task works on: the bundles, the clock and expiry warning time for the
+/// validity checks, and the test seam. It holds no [`ReloadTask`], so the task never keeps
+/// itself alive.
 #[derive(Clone)]
 pub(crate) struct Poller {
     pub(crate) bundles: Arc<Vec<SslBundle>>,
     pub(crate) hook: HookSlot,
+    pub(crate) clock: Arc<dyn Clock>,
+    pub(crate) expiry_warning: Duration,
 }
 
 impl Poller {
-    /// One pass of the polling task: reloads every bundle whose files changed and logs the
-    /// outcome on `oxbloom::ssl`. Later passes over the same tick (such as validity checks)
-    /// belong here.
+    /// One pass of the polling task: reloads every bundle whose files changed, logs the
+    /// outcome on `oxbloom::ssl`, then checks the validity of every bundle's certificates. A
+    /// reloaded bundle warns at once; any other repeats a warning every 24 hours by the clock.
     fn tick(&self) {
         let hook = lock(&self.hook).clone();
         for bundle in self.bundles.iter() {
@@ -217,6 +229,7 @@ impl Poller {
                     "cannot reload the SSL bundle; keeping the previous material"
                 ),
             }
+            check_validity(bundle, &*self.clock, self.expiry_warning);
         }
     }
 }

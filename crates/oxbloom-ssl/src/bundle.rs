@@ -11,12 +11,37 @@ use rustls::{InconsistentKeys, RootCertStore};
 
 use crate::error::SslError;
 use crate::settings::{BundleSource, Source};
+use crate::validity::{self, CertValidity, Warnings};
 
 /// The loaded material of a bundle: an optional identity and an optional trust store, at
-/// least one of them present. It has no `Debug`, so the key can never be printed.
+/// least one of them present, with the validity of every certificate and the warnings given
+/// about them. It has no `Debug`, so the key can never be printed.
 pub(crate) struct Material {
     pub(crate) identity: Option<Arc<CertifiedKey>>,
     pub(crate) trust: Option<Arc<RootCertStore>>,
+    /// The identity chain, leaf first, then the trust certificates, each certificate once.
+    pub(crate) validity: Vec<CertValidity>,
+    pub(crate) warned: Warnings,
+}
+
+impl Material {
+    /// The material of `identity` and `trust`, where `trust_certs` are the certificates of
+    /// the trust store.
+    fn new(
+        identity: Option<Arc<CertifiedKey>>,
+        trust: Option<Arc<RootCertStore>>,
+        trust_certs: &[CertificateDer<'static>],
+    ) -> Material {
+        let chain = identity.iter().flat_map(|key| key.cert.iter());
+        let validity = validity::of_certificates(chain.chain(trust_certs));
+        let warned = Warnings::new(validity.len());
+        Material {
+            identity,
+            trust,
+            validity,
+            warned,
+        }
+    }
 }
 
 /// The only crypto provider Oxbloom uses for TLS: `aws-lc-rs`.
@@ -49,14 +74,16 @@ pub(crate) fn load(bundle: &BundleSource) -> Result<Material, SslError> {
                 // Settings rejects one without the other.
                 _ => None,
             };
-            let trust = match trust {
-                Some(value) => {
-                    let certs = certificates(bundle, "trust", value)?;
-                    Some(root_store(bundle, "trust", certs)?)
-                }
-                None => None,
+            let trust_certs = match trust {
+                Some(value) => certificates(bundle, "trust", value)?,
+                None => Vec::new(),
             };
-            Material { identity, trust }
+            let trust = if trust_certs.is_empty() {
+                None
+            } else {
+                Some(root_store(bundle, "trust", trust_certs.clone())?)
+            };
+            Material::new(identity, trust, &trust_certs)
         }
         Source::Pkcs12 { path, password } => {
             let data = read_file(bundle, "path", path)?;
@@ -249,9 +276,9 @@ fn pkcs12(bundle: &BundleSource, data: &[u8], password: &str) -> Result<Material
     let trust = if others.is_empty() {
         None
     } else {
-        Some(root_store(bundle, "path", others)?)
+        Some(root_store(bundle, "path", others.clone())?)
     };
-    Ok(Material { identity, trust })
+    Ok(Material::new(identity, trust, &others))
 }
 
 /// The indices of the chain that starts at certificate `leaf`, each next certificate the

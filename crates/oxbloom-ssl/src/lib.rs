@@ -12,6 +12,12 @@
 //! With the feature `di`, `SslBundles` implements `oxbloom_di::Lifecycle`, so a container
 //! starts the task when it creates the bean and stops it at shutdown.
 //!
+//! An expired certificate, one that is not valid yet, and one that expires within
+//! `ssl.expiry-warning` produce a warning on target `oxbloom::ssl` at load, after every
+//! successful reload, and again every 24 hours by the [`Clock`] set with
+//! [`SslBundles::with_clock`]. These checks never stop the startup. [`SslBundle::validity`]
+//! lists the dates and subjects.
+//!
 //! # Examples
 //!
 //! ```
@@ -34,6 +40,7 @@ mod bundle;
 mod error;
 mod reload;
 mod settings;
+mod validity;
 
 use std::fmt;
 use std::sync::{Arc, Mutex};
@@ -41,6 +48,7 @@ use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use oxbloom_config::Config;
+use oxbloom_core::{Clock, SystemClock};
 use rustls::client::ResolvesClientCert;
 use rustls::server::{ClientHello, ResolvesServerCert};
 use rustls::sign::CertifiedKey;
@@ -48,12 +56,13 @@ use rustls::{ClientConfig, ServerConfig, SignatureScheme};
 use rustls_platform_verifier::BuilderVerifierExt;
 
 use crate::bundle::{Material, provider};
-use crate::reload::{HookSlot, Poller, ReloadState, lock};
+use crate::reload::{HookSlot, Poller, ReloadState, check_validity, lock};
 use crate::settings::{BundleSource, Settings, Source, canonical};
 
 pub use error::SslError;
 pub use reload::ReloadTask;
 pub use settings::PROPERTIES;
+pub use validity::CertValidity;
 
 /// Internal hooks for this crate's tests. Not part of the public API.
 #[doc(hidden)]
@@ -95,6 +104,8 @@ pub struct SslBundles {
     bundles: Arc<Vec<SslBundle>>,
     reload_interval: Duration,
     expiry_warning: Duration,
+    /// The clock of the validity checks.
+    clock: Arc<dyn Clock>,
     read_hook: HookSlot,
     /// The task the container started through `Lifecycle`.
     #[cfg(feature = "di")]
@@ -105,7 +116,9 @@ impl SslBundles {
     /// Reads `ssl.*` from `config` and loads every bundle, reading the files they name.
     ///
     /// A value that starts with `-----BEGIN` is inline PEM, any other value is a file path.
-    /// Without any `ssl` key the set is empty.
+    /// Without any `ssl` key the set is empty. The certificates are checked against the
+    /// system time, and each expired, not yet valid or soon expiring one logs a warning (see
+    /// [`SslBundles::with_clock`]); a bad date never makes the load fail.
     ///
     /// # Errors
     ///
@@ -144,14 +157,73 @@ impl SslBundles {
             bundles.push(SslBundle::load(source)?);
         }
         bundles.sort_by(|a, b| a.name().cmp(b.name()));
-        Ok(SslBundles {
+        let bundles = SslBundles {
             bundles: Arc::new(bundles),
             reload_interval: settings.reload_interval,
             expiry_warning: settings.expiry_warning,
+            clock: Arc::new(SystemClock),
             read_hook: HookSlot::default(),
             #[cfg(feature = "di")]
             task: Arc::default(),
-        })
+        };
+        bundles.check_validity();
+        Ok(bundles)
+    }
+
+    /// Uses `clock` instead of the system time for the validity checks, and checks every
+    /// certificate against it now.
+    ///
+    /// Each certificate that is expired, not valid yet, or expires within
+    /// [`expiry_warning`](SslBundles::expiry_warning) logs a warning on target `oxbloom::ssl`
+    /// with the bundle name, the subject and the date, never key material. The same warning
+    /// for the same certificate repeats only when the clock is 24 hours away from the last
+    /// one, so this check after [`SslBundles::from_config`] does not repeat a warning when
+    /// `clock` reads the system time. A changed condition, such as an expiring certificate
+    /// that has expired, warns at once.
+    ///
+    /// Call it before [`SslBundles::start_reload`]: the task checks with the clock set when
+    /// it starts, on every tick, so the 24 hour repeat comes within one
+    /// [`reload_interval`](SslBundles::reload_interval) of being due. With an interval of zero
+    /// there is no task, so only the load, [`SslBundles::reload`] and this call warn.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use std::time::{Duration, SystemTime};
+    /// use oxbloom_config::Config;
+    /// use oxbloom_core::Clock;
+    /// use oxbloom_ssl::SslBundles;
+    ///
+    /// /// A clock that reads one fixed time.
+    /// struct FixedClock(SystemTime);
+    ///
+    /// impl Clock for FixedClock {
+    ///     fn now(&self) -> SystemTime {
+    ///         self.0
+    ///     }
+    /// }
+    ///
+    /// # let generated = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])?;
+    /// # let ca_pem = generated.cert.pem();
+    /// let config = Config::from_str(&format!("[ssl.bundle.pem.client]\ntrust = '''\n{ca_pem}'''"))?;
+    /// let in_a_week = SystemTime::now() + Duration::from_secs(7 * 24 * 60 * 60);
+    /// let bundles = SslBundles::from_config(&config)?.with_clock(Arc::new(FixedClock(in_a_week)));
+    /// let task = bundles.start_reload(); // checks with `FixedClock` on every tick
+    /// task.stop();
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> SslBundles {
+        self.clock = clock;
+        self.check_validity();
+        self
+    }
+
+    /// Checks the certificates of every bundle against the clock and warns as needed.
+    fn check_validity(&self) {
+        for bundle in self.bundles.iter() {
+            check_validity(bundle, &*self.clock, self.expiry_warning);
+        }
     }
 
     /// The bundle named `name`, matched like configuration keys (case-insensitive, ignoring
@@ -250,8 +322,10 @@ impl SslBundles {
     /// Rebuilds every bundle now from all its sources, files and inline PEM alike, and returns
     /// the result per bundle, in name order.
     ///
-    /// A bundle that loads is swapped in, and the next handshake of every configuration built
-    /// from it uses the new identity. A bundle that fails keeps its old material. Nothing calls
+    /// A bundle that loads is swapped in, the next handshake of every configuration built
+    /// from it uses the new identity, and its certificates are checked against the clock at
+    /// once, warning again about every expired, not yet valid or soon expiring one. A bundle
+    /// that fails keeps its old material. Nothing calls
     /// this automatically; [`SslBundles::start_reload`] polls instead. A client configuration
     /// fixes its trust store when [`SslBundle::client_config`] builds it, so a reloaded trust
     /// store reaches only configurations built afterwards. The call reads the files on the
@@ -295,6 +369,7 @@ impl SslBundles {
             .iter()
             .map(|bundle| {
                 let result = reload::reload_now(bundle, hook.as_deref());
+                check_validity(bundle, &*self.clock, self.expiry_warning);
                 (bundle.name().to_string(), result)
             })
             .collect()
@@ -316,6 +391,10 @@ impl SslBundles {
     /// between the two writes, which gives one `key-mismatch` warning before the second write
     /// is picked up. Replace both at once, with a directory or symlink swap as Kubernetes
     /// secret mounts do, to avoid it.
+    ///
+    /// Every tick also checks the certificates of every bundle against the clock set with
+    /// [`SslBundles::with_clock`] before this call, and repeats a validity warning every 24
+    /// hours of that clock while its condition holds.
     ///
     /// With an interval of zero the returned task does nothing. Inside a Tokio runtime, which
     /// needs its time driver, the task runs on that runtime; outside one, on its own thread.
@@ -344,6 +423,8 @@ impl SslBundles {
         let poller = Poller {
             bundles: Arc::clone(&self.bundles),
             hook: Arc::clone(&self.read_hook),
+            clock: Arc::clone(&self.clock),
+            expiry_warning: self.expiry_warning,
         };
         ReloadTask::start(poller, self.reload_interval)
     }
@@ -505,6 +586,32 @@ impl SslBundle {
     /// ```
     pub fn has_trust(&self) -> bool {
         self.inner.material.load().trust.is_some()
+    }
+
+    /// The subject and validity dates of every certificate of the bundle: the identity chain,
+    /// leaf first, then the trust certificates, each distinct certificate once. A reload
+    /// changes the list.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_config::Config;
+    /// use oxbloom_ssl::SslBundles;
+    ///
+    /// # let generated = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])?;
+    /// # let (cert, key) = (generated.cert.pem(), generated.signing_key.serialize_pem());
+    /// let config = Config::from_str(&format!(
+    ///     "[ssl.bundle.pem.web]\ncertificate = '''\n{cert}'''\nprivate-key = '''\n{key}'''"
+    /// ))?;
+    /// let web = SslBundles::from_config(&config)?.get("web")?;
+    /// for cert in web.validity() {
+    ///     println!("{} is valid until {:?}", cert.subject, cert.not_after);
+    /// }
+    /// assert_eq!(web.validity().len(), 1);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn validity(&self) -> Vec<CertValidity> {
+        self.inner.material.load().validity.clone()
     }
 
     /// A rustls server configuration that presents the bundle's identity, without client
