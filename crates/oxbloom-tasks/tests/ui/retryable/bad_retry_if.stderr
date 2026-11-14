@@ -1,0 +1,11 @@
+error: `retry_if` on the retryable method `fetch` takes the path of a `fn(&E) -> bool` as a string, e.g. `retry_if = "is_transient"`
+  --> tests/ui/retryable/bad_retry_if.rs:10:28
+   |
+10 |     #[retryable(retry_if = is_transient)]
+   |                            ^^^^^^^^^^^^
+
+error: `retry_if` on the retryable method `send` takes the path of a `fn(&E) -> bool` as a string, e.g. `retry_if = "is_transient"`
+  --> tests/ui/retryable/bad_retry_if.rs:15:28
+   |
+15 |     #[retryable(retry_if = "is transient")]
+   |                            ^^^^^^^^^^^^^^

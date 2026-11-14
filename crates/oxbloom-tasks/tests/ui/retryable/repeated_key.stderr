@@ -1,0 +1,5 @@
+error: `max_attempts` is given twice on the retryable method `fetch`
+ --> tests/ui/retryable/repeated_key.rs:6:35
+  |
+6 |     #[retryable(max_attempts = 3, max_attempts = 4)]
+  |                                   ^^^^^^^^^^^^

@@ -1,0 +1,11 @@
+error: `max_attempts` on the retryable method `fetch` must be at least 1; it counts the first call
+ --> tests/ui/retryable/zero_attempts.rs:6:32
+  |
+6 |     #[retryable(max_attempts = 0)]
+  |                                ^
+
+error: `max_attempts` on the retryable method `send` takes a whole number, e.g. `max_attempts = 3`
+  --> tests/ui/retryable/zero_attempts.rs:11:32
+   |
+11 |     #[retryable(max_attempts = "3")]
+   |                                ^^^

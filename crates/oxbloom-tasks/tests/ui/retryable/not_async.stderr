@@ -1,0 +1,5 @@
+error: the retryable method `fetch` must be `async`; #[retryable] sleeps between attempts
+ --> tests/ui/retryable/not_async.rs:7:5
+  |
+7 |     fn fetch(&self) -> Result<u32, String> {
+  |     ^^

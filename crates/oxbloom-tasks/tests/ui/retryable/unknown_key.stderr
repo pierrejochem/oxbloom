@@ -1,0 +1,5 @@
+error: unknown key on the retryable method `fetch`; the keys are `max_attempts`, `backoff`, `initial`, `multiplier`, `max_delay`, `jitter` and `retry_if`
+ --> tests/ui/retryable/unknown_key.rs:6:17
+  |
+6 |     #[retryable(attempts = 3)]
+  |                 ^^^^^^^^

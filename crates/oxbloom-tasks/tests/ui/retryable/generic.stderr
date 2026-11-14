@@ -1,0 +1,5 @@
+error: the retryable method `fetch` cannot have generic parameters
+ --> tests/ui/retryable/generic.rs:7:19
+  |
+7 |     async fn fetch<T: Default>(&self) -> Result<T, String> {
+  |                   ^^^^^^^^^^^^

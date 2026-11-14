@@ -20,4 +20,4 @@ oxbloom-core = { path = "../oxbloom-core" }
 oxbloom-di = { path = "../oxbloom-di" }
 oxbloom-tasks = { path = "../oxbloom-tasks" }
 oxbloom-web = { path = "../oxbloom-web" }
-tokio = { version = "1.54.1", features = ["rt", "macros"] }
+tokio = { version = "1.54.1", features = ["rt", "macros", "test-util"] }
