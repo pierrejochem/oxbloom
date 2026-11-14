@@ -8,6 +8,7 @@
   var ICONS = {
     home: '<path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/>',
     activity: '<path d="M3 12h4l3-8 4 16 3-8h4"/>',
+    clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
     terminal: '<path d="M4 17l6-6-6-6"/><path d="M12 19h8"/>',
     boxes: '<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/>',
     sliders: '<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',
@@ -55,7 +56,7 @@
     ["06-conditions", "branch"], ["07-logging", "file"], ["08-security", "shield"],
     ["09-errors", "alert"], ["10-json", "braces"], ["11-cors", "globe"],
     ["12-compression", "archive"], ["13-static", "folder"], ["14-example", "code"],
-    ["15-http", "network"], ["16-ssl", "shield"], ["17-actuator", "activity"], ["18-roadmap", "map"], ["API", "book"], ["ROADMAP-core", "map"],
+    ["15-http", "network"], ["16-ssl", "shield"], ["17-actuator", "activity"], ["18-tasks", "clock"], ["19-roadmap", "map"], ["API", "book"], ["ROADMAP-core", "map"],
     ["ROADMAP-modules", "map"],
   ];
   function iconFor(href) {

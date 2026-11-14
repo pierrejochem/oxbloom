@@ -9,18 +9,19 @@ Only what is implemented and tested is documented as available. Anything else is
 | Crate | Purpose | Key public items |
 |---|---|---|
 | `oxbloom-core` | Shared types | `HttpMethod`, `InvalidHttpMethod`, `Clock`, `SystemClock` |
-| `oxbloom-macros` | Procedural macros | `#[controller]`, `#[get]`, `#[post]`, `#[put]`, `#[patch]`, `#[delete]`, `#[head]`, `#[options]`, `#[component]`, `#[configuration]`, `#[bean]` (with condition options), `#[auto_configuration]` (used through `oxbloom-boot`) |
+| `oxbloom-macros` | Procedural macros | `#[controller]`, `#[get]`, `#[post]`, `#[put]`, `#[patch]`, `#[delete]`, `#[head]`, `#[options]`, `#[component]`, `#[configuration]`, `#[bean]` (with condition options), `#[auto_configuration]` (used through `oxbloom-boot`), `#[scheduling]` and `#[scheduled]` (used through `oxbloom-tasks`) |
 | `oxbloom-web` | Router, request/response, Hyper server, filters | `App`, `Router`, `RouterConfig`, `Route`, `Request`, `Response`, `IntoResponse`, `Controller`, `RouteError`, `Filter`, `Next`, `Ordered`, `order` (with `order::CORS`, `order::NEGOTIATION` and `order::COMPRESSION`), `RequestLogFilter`, `CorsConfig`, `CorsFilter`, `CorsError`, `CompressionConfig`, `CompressionLevel`, `CompressionFilter`, `codecs`, `StaticResources`, `ResourceSource`, `DiskResources`, `EmbeddedResources`, `Resource`, `ResourceError`, `Json` and `JsonBody` (feature `json`), `HttpError`, `ErrorValue`, `ErrorAttributes`, `RequestInfo`, `ErrorRenderer`, `ProblemRenderer`, `ClientInfo`, `Scheme`, `ForwardedConfig`, `ForwardStrategy`, `TrustedProxies`, `ProxyParseError`, `App::serve_tls` (feature `tls`) |
 | `oxbloom-di` | Singleton dependency injection: traits, collections, lifecycle, lazy beans, bean factories, profiles, conditions and groups | `ContainerBuilder`, `Container`, `Resolver`, `Component`, `Configuration`, `Lifecycle`, `ShutdownReport`, `DestroyFailure`, `Inject`, `BeanFn`, `TryBeanFn`, `DiError`, `ErrorSource`, `Environment`, `ConditionContext`, `ConditionOutcome`, `Conditions`, `ConditionReport`, `ConditionRecord` |
 | `oxbloom-config` | Typed config: TOML + imports, profiles, env and CLI sources, placeholders, origins | `Config`, `ConfigBuilder`, `Secret`, `ConfigError`, `Origin`, `DataSize`, `ConfigWarning` |
 | `oxbloom-security` | Filter-chain security, JWT resource server | `HttpSecurity`, `SecurityFilterChain`, `JwtDecoderBuilder`, `JwksSource`, `Authentication`, `jwt_decoder_from_config`, `jwks_ssl_bundle`, `ReqwestJwksFetcher` with `with_tls` (feature `jwks`) |
-| `oxbloom-boot` | Application entry point: lifecycle events, runners, services, signals, exit codes, banner, failure analysis, auto-configuration and the conditions report | `OxbloomApplication`, `OxbloomApplicationBuilder`, `ApplicationArguments`, `RunListener`, `ApplicationRunner`, `CommandLineRunner`, `Service`, `ExitCodeGenerator`, `ShutdownHandle`, `StartupError`, `StartupPhase`, `ServiceError`, `RunnerError`, `ExitStatus`, `Banner`, `FailureAnalysis`, `FailureAnalyzer`, `AutoConfiguration`, `AutoConfigurations`, `ConfigRef`, `auto_configuration`, `Conditions`, `Configuration`, `PropertyMetadata`, `boot_properties`, `WebServer`, `BindError`, `WebServerAutoConfiguration` and `RequestLogAutoConfiguration` (feature `web`), `auto_configurations` (feature `security` or `web`), `JwtDecoderAutoConfiguration`, `SecurityAutoConfiguration` and `SecurityCustomizer` (feature `security`), `WebServer::with_ssl` and `SslAutoConfiguration` (feature `ssl`), `ActuatorAutoConfiguration` (feature `actuator`), `OxbloomApplicationBuilder::logging` (feature `logging`), `async_trait` |
+| `oxbloom-boot` | Application entry point: lifecycle events, runners, services, signals, exit codes, banner, failure analysis, auto-configuration and the conditions report | `OxbloomApplication`, `OxbloomApplicationBuilder`, `ApplicationArguments`, `RunListener`, `ApplicationRunner`, `CommandLineRunner`, `Service`, `ExitCodeGenerator`, `ShutdownHandle`, `StartupError`, `StartupPhase`, `ServiceError`, `RunnerError`, `ExitStatus`, `Banner`, `FailureAnalysis`, `FailureAnalyzer`, `AutoConfiguration`, `AutoConfigurations`, `ConfigRef`, `auto_configuration`, `Conditions`, `Configuration`, `PropertyMetadata`, `boot_properties`, `WebServer`, `BindError`, `WebServerAutoConfiguration` and `RequestLogAutoConfiguration` (feature `web`), `auto_configurations` (feature `security` or `web`), `JwtDecoderAutoConfiguration`, `SecurityAutoConfiguration` and `SecurityCustomizer` (feature `security`), `WebServer::with_ssl` and `SslAutoConfiguration` (feature `ssl`), `ActuatorAutoConfiguration` (feature `actuator`), `TasksAutoConfiguration` and `SchedulerService` (feature `tasks`), `OxbloomApplicationBuilder::logging` (feature `logging`), `async_trait` |
 | `oxbloom-logging` | `tracing` subscriber from the `logging.*` keys: levels, groups, console format and color, rotating file output, JSON lines, runtime change | `Level`, `ParseLevelError`, `ConsoleFormat`, `ConsoleColor`, `FileRotation`, `FileFormat`, `JsonField`, `LoggingError`, `LoggingSystem`, `PROPERTIES` |
 | `oxbloom-test` | Test support (dev-dependency): run an application context through the real boot lifecycle, captured output, temporary config directories, controllable clocks, a test client and whole applications on port 0 | `ContextRunner`, `ContextView`, `FailureView`, `Captured`, `Log`, `TempConfigDir`, `FixedClock`, `ManualClock`, `TestClient`, `TestResponse`, `TestApp` and `RunningApp` (feature `web`), `TestClient::connect_tls` and `RunningApp::client_tls` (feature `tls`) |
 | `oxbloom-ssl` | Named SSL bundles from the `ssl.*` keys (PEM and PKCS#12), reloaded when their files change, with certificate validity warnings | `SslBundles`, `SslBundle`, `SslError`, `CertValidity`, `ReloadTask`, `PROPERTIES` |
 | `oxbloom-actuator` | Operational endpoints: availability state, health indicators, build and platform info, runtime log levels, a certificate validity indicator | `Availability`, `Liveness`, `Readiness`, `Status`, `Health`, `HealthIndicator`, `HealthRunner`, `BuildInfo`, `build_info!`, `build::emit`, `Platform`, `Info`, `InfoContributor`, `ActuatorSettings`, `ActuatorController` (feature `web`), `SslHealthIndicator` (feature `ssl`) |
+| `oxbloom-tasks` | Task scheduling: fixed-rate, fixed-delay and cron triggers with zones, the `Scheduler`, and the `#[scheduling]` and `#[scheduled]` macros | `Trigger`, `CronExpr`, `Zone`, `TriggerError`, `parse_duration`, `Task`, `Scheduling`, `Outcome`, `TaskError`, `BoxFuture`, `RunFn`, `Scheduler`, `SchedulerConfig`, `TaskStatus`, `TasksSettings`, `scheduling`, `scheduled` |
 | `oxbloom-cli` | `oxbloom` binary: project generator | `new`, `list` |
-| `examples/todos` | A CRUD REST API on the web, security and logging stack (controller with `#[post]`, `#[get]`, `#[put]`, `#[patch]`, `#[delete]`, a thread-safe in-memory store, `Json<T>` and `Request::json`, `tracing` events at the target `todos`) | `cargo run -p todos -- --server.port=0` or `make run-todos` |
+| `examples/todos` | A CRUD REST API on the web, security and logging stack (controller with `#[post]`, `#[get]`, `#[put]`, `#[patch]`, `#[delete]`, a thread-safe in-memory store, `Json<T>` and `Request::json`, `tracing` events at the target `todos`, a scheduled cleanup task) | `cargo run -p todos -- --server.port=0` or `make run-todos` |
 | `examples/hello` | A small application that uses the current features (configuration and beans, trait injection, lifecycle, runners, listeners, exit codes, security and `WebServer` auto-configured through a `SecurityCustomizer` and a `dyn Controller`, a custom failure analyzer, an auto-configuration with a user override) | `cargo run -p hello -- --server.port=0` |
 
 Feature flags: `oxbloom-web/json` (default) adds `Json`, `JsonBody`, `Request::json` and the built-in `Accept` check; `oxbloom-web/gzip`, `brotli` and `zstd` enable one codec each of the compression filter and `oxbloom-web/compression` (default) enables all three (CORS and static resources need no feature); `oxbloom-web/di` adds `App::controller` and `AppError`. `oxbloom-config/di`
@@ -37,7 +38,8 @@ startup events, the `LoggingSystem` bean and a built-in analyzer for invalid `lo
 SSL bundle errors. `oxbloom-web/tls` adds `App::serve_tls`. `oxbloom-ssl/di` implements
 `oxbloom_di::Lifecycle` for `SslBundles`. `oxbloom-boot/actuator` (it turns `web` on) enables `oxbloom-actuator/web` and adds
 `ActuatorAutoConfiguration`; with `logging` or `ssl` it also enables `oxbloom-actuator/logging` or
-`oxbloom-actuator/ssl`. `oxbloom-test/tls` adds `TestClient::connect_tls` and
+`oxbloom-actuator/ssl`. `oxbloom-boot/tasks` adds `oxbloom-tasks`, `TasksAutoConfiguration` and
+`SchedulerService`; the macros `#[scheduling]` and `#[scheduled]` have no feature flag. `oxbloom-test/tls` adds `TestClient::connect_tls` and
 `RunningApp::client_tls`. With either
 feature, `oxbloom_boot::auto_configurations()` lists the auto-configurations of the enabled
 features. `oxbloom-boot` always enables `oxbloom-config/di`.
@@ -3616,7 +3618,8 @@ assert!(PropertyMetadata::to_json(&list).starts_with("[{\"key\":"));
 for the enabled features, in dependency order: `JwtDecoderAutoConfiguration` and
 `SecurityAutoConfiguration` with `security`, `SslAutoConfiguration` with `ssl`,
 `ActuatorAutoConfiguration` with `actuator`, then
-`RequestLogAutoConfiguration` and `WebServerAutoConfiguration` with `web`. Without
+`RequestLogAutoConfiguration` and `WebServerAutoConfiguration` with `web`, and last
+`TasksAutoConfiguration` with `tasks`. Without
 either feature the function does not exist. Remove one entry with `exclude::<A>()`.
 
 ```rust
@@ -3828,6 +3831,45 @@ let keys: Vec<_> = OxbloomApplication::builder()
     .map(|p| p.key)
     .collect();
 assert!(keys.contains(&"management.endpoints.base-path") && keys.contains(&"management.health.timeout"));
+```
+
+#### `TasksAutoConfiguration` and `SchedulerService` (feature `tasks`)
+
+Runs the tasks of every `dyn Scheduling` bean with the scheduler of [`oxbloom-tasks`](#413-oxbloom-tasks). The
+group runs only when the application registers at least one `dyn Scheduling` bean (the condition `on_bean`) and
+`tasks.scheduling.enabled` is missing or the text `true` (`on_property_value_or_missing`); any other value skips
+the group silently, and the conditions report names the reason. It registers the `TasksSettings` of the
+`tasks.scheduling.*` keys (an unknown key directly under `tasks` or `tasks.scheduling`, or a bad value, fails
+the build with `DiError::Creation` whose source is the `ConfigError` naming the key); a `Scheduler`, unless the
+application registered one, built with `Scheduler::try_new` from the tasks of every `dyn Scheduling` bean, the
+settings and the `dyn Clock` bean (the system clock without one), where a bad cron expression, zone or
+duration, a zero `fixed_rate` or `fixed_delay`, or two tasks with the same name fail the build with
+`DiError::Creation` for `Scheduler` whose source is the `TaskError`; and a `SchedulerService` as a
+`dyn Service`. The service has `phase()` `i32::MAX`, the phase of the web server, and its registration has the
+DI order `i32::MAX`, so it starts after the server and stops before it. Boot fires `ready` after all services
+started, so scheduled work can begin before readiness flips; use `initial_delay` for warm-up.
+`SchedulerService::new(scheduler)` takes an `Arc<Scheduler>`, `scheduler()` returns it, `start` starts the
+scheduler and `stop` stops it, and `name()` is `TaskScheduler`. The property metadata lists the five
+`tasks.scheduling.*` keys, which are in the table under [`oxbloom-tasks`](#413-oxbloom-tasks).
+
+```rust
+use std::sync::Arc;
+use oxbloom_boot::{OxbloomApplication, SchedulerService, Service, TasksAutoConfiguration};
+use oxbloom_core::{Clock, SystemClock};
+use oxbloom_tasks::{Scheduler, SchedulerConfig};
+
+let keys: Vec<_> = OxbloomApplication::builder()
+    .auto_configuration::<TasksAutoConfiguration>()
+    .property_metadata()
+    .iter()
+    .map(|p| p.key)
+    .collect();
+assert!(keys.contains(&"tasks.scheduling.zone") && keys.contains(&"tasks.scheduling.max-concurrent"));
+
+let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+let scheduler = Arc::new(Scheduler::try_new(Vec::new(), SchedulerConfig::default(), clock)?);
+let service = SchedulerService::new(scheduler);
+assert_eq!((service.phase(), service.name()), (i32::MAX, "TaskScheduler"));
 ```
 
 #### `OxbloomApplicationBuilder::listener(listener)`
@@ -5681,6 +5723,227 @@ assert_eq!(indicator.health().await.status, Status::Up);
 # }
 ```
 
+### 4.13 `oxbloom-tasks`
+
+Scheduled tasks: fixed-rate, fixed-delay and cron triggers, the `Scheduler` that runs them on tokio, and the
+macros `#[scheduling]` and `#[scheduled]`. In an application, `TasksAutoConfiguration` (feature `tasks` of
+`oxbloom-boot`) wires everything; use the crate directly to build a `Scheduler` yourself. The guide chapter is
+[Task scheduling](guide/18-tasks.md#task-scheduling). The macros live in `oxbloom-macros` without a feature
+flag and are re-exported by this crate. Rules to remember:
+
+- A cron expression has six fields, seconds first. Days of the week follow Spring: `0` and `7` are Sunday, `1`
+  is Monday, and the names `SUN` to `SAT` work. A range that mixes a name and a number is not translated; use
+  one kind in a range. Cron evaluation ends at the year 2100.
+- A cron trigger without a zone uses the zone of the scheduler (`tasks.scheduling.zone`, default UTC). A local
+  time skipped by daylight saving time does not fire, and a repeated one fires once; sub-hourly expressions have
+  a gap of about 75 minutes on a fall-back day.
+- A task never runs concurrently with itself: a trigger that finds the previous run active is skipped, counted
+  and logged at `warn`. An `Err` or a panic is logged at `error` and the schedule continues.
+- The attribute literals and `parse_duration` accept a whole number with `ms`, `s`, `m`, `h` or `d`; the
+  configuration binder accepts more forms, such as `1.5s`.
+- A plain `fn` runs in `spawn_blocking` and cannot be aborted: `stop` returns at the deadline and leaves the
+  thread to finish.
+- Events use the log target `oxbloom::tasks`.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `tasks.scheduling.enabled` | `true` | Read by boot; only `true` (or a missing key) switches the group on. |
+| `tasks.scheduling.max-concurrent` | `8` | How many runs execute at the same time across all tasks; at least 1. |
+| `tasks.scheduling.shutdown-timeout` | `10s` | How long `stop` waits for runs in flight before it aborts them. |
+| `tasks.scheduling.zone` | `UTC` | The zone of cron tasks without a `zone` of their own. |
+| `tasks.scheduling.initial-delay` | `0s` | The initial delay of tasks without an `initial_delay` of their own. |
+
+Imports for the examples below:
+
+```rust
+use std::sync::Arc;
+use std::time::{Duration, UNIX_EPOCH};
+use oxbloom_config::Config;
+use oxbloom_core::{Clock, SystemClock};
+use oxbloom_tasks::{
+    CronExpr, Outcome, Scheduler, SchedulerConfig, Scheduling, Task, TasksSettings, Trigger, Zone,
+    parse_duration, scheduling,
+};
+```
+
+#### `#[scheduling]` and `#[scheduled(..)]`
+
+`#[scheduling]` goes on an inherent `impl` block and generates `impl ::oxbloom_tasks::Scheduling` with one
+`Task` per `#[scheduled]` method, in declaration order. The generated code names the crate `oxbloom_tasks`, so
+the dependency must not be renamed. The keys of `#[scheduled(..)]` are string literals: exactly one of
+`cron = ".."`, `fixed_rate = ".."` and `fixed_delay = ".."`, and optionally `initial_delay = ".."`,
+`zone = ".."` (with `cron` only) and `name = ".."` (default `Type::method`). A method takes only `&self` and
+returns `()` or `Result<(), E>` where `E: Display`; an `async fn` is awaited and a plain `fn` runs in
+`tokio::task::spawn_blocking`. Trait impls, two triggers or none, unknown or repeated keys, an empty `name`,
+other arguments, generic methods, other return types and `#[scheduled]` outside the impl are compile errors.
+A literal that does not parse gives `Task::invalid`, so `Scheduler::try_new` fails with a `TaskError` naming the
+task and the key. Not supported: a `#[cfg]`-gated `#[scheduled]` method and `unsafe fn`. A method named
+`clone`, `to_string` or `scheduled` can collide with methods of `Arc` or of a trait. The application
+registers the bean with `.provides(.. -> Arc<dyn Scheduling>)`.
+
+```rust
+struct Reports;
+
+#[scheduling]
+impl Reports {
+    #[scheduled(cron = "0 0 3 * * *", zone = "Europe/Amsterdam")]
+    async fn nightly(&self) -> Result<(), std::io::Error> {
+        Ok(())
+    }
+
+    #[scheduled(fixed_rate = "30s", initial_delay = "5s", name = "refresh")]
+    fn refresh(&self) {}
+}
+
+let tasks = Arc::new(Reports).scheduled();
+assert_eq!(tasks[0].name(), "Reports::nightly");
+assert_eq!(tasks[1].name(), "refresh");
+assert_eq!(tasks[1].delay(), Some(Duration::from_secs(5)));
+```
+
+#### `Scheduling`
+
+`pub trait Scheduling: Send + Sync + 'static` with `fn scheduled(self: Arc<Self>) -> Vec<Task>`. The macro
+implements it; implement it by hand to build tasks from data.
+
+```rust
+struct Heartbeat;
+
+impl Scheduling for Heartbeat {
+    fn scheduled(self: Arc<Self>) -> Vec<Task> {
+        let trigger = Trigger::fixed_rate(Duration::from_secs(10)).expect("non-zero period");
+        vec![Task::new("heartbeat", trigger, || Box::pin(async { Ok(()) }))]
+    }
+}
+
+let source: Arc<dyn Scheduling> = Arc::new(Heartbeat);
+assert_eq!(source.scheduled()[0].name(), "heartbeat");
+```
+
+#### `Trigger`
+
+`Trigger` is `FixedRate(Duration)`, `FixedDelay(Duration)` or `Cron(CronExpr, Option<Zone>)`. The constructors
+are `Trigger::fixed_rate(period: Duration)` and `Trigger::fixed_delay(delay: Duration)` (zero is a
+`TriggerError`), `Trigger::cron(expression: &str, zone: Zone)` and
+`Trigger::cron_in_default_zone(expression: &str)`, all returning `Result<Trigger, TriggerError>`. The second
+cron form leaves the zone open for the scheduler to fill, so it is not equal under `PartialEq` to
+`Trigger::cron(x, Zone::Utc)`. `describe(&self) -> String` gives text such as `fixed rate 5s` or
+`cron 0 0 3 * * * (UTC)`. `next(&self, last_start: Option<SystemTime>, last_end: Option<SystemTime>, now: SystemTime) -> Option<SystemTime>`
+is a pure function: a fixed rate is `last_start + period`, a fixed delay is `last_end + delay`, both are `now`
+without history and never earlier than `now`; a cron trigger ignores the history and returns the first match
+strictly after `now`. Missed instants are not caught up. A backward clock delays a fixed rate or fixed delay
+by the jump here; the `Scheduler` clamps that wait to one period.
+
+```rust
+let rate = Trigger::fixed_rate(Duration::from_secs(10))?;
+let start = UNIX_EPOCH + Duration::from_secs(1_000);
+assert_eq!(rate.next(Some(start), None, start), Some(start + Duration::from_secs(10)));
+assert!(Trigger::fixed_delay(Duration::ZERO).is_err());
+
+let nightly = Trigger::cron("0 0 3 * * *", Zone::parse("Europe/Amsterdam")?)?;
+assert_eq!(nightly.describe(), "cron 0 0 3 * * * (Europe/Amsterdam)");
+assert_ne!(Trigger::cron_in_default_zone("0 0 3 * * *")?, Trigger::cron("0 0 3 * * *", Zone::Utc)?);
+```
+
+#### `CronExpr`, `Zone`, `TriggerError` and `parse_duration`
+
+`CronExpr::parse(expression: &str) -> Result<CronExpr, TriggerError>` checks the six fields and translates the
+numeric days of the week; `as_str()` returns the expression with single spaces, not the translation, and
+`Display` writes the same. `Zone` is `Utc` (the default) or `Named(chrono_tz::Tz)`; `Zone::parse(name: &str)`
+accepts `UTC` or an IANA name and its `Display` writes it back. `TriggerError` has a message that never repeats
+the offending value. `parse_duration(text: &str) -> Result<Duration, TriggerError>` takes a whole number with
+one of `ms`, `s`, `m`, `h` or `d`; a fraction, a sign, a missing unit or an unknown unit is an error.
+
+```rust
+assert!(CronExpr::parse("0 0 9 * * MON-FRI").is_ok());
+assert!(CronExpr::parse("*/5 * * * *").is_err()); // five fields
+assert_eq!(Zone::parse("Europe/Amsterdam")?.to_string(), "Europe/Amsterdam");
+assert!(Zone::parse("Mars/Olympus_Mons").is_err());
+assert_eq!(parse_duration("250ms")?, Duration::from_millis(250));
+assert!(parse_duration("1.5s").is_err());
+```
+
+#### `Task`, `BoxFuture`, `RunFn` and `Outcome`
+
+`Task::new(name: impl Into<String>, trigger: Trigger, run: F)` takes a closure
+`Fn() -> BoxFuture<'static, Result<(), String>> + Send + Sync + 'static`; the error is the `Display` text of
+the task's own error. `initial_delay(self, delay: Duration) -> Task` postpones the first run, `name()`,
+`trigger() -> Option<&Trigger>` and `delay() -> Option<Duration>` read it back, and
+`Task::invalid(name, key: &'static str, error: TriggerError)` makes a task that never runs and makes
+`Scheduler::try_new` fail naming the key. `BoxFuture<'a, T>` is `Pin<Box<dyn Future<Output = T> + Send + 'a>>`
+and `RunFn` is the boxed closure type. `Outcome` is `Ok`, `Failed`, `Panicked` or `Skipped`.
+
+```rust
+let task = Task::new("cleanup", Trigger::fixed_delay(Duration::from_secs(60))?, || {
+    Box::pin(async { Err("disk full".to_owned()) })
+})
+.initial_delay(Duration::from_secs(5));
+assert_eq!(task.trigger().map(Trigger::describe).as_deref(), Some("fixed delay 60s"));
+assert_eq!(task.delay(), Some(Duration::from_secs(5)));
+assert_ne!(Outcome::Skipped, Outcome::Ok);
+```
+
+#### `Scheduler`, `SchedulerConfig` and `TaskStatus`
+
+`Scheduler::try_new(tasks: Vec<Task>, config: SchedulerConfig, clock: Arc<dyn Clock>) -> Result<Scheduler, TaskError>`
+builds a scheduler; nothing runs until `start`. It fails for the first `Task::invalid` and for two tasks with
+the same name. `SchedulerConfig` has the public fields `max_concurrent` (zero counts as one),
+`shutdown_timeout`, `zone` and `initial_delay`, and its default is 8, ten seconds, UTC and zero.
+`async fn start(&self)` spawns one loop per task on the current tokio runtime (it panics outside a runtime) and
+does nothing when called twice or after `stop`. `async fn stop(&self)` stops the triggers, waits up to
+`shutdown_timeout` for runs in flight, aborts the rest with a `warn` event per task and does nothing when
+called again. `is_running(&self) -> bool` is true between `start` and `stop`. `tasks(&self) -> Vec<TaskStatus>`
+is a snapshot in the order the tasks were given; `TaskStatus` has `name`, `trigger` (as `Trigger::describe`),
+`last_start`, `last_end`, `last_outcome` and `skipped`. The scheduler reads time only from the `Clock`, sleeps
+in chunks of at most one second and re-reads it, so a forward jump gives one run and never a burst.
+
+```rust
+let task = Task::new("ping", Trigger::fixed_rate(Duration::from_secs(60))?, || Box::pin(async { Ok(()) }));
+let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+let scheduler = Scheduler::try_new(vec![task], SchedulerConfig::default(), clock)?;
+assert!(!scheduler.is_running());
+assert_eq!(scheduler.tasks()[0].trigger, "fixed rate 60s");
+
+# async fn demo(scheduler: Scheduler) {
+scheduler.start().await;
+assert!(scheduler.is_running());
+scheduler.stop().await;
+# }
+```
+
+#### `TaskError`
+
+`TaskError` names the task (`task()`) and the key (`key()`: `cron`, `zone`, `fixed_rate`, `fixed_delay`,
+`initial_delay` or `name`) and its `Display` reads
+``scheduled task `Jobs::poll`, key `fixed_delay`: fixed delay must be greater than zero``. It never shows the value.
+
+```rust
+let error = Trigger::fixed_delay(Duration::ZERO).unwrap_err();
+let task = Task::invalid("Jobs::poll", "fixed_delay", error);
+let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+let err = Scheduler::try_new(vec![task], SchedulerConfig::default(), clock).unwrap_err();
+assert_eq!((err.task(), err.key()), ("Jobs::poll", "fixed_delay"));
+```
+
+#### `TasksSettings`
+
+`TasksSettings::from_config(&config)` reads the `tasks.scheduling.*` keys, and `TasksSettings::default()` is
+the table above. The public fields are `enabled`, `max_concurrent`, `shutdown_timeout`, `zone` and
+`initial_delay`; `scheduler_config()` returns the `SchedulerConfig`. `enabled` is read by boot's
+auto-configuration only. An unknown key directly under `tasks` or `tasks.scheduling`, a wrong type or bad
+duration, a `max-concurrent` of 0 and an unknown zone are a `ConfigError` that names the key and never shows
+the value. The configuration's duration form is richer than `parse_duration`, for example `1.5s`.
+
+```rust
+let config = Config::from_str("[tasks.scheduling]\nmax-concurrent = 2\ninitial-delay = \"5s\"")?;
+let settings = TasksSettings::from_config(&config)?;
+assert_eq!(settings.max_concurrent, 2);
+assert_eq!(settings.initial_delay, Duration::from_secs(5));
+assert!(settings.enabled);
+let typo = Config::from_str("[tasks]\nschedule = true")?;
+assert!(TasksSettings::from_config(&typo).is_err());
+```
+
 ## 5. Recipe: a complete small service
 
 A configured greeting, a controller with an injected bean, and a web server started through
@@ -5773,7 +6036,7 @@ Compile-fail tests use `trybuild` (`tests/ui/*.rs` with `.stderr` snapshots). Re
 
 ## Not implemented
 
-Sessions, password login, CSRF, method security, OAuth2 login, database, jobs/queue/scheduler, metrics and
+Sessions, password login, CSRF, method security, OAuth2 login, database, jobs and queue, metrics and
 other observability beyond the actuator, React integration, `oxbloom-ai`, `oxbloom add`, MVC web style. In
 boot: analysis of failures after startup, a report format other than text. In DI: transient and request scopes,
 injection of single configuration properties, qualifiers by name, async lifecycle hooks and
@@ -5786,5 +6049,8 @@ once at startup), OCSP stapling, revocation checks, JKS keystores, encrypted PEM
 watcher (reload polls), SSL bundles for database or HTTP clients, and a limit on concurrent TLS handshakes.
 For the actuator: a separate management port, roles per endpoint, `/metrics`, `/env`, `/beans` and
 `/threaddump` endpoints, a `diskSpace` indicator, and resetting a log level through `configuredLevel: null`.
+For task scheduling: retry, backoff and jitter (C9b), an actuator `/scheduledtasks` endpoint, persistence and
+catch-up of missed runs, distributed locking, adding or removing tasks at run time, per-task concurrency limits,
+a backward clock clamp for cron tasks, and one duration grammar for configuration and attributes.
 Do not document these as available.
 When you build one, start with a spec in `docs/superpowers/specs`.
