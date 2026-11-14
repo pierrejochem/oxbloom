@@ -823,6 +823,65 @@ impl RunningApp {
         &self.client
     }
 
+    /// Returns a new HTTPS client for an application that serves `server.ssl.bundle`, trusting
+    /// only the CA certificates in `ca_pem`.
+    ///
+    /// It is [`TestClient::connect_tls`] to the address [`client`](Self::client) dials, so it
+    /// verifies the server name `localhost` and keeps one connection alive. The client is
+    /// owned by the caller; [`stop`](Self::stop) still ends the application while it holds an
+    /// idle connection, because the server closes idle connections when it shuts down.
+    ///
+    /// # Panics
+    ///
+    /// Panics with `connect_tls: the CA PEM holds no valid certificate` when `ca_pem` holds no
+    /// usable certificate. The message never contains the PEM text.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use oxbloom_boot::SslAutoConfiguration;
+    /// use oxbloom_test::TestApp;
+    /// use oxbloom_web::{Controller, HttpMethod, Route};
+    ///
+    /// struct Ping;
+    /// impl Controller for Ping {
+    ///     fn routes(self: Arc<Self>) -> Vec<Route> {
+    ///         vec![Route::new(HttpMethod::Get, "/ping", |_| async { "pong" })]
+    ///     }
+    /// }
+    ///
+    /// # tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(async {
+    /// // A self-signed `localhost` certificate is its own CA.
+    /// let key = rcgen::KeyPair::generate().unwrap();
+    /// let cert = rcgen::CertificateParams::new(vec!["localhost".to_string()])
+    ///     .unwrap()
+    ///     .self_signed(&key)
+    ///     .unwrap();
+    /// let toml = format!(
+    ///     "[ssl.bundle.pem.web]\ncertificate = '''\n{}'''\nprivate-key = '''\n{}'''\n\
+    ///      [server.ssl]\nbundle = \"web\"\n",
+    ///     cert.pem(),
+    ///     key.serialize_pem()
+    /// );
+    /// let app = TestApp::web()
+    ///     .auto_configuration::<SslAutoConfiguration>()
+    ///     .config_str(toml)
+    ///     .configure(|b| b.instance(Ping).provides(|c: Arc<Ping>| -> Arc<dyn Controller> { c }))
+    ///     .start()
+    ///     .await;
+    /// let client = app.client_tls(&cert.pem());
+    /// assert_eq!(client.get("/ping").send().await.text(), "pong");
+    /// drop(client);
+    /// app.stop().await;
+    /// # });
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
+    #[cfg(feature = "tls")]
+    pub fn client_tls(&self, ca_pem: &str) -> TestClient {
+        TestClient::connect_tls(dialable(self.addr), ca_pem)
+    }
+
     /// Returns the address the web server is bound to, on `127.0.0.1` by default (boot's default
     /// `server.address`). A wildcard address such as `0.0.0.0` is returned as bound.
     ///

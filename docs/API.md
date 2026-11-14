@@ -4732,7 +4732,8 @@ JWT auto-configuration see it.
 
 The feature `web` of `oxbloom-test` (off by default) adds `TestClient`, `TestResponse` and `TestApp`. The
 feature `json` (it turns `web` on) adds `RequestBuilder::json` and `TestResponse::json`. The features
-`security` and `logging` forward to boot, as above, and `TestApp::secured()` needs `security`.
+`security` and `logging` forward to boot, as above, and `TestApp::secured()` needs `security`. The feature
+`tls` (it turns `web` and boot's `ssl` on) adds `TestClient::connect_tls` and `RunningApp::client_tls`.
 
 ##### `TestClient`
 
@@ -4773,6 +4774,22 @@ does not own. Nothing connects until the first request. `TestApp` uses it.
 let client = TestClient::connect("127.0.0.1:8080".parse()?);
 let res = client.post("/items").json(&serde_json::json!({ "name": "tea" })).send().await;
 assert_eq!(res.status(), 201);
+```
+
+HTTPS, `TestClient::connect_tls(addr, ca_pem)` (feature `tls`) sends real HTTP/1.1 over TLS to a server
+that already runs, and trusts only the CA certificates in `ca_pem`. Use it for a server that serves
+`server.ssl.bundle` or `App::serve_tls`. Every connection sends and verifies the server name `localhost`,
+whatever the IP of `addr` is, so the test certificate needs the DNS name `localhost`. The client offers
+ALPN `http/1.1` and uses the `aws-lc-rs` provider. A server certificate the CA did not sign makes `send`
+panic with the method, the path and the handshake error, for example
+`GET /hello failed: tls handshake error: invalid peer certificate: UnknownIssuer`. A `ca_pem` without a
+usable certificate panics at once with the fixed message
+`connect_tls: the CA PEM holds no valid certificate`; the PEM text is never part of a message.
+
+```rust
+// `ca_pem` is the PEM text of the test CA, generated with `rcgen` when the test runs.
+let client = TestClient::connect_tls(addr, &ca_pem);
+assert_eq!(client.get("/ping").send().await.text(), "pong");
 ```
 
 Each socket client keeps one HTTP/1.1 connection and reuses it. The socket transports add the headers
@@ -4885,7 +4902,34 @@ assert_eq!(expired.status(), 401);
 app.stop().await;
 ```
 
-A bearer token, a header value or a body is never part of a panic message from the client.
+An application that serves HTTPS answers only TLS on its port, so `client()` cannot reach it.
+`client_tls(ca_pem)` (feature `tls`) returns a new, owned `TestClient::connect_tls` client to the same
+address. The certificate and key below are generated with `rcgen` at test time; a self-signed
+`localhost` certificate is its own CA.
+
+```rust
+use oxbloom_boot::SslAutoConfiguration;
+
+let key = rcgen::KeyPair::generate()?;
+let cert = rcgen::CertificateParams::new(vec!["localhost".to_string()])?.self_signed(&key)?;
+let app = TestApp::web()
+    .auto_configuration::<SslAutoConfiguration>()
+    .config_str(format!(
+        "[ssl.bundle.pem.web]\ncertificate = '''\n{}'''\nprivate-key = '''\n{}'''\n\
+         [server.ssl]\nbundle = \"web\"\n",
+        cert.pem(),
+        key.serialize_pem()
+    ))
+    .configure(|b| b.instance(Ping).provides(|c: Arc<Ping>| -> Arc<dyn Controller> { c }))
+    .start()
+    .await;
+let client = app.client_tls(&cert.pem());
+assert_eq!(client.get("/ping").send().await.text(), "pong");
+drop(client);
+app.stop().await;
+```
+
+A bearer token, a header value, a body or a CA PEM is never part of a panic message from the client.
 
 ##### Bounds and limits
 
@@ -4922,8 +4966,8 @@ examples keep their own start harness because `TestApp` cannot take an `OxbloomA
 
 ##### Features and dev-dependencies
 
-A crate that gives its `oxbloom-test` dev-dependency the features `web` or `security` turns the same
-features of `oxbloom-boot` on for the crate's own test builds, because Cargo unifies the features of one
+A crate that gives its `oxbloom-test` dev-dependency the features `web`, `security` or `tls` turns the
+same features of `oxbloom-boot` (`ssl` for `tls`) on for the crate's own test builds, because Cargo unifies the features of one
 build. So `cargo test -p <crate> --no-default-features` is no longer feature-off for the code it tests.
 `cargo test --no-default-features --lib` does not avoid the unification. For `oxbloom-boot`, feature-off
 coverage is (a) the compile-only builds `cargo build -p oxbloom-boot --no-default-features`,
@@ -4934,7 +4978,12 @@ coverage is (a) the compile-only builds `cargo build -p oxbloom-boot --no-defaul
 run builds `web` without `security`. Oxbloom's own boot tests are an example: with `oxbloom-test` features `web` and
 `security`, the counts of `cargo test -p oxbloom-boot` moved from 298 to 420 (`--no-default-features`),
 370 to 420 (`--features web`), 317 to 440 (`--features logging`) and 329 to 420 (`--features security`),
-with 440 for `--all-features` unchanged.
+with 440 for `--all-features` unchanged. Boot's dev-dependency also has `tls` since C7, which turns boot's
+`ssl` on in every boot test build: the counts moved from 420 to 443 (`--no-default-features`, `--features
+web`, `--features security`) and from 440 to 463 (`--features logging`), with 443 for `--features ssl` and
+463 for `--all-features` unchanged. No `cargo test -p oxbloom-boot` run builds boot without `ssl` either;
+`cargo build -p oxbloom-boot --no-default-features --features ssl` and `cargo test -p oxbloom-test
+--features web` (boot without `ssl`) cover the two sides.
 
 ## 5. Recipe: a complete small service
 

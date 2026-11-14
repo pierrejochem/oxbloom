@@ -9,7 +9,10 @@
 //! [`RunningApp`] with a connected client.
 //!
 //! The features `security` and `logging` forward to the same features of `oxbloom-boot`;
-//! `TestApp::secured` needs `security`. `web`, `security` and `logging` are off by default.
+//! `TestApp::secured` needs `security`. The feature `tls` turns on `web` and boot's `ssl` and
+//! adds `TestClient::connect_tls` and `RunningApp::client_tls`, which send HTTPS to a server
+//! whose certificate a given CA signed. `web`, `security`, `logging` and `tls` are off by
+//! default.
 //!
 //! # Examples
 //!

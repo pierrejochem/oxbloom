@@ -1709,10 +1709,13 @@ dependencies = [
  "oxbloom-di",
  "oxbloom-security",
  "oxbloom-web",
+ "rcgen",
+ "rustls",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-rustls",
 ]
 
 [[package]]

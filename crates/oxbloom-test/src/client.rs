@@ -2,8 +2,8 @@
 //!
 //! [`TestClient`] has one request builder over three transports: an [`App`] called in memory
 //! through [`App::handle_from`], a server the client owns on a free loopback port, and a server
-//! that runs elsewhere. Every transport answers with a [`TestResponse`], so one assertion style
-//! works for all of them.
+//! that runs elsewhere, over HTTP or, with the feature `tls`, over HTTPS. Every transport
+//! answers with a [`TestResponse`], so one assertion style works for all of them.
 //!
 //! Every [`RequestBuilder::send`] and [`TestClient::shutdown`] is bounded at 10 seconds. A
 //! connection error or a timeout panics with the method, the path without its query string and
@@ -24,12 +24,23 @@ use http_body_util::{BodyExt, Full};
 use hyper::client::conn::http1::{self, SendRequest};
 use hyper_util::rt::TokioIo;
 use oxbloom_web::{App, HttpMethod, Request, Response};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 /// How long one [`RequestBuilder::send`] may take, from the first byte to the whole answer.
 pub(crate) const SEND_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The panic message of a `ca_pem` without a usable certificate. It is fixed, so the PEM text
+/// never reaches a test log.
+#[cfg(feature = "tls")]
+const BAD_CA_PEM: &str = "connect_tls: the CA PEM holds no valid certificate";
+
+/// The server name every HTTPS connection sends and verifies: test certificates are issued for
+/// `localhost`, whatever loopback address the server listens on.
+#[cfg(feature = "tls")]
+const TLS_SERVER_NAME: &str = "localhost";
 
 /// How long [`TestClient::shutdown`] waits for an owned server to stop.
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -47,16 +58,75 @@ const DEFAULT_PEER: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST)
 /// the number of connections it opens depends on timing.
 struct Http {
     idle: Mutex<Option<SendRequest<Full<Bytes>>>>,
+    /// Wraps each new connection in TLS when set, for [`TestClient::connect_tls`].
+    #[cfg(feature = "tls")]
+    tls: Option<tokio_rustls::TlsConnector>,
 }
 
 /// Creates the connection holder; nothing connects until the first request.
 fn http_client() -> Http {
     Http {
         idle: Mutex::new(None),
+        #[cfg(feature = "tls")]
+        tls: None,
     }
 }
 
+/// Builds a TLS connector that trusts only the certificates in `ca_pem`, with the
+/// `aws-lc-rs` provider and ALPN `http/1.1`. Returns `None` when `ca_pem` holds a PEM error, a
+/// certificate that cannot be a trust anchor, or no certificate at all.
+#[cfg(feature = "tls")]
+fn tls_connector(ca_pem: &str) -> Option<tokio_rustls::TlsConnector> {
+    use rustls::pki_types::CertificateDer;
+    use rustls::pki_types::pem::PemObject;
+
+    let mut roots = rustls::RootCertStore::empty();
+    for cert in CertificateDer::pem_slice_iter(ca_pem.as_bytes()) {
+        roots.add(cert.ok()?).ok()?;
+    }
+    if roots.is_empty() {
+        return None;
+    }
+    let provider = std::sync::Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+    let mut config = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .expect("the aws-lc-rs provider supports the default TLS versions")
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    config.alpn_protocols = vec![b"http/1.1".to_vec()];
+    Some(tokio_rustls::TlsConnector::from(std::sync::Arc::new(
+        config,
+    )))
+}
+
+/// Runs the HTTP/1.1 handshake on `stream` and spawns the connection task.
+async fn handshake<S>(stream: S) -> Result<SendRequest<Full<Bytes>>, String>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let (sender, conn) = http1::handshake(TokioIo::new(stream))
+        .await
+        .map_err(|e| cause(&e))?;
+    // The connection task ends, and closes the socket, once its sender is dropped.
+    tokio::spawn(async move {
+        let _ = conn.await;
+    });
+    Ok(sender)
+}
+
 impl Http {
+    /// Returns whether new connections are wrapped in TLS.
+    #[cfg(feature = "tls")]
+    fn is_tls(&self) -> bool {
+        self.tls.is_some()
+    }
+
+    /// Returns whether new connections are wrapped in TLS; never without the feature `tls`.
+    #[cfg(not(feature = "tls"))]
+    fn is_tls(&self) -> bool {
+        false
+    }
+
     /// Takes the idle connection if it can take a request, or opens a new one to `addr`.
     async fn take(&self, addr: SocketAddr) -> Result<SendRequest<Full<Bytes>>, String> {
         let idle = self
@@ -73,14 +143,17 @@ impl Http {
             .await
             .map_err(|e| format!("tcp connect error: {}", cause(&e)))?;
         let _ = stream.set_nodelay(true);
-        let (sender, conn) = http1::handshake(TokioIo::new(stream))
-            .await
-            .map_err(|e| cause(&e))?;
-        // The connection task ends, and closes the socket, once its sender is dropped.
-        tokio::spawn(async move {
-            let _ = conn.await;
-        });
-        Ok(sender)
+        #[cfg(feature = "tls")]
+        if let Some(connector) = &self.tls {
+            let name = rustls::pki_types::ServerName::try_from(TLS_SERVER_NAME)
+                .expect("localhost is a valid server name");
+            let stream = connector
+                .connect(name, stream)
+                .await
+                .map_err(|e| format!("tls handshake error: {}", cause(&e)))?;
+            return handshake(stream).await;
+        }
+        handshake(stream).await
     }
 
     /// Waits until `sender` can take the next request and keeps it as the idle connection.
@@ -104,6 +177,8 @@ impl Http {
 ///   HTTP/1.1 with keep-alive. Dropping the client triggers the server's shutdown without
 ///   waiting; [`TestClient::shutdown`] waits for it.
 /// - [`TestClient::connect`] sends real HTTP/1.1 to a server it does not own.
+/// - [`TestClient::connect_tls`] (feature `tls`) sends real HTTPS with HTTP/1.1 to a server it
+///   does not own, trusting a given CA.
 ///
 /// The socket transports keep one connection alive and reuse it for the next request. They
 /// add the transport headers that an in-memory call does not have: requests get `Host`, and
@@ -171,7 +246,13 @@ impl fmt::Debug for TestClient {
         let mode = match &self.transport {
             Transport::InMemory(_) => "in_memory",
             Transport::Served(_) => "serve",
-            Transport::Connected { .. } => "connect",
+            Transport::Connected { http, .. } => {
+                if http.is_tls() {
+                    "connect_tls"
+                } else {
+                    "connect"
+                }
+            }
         };
         f.debug_struct("TestClient")
             .field("mode", &mode)
@@ -286,6 +367,73 @@ impl TestClient {
                 addr,
                 http: http_client(),
             },
+            peer: DEFAULT_PEER,
+        }
+    }
+
+    /// Creates a client that sends real HTTPS, with HTTP/1.1, to a server at `addr`, which it
+    /// does not own, and trusts only the CA certificates in `ca_pem`.
+    ///
+    /// Every connection sends and verifies the server name `localhost`, whatever the IP of
+    /// `addr` is, so the server certificate needs `localhost` among its DNS names. The client
+    /// offers ALPN `http/1.1` and uses the `aws-lc-rs` crypto provider. Like
+    /// [`connect`](Self::connect) it keeps one connection alive, nothing connects until the
+    /// first request, and the TLS handshake counts toward the 10 second bound of
+    /// [`RequestBuilder::send`]. A certificate the CA did not sign makes `send` panic with the
+    /// method, the path and the handshake error.
+    ///
+    /// # Panics
+    ///
+    /// Panics with the fixed message `connect_tls: the CA PEM holds no valid certificate` when
+    /// `ca_pem` holds no certificate, a PEM block that does not decode, or a certificate that
+    /// cannot be parsed. The message never contains the PEM text.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use oxbloom_test::TestClient;
+    /// use oxbloom_web::{App, HttpMethod, Route};
+    /// use rustls::ServerConfig;
+    /// use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
+    /// use tokio_rustls::TlsAcceptor;
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// // A self-signed `localhost` certificate is its own CA.
+    /// let key = rcgen::KeyPair::generate()?;
+    /// let cert = rcgen::CertificateParams::new(vec!["localhost".to_string()])?.self_signed(&key)?;
+    /// let mut tls = ServerConfig::builder().with_no_client_auth().with_single_cert(
+    ///     vec![cert.der().clone()],
+    ///     PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key.serialize_der())),
+    /// )?;
+    /// tls.alpn_protocols = vec![b"http/1.1".to_vec()];
+    ///
+    /// let app = App::new().route(Route::new(HttpMethod::Get, "/ping", |_| async { "pong" }))?;
+    /// let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    /// let addr = listener.local_addr()?;
+    /// let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    /// let server = tokio::spawn(app.serve_tls(listener, TlsAcceptor::from(Arc::new(tls)), async {
+    ///     let _ = stopped.await;
+    /// }));
+    ///
+    /// let client = TestClient::connect_tls(addr, &cert.pem());
+    /// assert_eq!(client.get("/ping").send().await.text(), "pong");
+    /// drop(client);
+    /// let _ = stop.send(());
+    /// server.await??;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(feature = "tls")]
+    pub fn connect_tls(addr: SocketAddr, ca_pem: &str) -> Self {
+        let Some(connector) = tls_connector(ca_pem) else {
+            panic!("{BAD_CA_PEM}");
+        };
+        let mut http = http_client();
+        http.tls = Some(connector);
+        Self {
+            transport: Transport::Connected { addr, http },
             peer: DEFAULT_PEER,
         }
     }

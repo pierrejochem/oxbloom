@@ -19,6 +19,9 @@ web = [
     "tokio/sync",
 ]
 json = ["web", "oxbloom-web/json", "dep:serde", "dep:serde_json"]
+# HTTPS for `TestClient::connect_tls` and `RunningApp::client_tls`; `oxbloom-boot/ssl` lets a
+# `TestApp` serve `server.ssl.bundle`.
+tls = ["web", "oxbloom-boot/ssl", "dep:rustls", "dep:tokio-rustls"]
 security = ["oxbloom-boot/security"]
 logging = ["oxbloom-boot/logging"]
 
@@ -35,10 +38,13 @@ oxbloom-di = { version = "0.1.0", path = "../oxbloom-di" }
 # `default-features = false` has no effect while boot's `web` feature, which `web` forwards,
 # turns the defaults of `oxbloom-web` on.
 oxbloom-web = { version = "0.1.0", path = "../oxbloom-web", default-features = false, optional = true }
+# `aws-lc-rs` is the only crypto provider: no `ring`.
+rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs", "std", "tls12"], optional = true }
 serde = { version = "1.0.229", optional = true }
 serde_json = { version = "1.0.154", optional = true }
 tempfile = "3.27.0"
 tokio = { version = "1.54.1", features = ["rt", "time", "macros"] }
+tokio-rustls = { version = "0.26.6", default-features = false, optional = true }
 
 [dev-dependencies]
 bytes = "1.12.1"
@@ -46,6 +52,8 @@ http = "1.5.0"
 jsonwebtoken = { version = "11.1.0", features = ["rust_crypto"] }
 oxbloom-security = { version = "0.1.0", path = "../oxbloom-security" }
 oxbloom-web = { version = "0.1.0", path = "../oxbloom-web" }
+# Test certificates for `tests/https.rs` are generated at test time; `aws-lc-rs` only, no `ring`.
+rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs", "pem"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 tokio = { version = "1.54.1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "net", "io-util"] }

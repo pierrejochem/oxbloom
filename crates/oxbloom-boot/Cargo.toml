@@ -34,15 +34,17 @@ tokio = { version = "1.54.1", features = ["rt", "sync", "time", "macros", "signa
 [dev-dependencies]
 http = "1.5.0"
 jsonwebtoken = { version = "11.1.0", features = ["rust_crypto"] }
-# These features turn boot's `web` and `security` on for every `cargo test -p oxbloom-boot`
-# build, so no boot test run builds `web` without `security`. Feature-off coverage is the
-# compile-only `cargo build -p oxbloom-boot --no-default-features` (also with `--features
-# logging`, `web` or `security`) and `cargo test -p oxbloom-test --features web`, which runs
-# `TestApp` against boot built with `web` and without `security`.
-oxbloom-test = { path = "../oxbloom-test", features = ["web", "security"] }
+# These features turn boot's `web`, `security` and `ssl` (through `tls`) on for every
+# `cargo test -p oxbloom-boot` build, so no boot test run builds `web` without `security` or
+# without `ssl`. Feature-off coverage is the compile-only `cargo build -p oxbloom-boot
+# --no-default-features` (also with `--features logging`, `web`, `security` or `ssl`) and
+# `cargo test -p oxbloom-test --features web`, which runs `TestApp` against boot built with
+# `web` and without `security` or `ssl`.
+oxbloom-test = { path = "../oxbloom-test", features = ["web", "security", "tls"] }
 oxbloom-web = { version = "0.1.0", path = "../oxbloom-web" }
 # Test certificates for `tests/autoconfigure_ssl.rs` are generated at test time; `aws-lc-rs`
-# only, no `ring`. The rustls client there speaks HTTPS until `TestClient` has an HTTPS mode.
+# only, no `ring`. HTTPS requests go through `RunningApp::client_tls`; a handshake-only rustls
+# client there reads which certificate the server presents.
 rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs", "pem"] }
 rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 serde_json = "1.0.154"

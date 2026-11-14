@@ -1,5 +1,6 @@
 //! `SslAutoConfiguration`, `server.ssl.bundle` and the SSL failure report, run in process
-//! through `TestApp` and `ContextRunner` and over real HTTPS with a rustls client.
+//! through `TestApp` and `ContextRunner` and over real HTTPS with `RunningApp::client_tls`.
+//! A handshake-only rustls client reads which certificate the server presents.
 //!
 //! The certificates are generated with `rcgen` when the tests run; no key is committed.
 
@@ -19,7 +20,7 @@ use oxbloom_boot::{
 use oxbloom_config::{Config, ConfigError};
 use oxbloom_core::Clock;
 use oxbloom_ssl::{SslBundles, SslError};
-use oxbloom_test::{ContextRunner, TestApp};
+use oxbloom_test::{ContextRunner, TestApp, TestClient};
 use oxbloom_web::{App, Controller, HttpMethod, Route};
 use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair};
 use rustls::pki_types::{CertificateDer, ServerName};
@@ -71,7 +72,7 @@ impl Ca {
         }
     }
 
-    /// A rustls client that trusts this CA only, with ALPN `http/1.1`.
+    /// A rustls client that trusts this CA only, with ALPN `http/1.1`, for `served_leaf`.
     fn connector(&self) -> TlsConnector {
         let mut roots = RootCertStore::empty();
         roots.add(self.der.clone()).unwrap();
@@ -127,22 +128,16 @@ fn ssl_app() -> TestApp {
         })
 }
 
-/// Sends `GET /hello` over HTTPS and returns the response text and the server's leaf.
-async fn https_hello(addr: SocketAddr, ca: &Ca) -> (String, CertificateDer<'static>) {
+/// Completes a TLS handshake with the server at `addr` and returns the leaf certificate it
+/// presents. `TestClient` does not expose the peer certificate, so this stays a rustls client.
+async fn served_leaf(addr: SocketAddr, ca: &Ca) -> CertificateDer<'static> {
     let tcp = TcpStream::connect(addr).await.unwrap();
     let name = ServerName::try_from("localhost").unwrap();
-    let mut tls = tokio::time::timeout(Duration::from_secs(5), ca.connector().connect(name, tcp))
+    let tls = tokio::time::timeout(Duration::from_secs(5), ca.connector().connect(name, tcp))
         .await
         .expect("the handshake timed out")
         .expect("the handshake failed");
-    let leaf = tls.get_ref().1.peer_certificates().unwrap()[0].clone();
-    tls.write_all(b"GET /hello HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-        .await
-        .unwrap();
-    let mut buf = Vec::new();
-    // A peer that closes without close_notify ends the read with `UnexpectedEof`.
-    let _ = tokio::time::timeout(Duration::from_secs(5), tls.read_to_end(&mut buf)).await;
-    (String::from_utf8_lossy(&buf).into_owned(), leaf)
+    tls.get_ref().1.peer_certificates().unwrap()[0].clone()
 }
 
 #[tokio::test]
@@ -159,10 +154,12 @@ async fn server_ssl_bundle_serves_https() {
         .start()
         .await;
 
-    let (response, served) = https_hello(app.addr(), &ca).await;
-    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
-    assert!(response.ends_with("hello"), "{response}");
-    assert_eq!(served, leaf.der);
+    let client = app.client_tls(&ca.pem);
+    let response = client.get("/hello").send().await;
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.text(), "hello");
+    drop(client);
+    assert_eq!(served_leaf(app.addr(), &ca).await, leaf.der);
 
     // The port speaks only HTTPS: a plaintext request gets no HTTP answer.
     let mut plain = TcpStream::connect(app.addr()).await.unwrap();
@@ -331,17 +328,23 @@ async fn replaced_certificate_reaches_a_new_connection_without_restart() {
         ))
         .start()
         .await;
-    let (response, served) = https_hello(app.addr(), &ca).await;
-    assert!(response.ends_with("hello"), "{response}");
-    assert_eq!(served, first.der);
+    assert_eq!(
+        app.client_tls(&ca.pem).get("/hello").send().await.text(),
+        "hello"
+    );
+    assert_eq!(served_leaf(app.addr(), &ca).await, first.der);
 
     let second = ca.leaf();
     write_leaf(dir.path(), &second);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
-        let (response, served) = https_hello(app.addr(), &ca).await;
-        assert!(response.ends_with("hello"), "{response}");
-        if served == second.der {
+        // A new client opens a new connection, which gets the current certificate.
+        let response = TestClient::connect_tls(app.addr(), &ca.pem)
+            .get("/hello")
+            .send()
+            .await;
+        assert_eq!(response.text(), "hello");
+        if served_leaf(app.addr(), &ca).await == second.der {
             break;
         }
         assert!(
