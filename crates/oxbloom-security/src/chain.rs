@@ -309,7 +309,9 @@ mod tests {
             &self,
             req: &AuthenticationRequest,
         ) -> Result<Authentication, AuthenticationError> {
-            let AuthenticationRequest::BearerToken(token) = req;
+            let AuthenticationRequest::BearerToken(token) = req else {
+                return Err(AuthenticationError::BadCredentials);
+            };
             match token.expose().as_str() {
                 "good" => Ok(Authentication::new(
                     "alice",

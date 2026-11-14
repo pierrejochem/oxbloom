@@ -200,6 +200,9 @@ impl fmt::Debug for Authentication {
 
 /// Credentials presented by a client, handed to an authentication provider.
 ///
+/// `Debug` never prints a token, a password or the username text. For a username and password it
+/// prints the username length only.
+///
 /// # Examples
 ///
 /// ```
@@ -208,11 +211,38 @@ impl fmt::Debug for Authentication {
 ///
 /// let request = AuthenticationRequest::BearerToken(Secret::new("token".to_string()));
 /// assert_eq!(format!("{request:?}"), "BearerToken([REDACTED])");
+///
+/// let request = AuthenticationRequest::UsernamePassword {
+///     username: "alice".to_string(),
+///     password: Secret::new("hunter2".to_string()),
+/// };
+/// let debug = format!("{request:?}");
+/// assert!(debug.contains("[REDACTED]") && !debug.contains("alice") && !debug.contains("hunter2"));
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub enum AuthenticationRequest {
     /// A bearer token taken from the `Authorization` header.
     BearerToken(Secret<String>),
+    /// A username and password, for example from a login form or HTTP Basic.
+    UsernamePassword {
+        /// The username as presented.
+        username: String,
+        /// The password as presented.
+        password: Secret<String>,
+    },
+}
+
+impl fmt::Debug for AuthenticationRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::BearerToken(token) => f.debug_tuple("BearerToken").field(token).finish(),
+            Self::UsernamePassword { username, password } => f
+                .debug_struct("UsernamePassword")
+                .field("username_len", &username.len())
+                .field("password", password)
+                .finish(),
+        }
+    }
 }
 
 /// The security state of one request: anonymous or authenticated.
@@ -338,6 +368,10 @@ pub enum AuthenticationError {
     InvalidToken,
     /// A required backend (e.g. the key source) could not be reached.
     ProviderUnavailable,
+    /// The credentials were right but the account is disabled.
+    AccountDisabled,
+    /// The credentials were right but the account is locked.
+    AccountLocked,
 }
 
 impl fmt::Display for AuthenticationError {
@@ -347,6 +381,8 @@ impl fmt::Display for AuthenticationError {
             Self::Expired => "token expired",
             Self::InvalidToken => "invalid token",
             Self::ProviderUnavailable => "authentication provider unavailable",
+            Self::AccountDisabled => "account disabled",
+            Self::AccountLocked => "account locked",
         })
     }
 }
@@ -432,6 +468,14 @@ mod tests {
         assert_eq!(
             AuthenticationError::ProviderUnavailable.to_string(),
             "authentication provider unavailable"
+        );
+        assert_eq!(
+            AuthenticationError::AccountDisabled.to_string(),
+            "account disabled"
+        );
+        assert_eq!(
+            AuthenticationError::AccountLocked.to_string(),
+            "account locked"
         );
     }
 

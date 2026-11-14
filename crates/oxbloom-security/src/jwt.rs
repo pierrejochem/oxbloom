@@ -1135,7 +1135,9 @@ impl AuthenticationProvider for JwtAuthenticationProvider {
         &self,
         req: &AuthenticationRequest,
     ) -> Result<Authentication, AuthenticationError> {
-        let AuthenticationRequest::BearerToken(token) = req;
+        let AuthenticationRequest::BearerToken(token) = req else {
+            return Err(AuthenticationError::BadCredentials);
+        };
         let jwt = self.decoder.decode(token.expose()).await?;
         self.converter.convert(&jwt)
     }

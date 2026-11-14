@@ -90,6 +90,7 @@ mod authentication;
 mod authorization;
 mod chain;
 mod config;
+mod dao;
 #[cfg(feature = "di")]
 mod di;
 mod http_security;
@@ -100,6 +101,7 @@ mod password;
 mod provider;
 #[cfg(feature = "jwks")]
 mod reqwest_fetcher;
+mod user;
 
 pub use authentication::{
     Authentication, AuthenticationError, AuthenticationRequest, GrantedAuthority,
@@ -113,6 +115,7 @@ pub use chain::{
 pub use config::{
     SECRET_KEY, jwks_ssl_bundle, jwt_decoder_from_config, jwt_decoder_from_config_with_clock,
 };
+pub use dao::DaoAuthenticationProvider;
 #[cfg(feature = "di")]
 pub use di::SecurityContainerExt;
 pub use http_security::{
@@ -132,3 +135,6 @@ pub use password::{
 pub use provider::{AuthenticationProvider, ProviderManager};
 #[cfg(feature = "jwks")]
 pub use reqwest_fetcher::ReqwestJwksFetcher;
+pub use user::{
+    InMemoryUserDetailsService, UserDetails, UserDetailsError, UserDetailsService, UserStoreError,
+};

@@ -51,6 +51,7 @@ use crate::{SecurityBuildError, SecurityFilterChain};
 ///     fn supports(&self, req: &AuthenticationRequest) -> bool {
 ///         match req {
 ///             AuthenticationRequest::BearerToken(token) => token.expose().starts_with("svc-"),
+///             _ => false,
 ///         }
 ///     }
 ///
