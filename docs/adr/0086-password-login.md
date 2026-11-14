@@ -16,7 +16,7 @@ The security chain, the providers and the `Authentication` types come from Slice
 
 **The stored form is `{id}hash`.** `DelegatingPasswordEncoder` writes `{argon2}` in front of the PHC string and verifies with the encoder that the prefix names. A hash with an unknown or missing prefix never matches. The prefix lets an application change the default algorithm or the cost later while old hashes keep verifying, and `PasswordEncoder::upgrade_encoding` tells which stored hashes are stale. The only registered id in 6a is `argon2`, and `security.password.default-encoder` accepts only that value.
 
-**No crypto provider beyond `aws-lc-rs`.** The RustCrypto `argon2` crate is pure Rust and does not pull in `ring`. The gate checks that `ring` stays out of the dependency tree.
+**No crypto provider beyond `aws-lc-rs`.** The RustCrypto `argon2` crate is pure Rust and does not pull in `ring`. It is checked by hand with `cargo tree -i ring --workspace --all-features` at each slice gate; no CI step exists.
 
 **Every failed login looks alike.** An unknown user, a wrong password, an empty password and a too long credential all end in `AuthenticationError::BadCredentials`. A disabled or a locked account is reported only after the password was right (`AccountDisabled` and `AccountLocked`), so a client without the password cannot learn that an account exists or what state it is in. The chain turns every one of these errors into the same 401 with the same `WWW-Authenticate` header; the variants are for logs and for a custom entry point. Failed logins log at `debug` on the target `oxbloom::security` with the variant and the length of the username, never the username, the password or a hash.
 
@@ -41,7 +41,8 @@ Good:
 
 Bad:
 
-- Each concurrent login uses the configured Argon2 memory, 19 MiB by default, on a blocking thread. Many parallel logins use that much memory each, and a client can send many Basic requests at once. There is no limit on concurrent logins in 6a; this is the reason one comes later, together with rate limiting.
+- `matches` verifies with the memory, iterations and lanes stored in the hash, so each concurrent login uses the memory of that hash (19 MiB with the default cost) on a blocking thread, and a client can send many Basic requests at once. There is no limit on concurrent logins in 6a. Anonymous requests are bounded only by the blocking pool of tokio (512 threads by default), so the worst case is about 512 x 19 MiB, roughly 9.5 GiB at the default cost. A login limit or a semaphore around the hash is deferred. This is the reason a login limit comes later, together with rate limiting.
+- The equal time of an unknown user holds only while stored hashes use the configured parameters: the dummy hash uses the configured cost and a stored hash keeps its own. Raising the cost without re-hashing lets timing reveal which usernames exist.
 - There is no rate limiting and no lockout counter. A client can guess passwords as fast as the hash lets it. Basic sends the password with every request, so it belongs behind TLS.
 - There is no database store, and a user change needs a restart.
 - A stale hash is not re-encoded on login. `upgrade_encoding` exists, and the application can call it, but nothing does it for it.

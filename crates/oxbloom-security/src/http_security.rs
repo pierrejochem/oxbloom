@@ -41,7 +41,7 @@ pub enum SecurityBuildError {
     InvalidPattern,
     /// `http_basic` was called but no `password_provider` was added, so no login could succeed.
     HttpBasicWithoutProvider,
-    /// The Basic realm contains a double quote, a backslash or an ASCII control character.
+    /// The Basic realm contains a double quote, a backslash or a control character.
     InvalidRealm,
 }
 
@@ -220,9 +220,10 @@ impl HttpSecurity {
 
     /// Turns on HTTP Basic: `Authorization: Basic <base64>` is decoded and handed to the
     /// password providers. Without this call a `Basic` header leaves the request anonymous.
-    /// An anonymous request or a failed login gets `WWW-Authenticate: Basic realm="Oxbloom",
-    /// charset="UTF-8"` (see [`HttpBasic::realm`]); when a bearer provider exists too, the 401
-    /// carries the Basic challenge first and the Bearer challenge second. A malformed Basic
+    /// An anonymous request gets `WWW-Authenticate: Basic realm="Oxbloom", charset="UTF-8"` (see
+    /// [`HttpBasic::realm`]); when a bearer provider exists too, that 401 carries the Basic
+    /// challenge first and the Bearer challenge second. A failed Basic login gets the Basic
+    /// challenge only, and a failed bearer token keeps its Bearer value. A malformed Basic
     /// header is a 401, never a 400. A custom [`entry_point`](Self::entry_point) replaces the
     /// default answers. [`build`](Self::build) fails with
     /// [`SecurityBuildError::HttpBasicWithoutProvider`] when no
@@ -404,7 +405,7 @@ impl HttpSecurity {
             if basic
                 .realm
                 .chars()
-                .any(|c| c == '"' || c == '\\' || c.is_ascii_control())
+                .any(|c| c == '"' || c == '\\' || c.is_control())
             {
                 return Err(SecurityBuildError::InvalidRealm);
             }
@@ -455,7 +456,7 @@ impl HttpBasic {
     }
 
     /// Sets the realm of the `WWW-Authenticate` challenge. The default is `Oxbloom`. A realm
-    /// with `"`, `\` or an ASCII control character makes [`HttpSecurity::build`] fail with
+    /// with `"`, `\` or a control character (also a C1 control such as U+0085) makes [`HttpSecurity::build`] fail with
     /// [`SecurityBuildError::InvalidRealm`].
     ///
     /// # Examples
@@ -465,6 +466,14 @@ impl HttpBasic {
     ///
     /// let err = HttpSecurity::new()
     ///     .http_basic(|b| b.realm("bad\"realm"))
+    ///     .authorize(|a| a.any_request().authenticated())
+    ///     .build()
+    ///     .err();
+    /// assert_eq!(err, Some(SecurityBuildError::InvalidRealm));
+    ///
+    /// // A C1 control character (U+0085) is rejected too.
+    /// let err = HttpSecurity::new()
+    ///     .http_basic(|b| b.realm("bad\u{85}realm"))
     ///     .authorize(|a| a.any_request().authenticated())
     ///     .build()
     ///     .err();

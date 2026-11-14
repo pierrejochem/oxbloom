@@ -81,7 +81,8 @@ fn id_param(req: &Request) -> Result<u64, HttpError> {
         })
 }
 
-/// The admin controller for `/api/admin`: one route, guarded by HTTP Basic.
+/// The admin controller for `/api/admin`: one route. The rule that guards it (HTTP Basic,
+/// role `ADMIN`) is in [`PublicPaths`].
 ///
 /// # Examples
 ///
@@ -279,9 +280,9 @@ impl TodoController {
 /// The security rules. `/api/todos/**` is open so `curl` works out of the box,
 /// and so are the actuator's health probes (`GET /actuator/health/**`).
 /// `GET /api/admin/stats` needs the role `ADMIN`, through HTTP Basic (see the
-/// README); every other
-/// path, including unknown ones and the other actuator endpoints, needs an
-/// authenticated request (without a configured `security.jwt` that means 401).
+/// README). Every other path, including unknown ones and the other actuator
+/// endpoints, needs an authenticated request: any user of HTTP Basic, including
+/// `viewer`, passes, and an anonymous request gets 401.
 ///
 /// The rules live here, and not behind `management.endpoints.health.public`,
 /// because the chain takes only one `authorize` section.

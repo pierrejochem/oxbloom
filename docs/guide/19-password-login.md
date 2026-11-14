@@ -60,11 +60,12 @@ impl UserDetailsService for Directory {
 ```rust
 use std::sync::Arc;
 use oxbloom_security::{
-    Argon2PasswordEncoder, DaoAuthenticationProvider, HttpSecurity, InMemoryUserDetailsService,
+    Argon2PasswordEncoder, DaoAuthenticationProvider, DelegatingPasswordEncoder, HttpSecurity,
+    InMemoryUserDetailsService,
 };
 
 let users = Arc::new(InMemoryUserDetailsService::new(vec![])?);
-let dao = DaoAuthenticationProvider::new(users, Arc::new(Argon2PasswordEncoder::default()));
+let dao = DaoAuthenticationProvider::new(users, Arc::new(DelegatingPasswordEncoder::argon2(Argon2PasswordEncoder::default())));
 let chain = HttpSecurity::new()
     .http_basic(|b| b.realm("Admin area"))
     .password_provider(Arc::new(dao))
@@ -92,7 +93,7 @@ The realm defaults to `Oxbloom`. The chain builds empty bodies, and the error fi
 
 With a custom `entry_point`, failed and anonymous requests get its answer instead of the Basic challenge. A malformed `Authorization` header is the exception: the chain answers it with its own 401 and the built-in challenge and never calls the custom entry point.
 
-A failed login is slower on purpose. For an unknown user the provider verifies the password against the dummy hash, so an unknown user and a wrong password take about the same time. The one exception is a user whose stored hash is malformed: that check fails at once, so such a user answers faster. Only someone who controls the user store can create that case.
+A failed login is slower on purpose. For an unknown user the provider verifies the password against the dummy hash, so an unknown user and a wrong password take about the same time, as long as the stored hashes use the configured parameters: the dummy hash uses the configured cost, while a stored hash keeps the cost it was made with, so raising the cost without re-hashing the users lets the timing reveal which usernames exist. The other exception is a user whose stored hash is malformed: that check fails at once, so such a user answers faster. Only someone who controls the user store can create that case.
 
 The hash runs in `tokio::task::spawn_blocking`, so a login does not block the worker threads of the runtime.
 
@@ -165,7 +166,7 @@ The DAO provider then uses it with the configured encoder.
 - There is no rate limiting and no lockout counter. Nothing slows down or stops a client that guesses passwords, except the cost of the hash.
 - There is no database store; `InMemoryUserDetailsService` is the only one. Users from configuration change only with a restart.
 - A stale hash is not re-encoded on login. `upgrade_encoding` reports it, and the application can re-hash itself, but nothing does it automatically.
-- Each concurrent login uses the configured Argon2 memory, 19 MiB by default, on a blocking thread. Many parallel logins use that much memory each, and there is no limit on concurrent logins yet. A login limit comes later, with rate limiting, for this reason.
+- `matches` verifies with the memory, iterations and lanes recorded in the stored hash, so each concurrent login uses the memory of that hash (19 MiB with the default cost) on a blocking thread. There is no limit on concurrent logins yet. Anonymous requests are bounded only by the blocking pool of tokio (512 threads by default), so the worst case is about 512 x 19 MiB, roughly 9.5 GiB at the default cost. A login limit or a semaphore around the hash is deferred. Rate limiting comes with it.
 - A malformed `Authorization` header bypasses a custom `entry_point` and gets the built-in Basic challenge.
 - Timing of an unknown user is equalised with a dummy hash, but a user with a malformed stored hash answers faster. The difference is narrow and needs control of the user store.
 - Basic sends the password with every request. Use it over TLS (see [SSL bundles](16-ssl-bundles.md#ssl-bundles)).

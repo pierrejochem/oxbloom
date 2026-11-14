@@ -571,7 +571,7 @@ Limits that users must know (also in the guide):
 - Keys under `security.users.<name>` are matched ignoring case, `-` and `_`: two names that differ only in these fail to load from one file (`DuplicateKey`) and merge across sources. The written spelling is kept and compared exactly at login.
 - With Basic on, the chain adds every `dyn AuthenticationProvider` bean as a password provider.
 - No rate limiting and no lockout counters; no database store; no re-encoding of a stale hash on login.
-- Each concurrent login uses the configured Argon2 memory (19 MiB by default). Many parallel logins use that much each; the ADR names this as the reason a login limit comes later.
+- `matches` verifies with the cost stored in the hash, so each concurrent login uses that memory (19 MiB by default); the dummy hash of an unknown user uses the configured cost, so equal timing holds only while stored hashes use the configured parameters. Anonymous requests are bounded only by the blocking pool of tokio (512 threads by default), so the worst case is about 512 x 19 MiB, roughly 9.5 GiB at the default cost. A login limit or a semaphore around the hash is deferred.
 - A malformed `Authorization` header bypasses a custom `entry_point` and gets the built-in Basic challenge.
 - The timing of an unknown user is equalised with a dummy hash, but a user with a malformed stored hash answers faster (a narrow difference).
 
@@ -584,7 +584,8 @@ Follow-ups from Slice 6a, not yet scheduled:
 - `#[non_exhaustive]` on the security enums.
 
 Deferred minors from the Slice 6a reviews:
-- Hostile stored hash parameters are not capped in `matches`: it takes memory, iterations and lanes from the stored hash, so a hostile hash (a huge iteration or memory value) can hang or exhaust a login; a ceiling on the parsed costs and a test are needed.
+- `matches` of the encoder itself (not the configured users, whose hashes are now range-checked at startup) takes its cost from the stored hash, so a hostile hash that bypassed the config reader can still hang or exhaust a login.
+- A stale doc comment in `chain.rs` (`basic` versus `scheme`) remains.
 - `upgrade_encoding` ignores the algorithm variant and the version, so an `argon2i` or `argon2d` hash or a version other than 19 reports no upgrade.
 - `Argon2PasswordEncoder::new` does not cap `memory_kib` upward beyond what the crate accepts: `new(u32::MAX, 1, 1)` passes validation and `encode` then panics on out-of-memory. The `expect` message in `encode` is inaccurate and there is no `# Panics` note.
 - `DelegatingPasswordEncoder::new` accepts empty ids and ids that contain braces.
@@ -594,15 +595,13 @@ Deferred minors from the Slice 6a reviews:
 - The raw password is copied into a plain `String` for `spawn_blocking` and is not zeroized.
 - No test captures the tracing output of a failed login, and the test for disabled and locked accounts checks the status but not the equality of `WWW-Authenticate`.
 - The Basic `HeaderValue` is formatted for every 401 with an `.ok()` fallback instead of once in `build()`.
-- A stale doc comment in `chain.rs` (`basic` versus `scheme`) remains, and the `http_basic` doc implies two challenges on a failed login, while only an anonymous request gets both.
-- The realm check in `HttpSecurity::build` uses `is_ascii_control`, so C1 control characters pass; the realm rule is duplicated between `password_config.rs` and `HttpBasic::realm`.
 - A long Basic token is fully decoded before the 1024-byte caps of the provider apply; a cheap length check before decoding is missing.
 - Untested cases: `ProviderUnavailable` giving 503 in a Basic chain, the answer for a malformed header on a mixed chain, and the non-UTF-8 and non-text header cases, which assert the status only.
 - There is no failure-analyzer text for the new keys (the analyzer covers only `security.jwt`), and `TestApp::secured()` now also adds `PasswordEncoderAutoConfiguration`.
-- The config check accepts any PHC algorithm after `{argon2}`, so a `pbkdf2` or `scrypt` hash passes startup and then fails silently with a 401; only `argon2id`, `argon2i` and `argon2d` should pass.
 - The `security.http-basic.*` keys sit in the metadata of `PasswordEncoderAutoConfiguration` although `SecurityAutoConfiguration` reads them, so excluding the first hides keys that the chain applies.
 - The "not echoed" test covers only the above-bound value, and every Argon2 parameter rejection is reported on `memory-kib`.
-- In the example, a rewrapped doc paragraph above `PublicPaths` in `api.rs` has a broken short line, the `AdminController` doc says "guarded by HTTP Basic" although its doctest has no chain, the `stats()` test helper returns an opaque tuple, and `tests/basic.rs` hand-rolls Base64.
+- In the example, the `stats()` test helper returns an opaque tuple and `tests/basic.rs` hand-rolls Base64.
+- The semaphore around `DaoAuthenticationProvider::verify` (a limit on concurrent hashes) stays deferred.
 
 Rulings made during Slice 6a:
 - Argon2 comes from the RustCrypto `argon2` crate, which is pure Rust, so the dependency tree stays free of `ring`.

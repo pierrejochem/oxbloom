@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 
+use argon2::Params;
 use argon2::password_hash::phc::PasswordHash;
 use oxbloom_config::{Config, ConfigError, Secret};
 use serde::Deserialize;
@@ -468,20 +469,36 @@ pub fn users_from_config(config: &Config) -> Result<Vec<UserDetails>, ConfigErro
     Ok(users)
 }
 
-/// Checks that `stored` is `{argon2}` followed by a PHC string, without echoing it.
+/// Checks that `stored` is `{argon2}` followed by an Argon2 PHC string (`argon2id`, `argon2i` or
+/// `argon2d`) whose cost lies in the configured ranges, without hashing and without echoing it.
 fn check_hash(name: &str, stored: &str) -> Result<(), ConfigError> {
     let valid = stored
         .strip_prefix("{argon2}")
-        .is_some_and(|phc| PasswordHash::new(phc).is_ok());
+        .and_then(|phc| PasswordHash::new(phc).ok())
+        .is_some_and(|parsed| {
+            matches!(
+                parsed.algorithm.as_str(),
+                "argon2id" | "argon2i" | "argon2d"
+            ) && Params::try_from(&parsed).is_ok_and(|p| {
+                in_range(p.m_cost(), MEMORY_RANGE)
+                    && in_range(p.t_cost(), ITERATIONS_RANGE)
+                    && in_range(p.p_cost(), PARALLELISM_RANGE)
+            })
+        });
     if valid {
         Ok(())
     } else {
         Err(ConfigError::invalid(
             format!("{USERS}.{name}.password"),
-            "must be `{argon2}` followed by an Argon2 PHC string, as the password encoder \
-             stores it; plain-text passwords are not accepted",
+            "must be `{argon2}` followed by an Argon2 PHC string (argon2id, argon2i or argon2d, \
+             with memory, iterations and lanes in the configured ranges), as the password \
+             encoder stores it; plain-text passwords are not accepted",
         ))
     }
+}
+
+fn in_range(value: u32, range: (u32, u32)) -> bool {
+    value >= range.0 && value <= range.1
 }
 
 #[cfg(test)]
@@ -688,6 +705,35 @@ mod tests {
         let bob = &users[1];
         assert!(bob.is_enabled() && !bob.is_locked());
         assert!(bob.authorities().is_empty());
+    }
+
+    #[test]
+    fn other_algorithms_and_hostile_costs_are_rejected_without_hashing() {
+        let salt = "c2FsdHNhbHRzYWx0";
+        let out = "aGFzaGhhc2hoYXNoaGFzaGhhc2hoYXNoaGFzaGhhc2g";
+        let cases = [
+            format!("{{argon2}}$pbkdf2-sha256$i=600000,l=32${salt}${out}"),
+            format!("{{argon2}}$scrypt$ln=17,r=8,p=1${salt}${out}"),
+            format!("{{argon2}}$argon2id$v=19$m=19456,t=4294967295,p=1${salt}${out}"),
+            format!("{{argon2}}$argon2id$v=19$m=4294967295,t=2,p=1${salt}${out}"),
+            format!("{{argon2}}$argon2id$v=19$m=19456,t=2,p=4294967295${salt}${out}"),
+        ];
+        for value in cases {
+            let toml = format!("[security.users.dave]\npassword = \"{value}\"\n");
+            let err = users_from_config(&cfg(&toml)).unwrap_err();
+            let text = format!("{err} {err:?}");
+            assert!(!text.contains(out), "{text}");
+            assert!(!text.contains(salt), "{text}");
+            assert_eq!(invalid_key(err).0, "security.users.dave.password");
+        }
+    }
+
+    #[test]
+    fn a_default_cost_hash_is_accepted() {
+        let encoder = DelegatingPasswordEncoder::argon2(Argon2PasswordEncoder::default());
+        let stored = encoder.encode("pw");
+        let toml = format!("[security.users.erin]\npassword = \"{stored}\"\n");
+        assert_eq!(users_from_config(&cfg(&toml)).unwrap().len(), 1);
     }
 
     #[test]
