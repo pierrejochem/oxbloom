@@ -4,6 +4,7 @@
 //! |---|---|
 //! | `todo.rs` | a thread-safe in-memory store: `Mutex<BTreeMap>` plus an atomic id counter, ids from 1, never reused |
 //! | `api.rs` | `#[controller("/api/todos")]` with `#[post("")]`, `#[get]`, `#[put]`, `#[patch]`, `#[delete]`, path parameters, a query filter, `Json<T>` answers, `Request::json` bodies, status codes, a `SecurityCustomizer` |
+//! | `build.rs` | `oxbloom_actuator::build::emit()`, which feeds the build facts of `/actuator/info` |
 //! | `application.toml` | `server.port` and the `logging.level` table (`root`, and `todos` for the handlers' events) |
 //!
 //! The handlers log with `tracing::info!` at target `todos`; boot installs the
@@ -47,6 +48,18 @@ impl RunListener for Announce {
     }
 }
 
+/// The build facts for `/actuator/info`, set by this crate's `build.rs`.
+///
+/// # Examples
+///
+/// ```
+/// let info = todos::build_info();
+/// assert_eq!(info.name.as_deref(), Some("todos"));
+/// ```
+pub fn build_info() -> oxbloom_actuator::BuildInfo {
+    oxbloom_actuator::build_info!()
+}
+
 /// The application, reading `application.toml` from `config_dir`.
 ///
 /// The caller adds the arguments, for example `--server.port=0`, and runs it.
@@ -72,7 +85,8 @@ pub fn application(config_dir: impl Into<PathBuf>) -> OxbloomApplicationBuilder 
         .config(move |b| b.dir(config_dir).secret_key(SECRET_KEY))
         .listener(Announce)
         .configure(|b| {
-            b.bean(TodoStore::default)
+            b.bean(build_info)
+                .bean(TodoStore::default)
                 .component::<TodoController>()
                 .provides(|c: Arc<TodoController>| -> Arc<dyn Controller> { c })
                 .bean(|| PublicPaths)

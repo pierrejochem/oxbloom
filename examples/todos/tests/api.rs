@@ -367,3 +367,25 @@ async fn open_path_stops_at_the_todos_segment() {
     assert_eq!(send(app.addr, "GET", "/api/todosx", None).await.status, 401);
     app.stop().await;
 }
+
+#[tokio::test]
+async fn actuator_health_is_up_without_authentication() {
+    let app = start().await;
+    let res = send(app.addr, "GET", "/actuator/health", None).await;
+    assert_eq!(res.status, 200, "{}", res.body);
+    assert_eq!(res.json(), json!({ "status": "UP" }));
+    app.stop().await;
+}
+
+#[tokio::test]
+async fn actuator_info_needs_authentication_and_reports_the_build() {
+    let app = start().await;
+    // Only the health probes are open; without a `security.jwt` the info is a 401.
+    let res = send(app.addr, "GET", "/actuator/info", None).await;
+    assert_eq!(res.status, 401, "{}", res.body);
+    app.stop().await;
+    // The build facts come from `build.rs`; the git fields may be absent.
+    let build = serde_json::to_value(todos::build_info()).unwrap();
+    assert_eq!(build["name"], "todos");
+    assert!(build["version"].is_string());
+}

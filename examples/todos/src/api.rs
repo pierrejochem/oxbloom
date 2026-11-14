@@ -226,9 +226,13 @@ impl TodoController {
     }
 }
 
-/// The security rules. `/api/todos/**` is open so `curl` works out of the box;
-/// every other path, including unknown ones, needs an authenticated request
-/// (without a configured `security.jwt` that means 401).
+/// The security rules. `/api/todos/**` is open so `curl` works out of the box,
+/// and so are the actuator's health probes (`GET /actuator/health/**`); every other
+/// path, including unknown ones and the other actuator endpoints, needs an
+/// authenticated request (without a configured `security.jwt` that means 401).
+///
+/// The rules live here, and not behind `management.endpoints.health.public`,
+/// because the chain takes only one `authorize` section.
 ///
 /// To require a token for writes, put a rule ahead of the permit rule; the
 /// first matching rule wins:
@@ -257,6 +261,8 @@ impl SecurityCustomizer for PublicPaths {
     fn customize(&self, http: HttpSecurity) -> HttpSecurity {
         http.authorize(|a| {
             a.path("/api/todos/**")
+                .permit_all()
+                .get("/actuator/health/**")
                 .permit_all()
                 .any_request()
                 .authenticated()

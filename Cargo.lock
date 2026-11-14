@@ -2832,6 +2832,7 @@ name = "todos"
 version = "0.1.0"
 dependencies = [
  "http",
+ "oxbloom-actuator",
  "oxbloom-boot",
  "oxbloom-di",
  "oxbloom-security",
