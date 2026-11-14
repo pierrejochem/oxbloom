@@ -531,7 +531,8 @@ async fn auto_configurations_order_by_feature() {
     let ssl = usize::from(cfg!(feature = "ssl"));
     let actuator = usize::from(cfg!(feature = "actuator"));
     let tasks = 2 * usize::from(cfg!(feature = "tasks"));
-    assert_eq!(auto_configurations().len(), 4 + ssl + actuator + tasks);
+    // `security` has three auto-configurations and `web` two.
+    assert_eq!(auto_configurations().len(), 5 + ssl + actuator + tasks);
     #[allow(unused_mut)]
     let mut after = vec![ConfigRef::of::<SecurityAutoConfiguration>()];
     #[cfg(feature = "ssl")]

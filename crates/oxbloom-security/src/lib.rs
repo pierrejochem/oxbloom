@@ -98,6 +98,7 @@ mod jwks;
 mod jwt;
 mod matcher;
 mod password;
+mod password_config;
 mod provider;
 #[cfg(feature = "jwks")]
 mod reqwest_fetcher;
@@ -132,6 +133,7 @@ pub use password::{
     ARGON2_ID, Argon2PasswordEncoder, DelegatingPasswordEncoder, PasswordEncoder,
     PasswordEncoderError,
 };
+pub use password_config::{Argon2Settings, HttpBasicSettings, PasswordSettings, users_from_config};
 pub use provider::{AuthenticationProvider, ProviderManager};
 #[cfg(feature = "jwks")]
 pub use reqwest_fetcher::ReqwestJwksFetcher;
