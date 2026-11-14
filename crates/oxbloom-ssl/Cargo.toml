@@ -26,3 +26,5 @@ tracing = "0.1.44"
 [dev-dependencies]
 rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs", "pem"] }
 tempfile = "3.27.0"
+tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread"] }
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["std", "registry"] }

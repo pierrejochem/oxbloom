@@ -71,6 +71,35 @@ pub(crate) fn load(bundle: &BundleSource) -> Result<Material, SslError> {
     Ok(material)
 }
 
+/// The files `bundle` reads, each with the leaf of the key that names it, in a fixed order.
+/// Inline PEM values are not files, so they are not listed.
+pub(crate) fn watched_files(bundle: &BundleSource) -> Vec<(&'static str, String)> {
+    let mut files = Vec::new();
+    match &bundle.source {
+        Source::Pem {
+            certificate,
+            private_key,
+            trust,
+        } => {
+            let values = [
+                ("certificate", certificate.as_deref()),
+                (
+                    "private-key",
+                    private_key.as_ref().map(|key| key.expose().as_str()),
+                ),
+                ("trust", trust.as_deref()),
+            ];
+            for (leaf, value) in values {
+                if let Some(value) = value.filter(|v| !is_inline_pem(v)) {
+                    files.push((leaf, value.to_string()));
+                }
+            }
+        }
+        Source::Pkcs12 { path, .. } => files.push(("path", path.clone())),
+    }
+    files
+}
+
 /// Whether `value` is inline PEM rather than a file path.
 fn is_inline_pem(value: &str) -> bool {
     value.trim_start().starts_with("-----BEGIN")
@@ -260,5 +289,27 @@ mod tests {
         assert!(is_inline_pem("-----BEGIN CERTIFICATE-----"));
         assert!(is_inline_pem("\n  -----BEGIN CERTIFICATE-----"));
         assert!(!is_inline_pem("config/web.crt"));
+    }
+
+    #[test]
+    fn inline_pem_values_are_not_watched() {
+        use oxbloom_config::Secret;
+
+        let bundle = BundleSource {
+            name: "web".into(),
+            source: Source::Pem {
+                certificate: Some("web.crt".into()),
+                private_key: Some(Secret::new("-----BEGIN PRIVATE KEY-----".into())),
+                trust: Some("ca.pem".into()),
+            },
+        };
+        let files = watched_files(&bundle);
+        assert_eq!(
+            files,
+            [
+                ("certificate", "web.crt".to_string()),
+                ("trust", "ca.pem".to_string())
+            ]
+        );
     }
 }

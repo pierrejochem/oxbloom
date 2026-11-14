@@ -7,6 +7,11 @@
 //! `aws-lc-rs` provider. Errors name the bundle and the key to fix, never a private key, a
 //! password or a file path. [`PROPERTIES`] lists every key this crate reads.
 //!
+//! [`SslBundles::start_reload`] watches the bundle files every `ssl.reload-interval` and swaps
+//! a changed bundle in for the next handshake; [`SslBundles::reload`] does the same on demand.
+//! With the feature `di`, `SslBundles` implements `oxbloom_di::Lifecycle`, so a container
+//! starts the task when it creates the bean and stops it at shutdown.
+//!
 //! # Examples
 //!
 //! ```
@@ -27,10 +32,11 @@
 
 mod bundle;
 mod error;
+mod reload;
 mod settings;
 
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use arc_swap::ArcSwap;
@@ -42,10 +48,33 @@ use rustls::{ClientConfig, ServerConfig, SignatureScheme};
 use rustls_platform_verifier::BuilderVerifierExt;
 
 use crate::bundle::{Material, provider};
+use crate::reload::{HookSlot, Poller, ReloadState, lock};
 use crate::settings::{BundleSource, Settings, Source, canonical};
 
 pub use error::SslError;
+pub use reload::ReloadTask;
 pub use settings::PROPERTIES;
+
+/// Internal hooks for this crate's tests. Not part of the public API.
+#[doc(hidden)]
+pub mod __private {
+    use crate::SslBundles;
+
+    /// Runs `hook` with the bundle name between the read of a bundle's files and the second
+    /// metadata check, in every reload of `bundles` and its clones.
+    ///
+    /// ```
+    /// use oxbloom_config::Config;
+    /// use oxbloom_ssl::SslBundles;
+    ///
+    /// let bundles = SslBundles::from_config(&Config::from_str("")?)?;
+    /// oxbloom_ssl::__private::set_read_hook(&bundles, |_bundle| {});
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn set_read_hook(bundles: &SslBundles, hook: impl Fn(&str) + Send + Sync + 'static) {
+        *crate::reload::lock(&bundles.read_hook) = Some(std::sync::Arc::new(hook));
+    }
+}
 
 /// The SSL bundles loaded from the `ssl.*` keys, by name.
 ///
@@ -66,6 +95,10 @@ pub struct SslBundles {
     bundles: Arc<Vec<SslBundle>>,
     reload_interval: Duration,
     expiry_warning: Duration,
+    read_hook: HookSlot,
+    /// The task the container started through `Lifecycle`.
+    #[cfg(feature = "di")]
+    task: Arc<Mutex<Option<ReloadTask>>>,
 }
 
 impl SslBundles {
@@ -115,6 +148,9 @@ impl SslBundles {
             bundles: Arc::new(bundles),
             reload_interval: settings.reload_interval,
             expiry_warning: settings.expiry_warning,
+            read_hook: HookSlot::default(),
+            #[cfg(feature = "di")]
+            task: Arc::default(),
         })
     }
 
@@ -210,6 +246,135 @@ impl SslBundles {
     pub fn expiry_warning(&self) -> Duration {
         self.expiry_warning
     }
+
+    /// Rebuilds every bundle now from all its sources, files and inline PEM alike, and returns
+    /// the result per bundle, in name order.
+    ///
+    /// A bundle that loads is swapped in, and the next handshake of every configuration built
+    /// from it uses the new identity. A bundle that fails keeps its old material. Nothing calls
+    /// this automatically; [`SslBundles::start_reload`] polls instead. A client configuration
+    /// fixes its trust store when [`SslBundle::client_config`] builds it, so a reloaded trust
+    /// store reaches only configurations built afterwards.
+    ///
+    /// # Errors
+    ///
+    /// Each failed bundle has the error [`SslBundles::from_config`] would return for it, or
+    /// [`SslError::Io`] with [`ErrorKind::Interrupted`](std::io::ErrorKind::Interrupted) and
+    /// the key of the file that kept changing while it was read three times.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_config::Config;
+    /// use oxbloom_ssl::{SslBundles, SslError};
+    ///
+    /// # let dir = tempfile::tempdir()?;
+    /// # let generated = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])?;
+    /// # let ca_file = dir.path().join("ca.pem");
+    /// # std::fs::write(&ca_file, generated.cert.pem())?;
+    /// # let ca_path = ca_file.display();
+    /// // `ca_path` names a PEM file with the CA certificate.
+    /// let config = Config::from_str(&format!("[ssl.bundle.pem.client]\ntrust = \"{ca_path}\""))?;
+    /// let bundles = SslBundles::from_config(&config)?;
+    /// let results = bundles.reload();
+    /// assert_eq!(results[0].0, "client");
+    /// assert!(results[0].1.is_ok());
+    ///
+    /// // A broken file is reported, and the bundle keeps its trust store.
+    /// # std::fs::write(&ca_file, "not a certificate")?;
+    /// let results = bundles.reload();
+    /// assert!(matches!(results[0].1, Err(SslError::Pem { .. })));
+    /// assert!(bundles.get("client")?.has_trust());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn reload(&self) -> Vec<(String, Result<(), SslError>)> {
+        let hook = lock(&self.read_hook).clone();
+        self.bundles
+            .iter()
+            .map(|bundle| {
+                let result = reload::reload_now(bundle, hook.as_deref());
+                (bundle.name().to_string(), result)
+            })
+            .collect()
+    }
+
+    /// Starts the task that checks the files of every bundle every
+    /// [`reload_interval`](SslBundles::reload_interval).
+    ///
+    /// It compares each file's size and modification time, following symlinks, so a
+    /// Kubernetes secret mount that swaps a symlink is seen. Inline PEM and PKCS#12 passwords
+    /// are not watched. When a file changed, the whole bundle is rebuilt and swapped in for
+    /// the next handshake; when a file changes during the read, the task tries again on the
+    /// next tick. A failed reload keeps the old material and logs one warning on target
+    /// `oxbloom::ssl` with the bundle name and the error kind, and logs again only after the
+    /// files change again. As with [`SslBundles::reload`], a client configuration built
+    /// earlier keeps its trust store.
+    ///
+    /// With an interval of zero the returned task does nothing. Inside a Tokio runtime, which
+    /// needs its time driver, the task runs on that runtime; outside one, on its own thread.
+    /// Events go to the subscriber that is current when the task starts.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_config::Config;
+    /// use oxbloom_ssl::SslBundles;
+    ///
+    /// # let generated = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])?;
+    /// # let ca_pem = generated.cert.pem();
+    /// let config = Config::from_str(&format!(
+    ///     "[ssl]\nreload-interval = \"5s\"\n[ssl.bundle.pem.client]\ntrust = '''\n{ca_pem}'''"
+    /// ))?;
+    /// let bundles = SslBundles::from_config(&config)?;
+    /// let task = bundles.start_reload();
+    /// assert!(task.is_running());
+    /// task.stop();
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn start_reload(&self) -> ReloadTask {
+        let poller = Poller {
+            bundles: Arc::clone(&self.bundles),
+            hook: Arc::clone(&self.read_hook),
+        };
+        ReloadTask::start(poller, self.reload_interval)
+    }
+}
+
+/// Starts the reload task when the container creates the bean and stops it at shutdown.
+/// Register it with `ContainerBuilder::lifecycle::<SslBundles>()` after the bean.
+///
+/// ```
+/// use oxbloom_config::Config;
+/// use oxbloom_di::ContainerBuilder;
+/// use oxbloom_ssl::SslBundles;
+///
+/// # let generated = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])?;
+/// # let ca_pem = generated.cert.pem();
+/// let config = Config::from_str(&format!("[ssl.bundle.pem.client]\ntrust = '''\n{ca_pem}'''"))?;
+/// let container = ContainerBuilder::new()
+///     .instance(SslBundles::from_config(&config)?)
+///     .lifecycle::<SslBundles>()
+///     .build()?;
+/// assert_eq!(container.get::<SslBundles>()?.names(), ["client"]);
+/// container.shutdown(); // stops the reload task
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[cfg(feature = "di")]
+impl oxbloom_di::Lifecycle for SslBundles {
+    fn post_construct(&self) -> Result<(), oxbloom_di::DiError> {
+        let mut task = lock(&self.task);
+        if task.is_none() {
+            *task = Some(self.start_reload());
+        }
+        Ok(())
+    }
+
+    fn pre_destroy(&self) {
+        let task = lock(&self.task).take();
+        if let Some(task) = task {
+            task.stop();
+        }
+    }
 }
 
 /// Lists the bundles by name with their contents; never a key, a password or a path.
@@ -259,15 +424,18 @@ pub struct SslBundle {
 struct Inner {
     source: BundleSource,
     material: Arc<ArcSwap<Material>>,
+    reload: Mutex<ReloadState>,
 }
 
 impl SslBundle {
     fn load(source: BundleSource) -> Result<SslBundle, SslError> {
+        let reload = ReloadState::new(&source);
         let material = bundle::load(&source)?;
         Ok(SslBundle {
             inner: Arc::new(Inner {
                 source,
                 material: Arc::new(ArcSwap::from_pointee(material)),
+                reload: Mutex::new(reload),
             }),
         })
     }
@@ -380,6 +548,10 @@ impl SslBundle {
     /// A rustls client configuration that verifies servers against the bundle's trust store,
     /// or with the platform verifier when the bundle has none, and presents the bundle's
     /// identity as a client certificate when it has one.
+    ///
+    /// The client certificate is resolved at each handshake, so a reloaded identity reaches
+    /// the next handshake. The trust store is fixed when this method is called: after a
+    /// reload, only configurations built afterwards verify against the new trust store.
     ///
     /// # Errors
     ///
