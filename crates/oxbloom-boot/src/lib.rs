@@ -86,6 +86,11 @@
 //! Cargo feature `web` adds `WebServer`, a [`Service`] that serves an
 //! `oxbloom_web::App`.
 //!
+//! Cargo feature `ssl` (implies `web`) adds `SslAutoConfiguration`, which registers the
+//! `oxbloom_ssl::SslBundles` of the `ssl.bundle.*` keys, `WebServer::with_ssl`, which serves
+//! HTTPS with the bundle that `server.ssl.bundle` names, and a failure report for
+//! `oxbloom_ssl::SslError` that names the key to fix and never a secret.
+//!
 //! Cargo feature `logging` installs the `oxbloom_logging` subscriber, configured by the
 //! `logging.*` keys, and registers its `LoggingSystem` as a bean so levels can be changed at
 //! runtime. Turn it off with `OxbloomApplicationBuilder::logging(false)` or
@@ -153,6 +158,8 @@ mod web;
 pub use app::{OxbloomApplication, OxbloomApplicationBuilder};
 pub use arguments::ApplicationArguments;
 pub use autoconfig::{AutoConfiguration, AutoConfigurations, ConfigRef};
+#[cfg(feature = "ssl")]
+pub use autoconfigure::SslAutoConfiguration;
 #[cfg(any(feature = "security", feature = "web"))]
 pub use autoconfigure::auto_configurations;
 #[cfg(feature = "security")]

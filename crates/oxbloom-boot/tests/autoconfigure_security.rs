@@ -468,9 +468,11 @@ fn metadata_keys_match_config() {
 
 #[test]
 fn auto_configurations_lists_both_and_metadata_follows_exclusion() {
-    // `web` adds `RequestLogAutoConfiguration` and `WebServerAutoConfiguration`.
+    // `web` adds `RequestLogAutoConfiguration` and `WebServerAutoConfiguration`, `ssl` adds
+    // `SslAutoConfiguration`.
     let web = 2 * usize::from(cfg!(feature = "web"));
-    assert_eq!(auto_configurations().len(), 2 + web);
+    let ssl = usize::from(cfg!(feature = "ssl"));
+    assert_eq!(auto_configurations().len(), 2 + web + ssl);
     let with = OxbloomApplication::builder()
         .auto_configurations(auto_configurations())
         .property_metadata();

@@ -439,7 +439,13 @@ async fn exclude_chain_keeps_server() {
         .auto_configurations(auto_configurations())
         .exclude::<WebServerAutoConfiguration>()
         .property_metadata();
-    assert!(!no_web.iter().any(|p| p.key.starts_with("server.")));
+    // Only `server.ssl.bundle` stays: it is one of the `boot_properties()`.
+    let server: Vec<_> = no_web
+        .iter()
+        .map(|p| p.key)
+        .filter(|k| k.starts_with("server."))
+        .collect();
+    assert_eq!(server, ["server.ssl.bundle"]);
 }
 
 #[tokio::test]
@@ -519,11 +525,14 @@ async fn metadata_keys_match_server() {
 
 #[tokio::test]
 async fn auto_configurations_order_by_feature() {
-    assert_eq!(auto_configurations().len(), 4);
-    assert_eq!(
-        WebServerAutoConfiguration::after(),
-        [ConfigRef::of::<SecurityAutoConfiguration>()]
-    );
+    // `ssl` adds `SslAutoConfiguration`, which the web server also runs after.
+    let ssl = usize::from(cfg!(feature = "ssl"));
+    assert_eq!(auto_configurations().len(), 4 + ssl);
+    #[allow(unused_mut)]
+    let mut after = vec![ConfigRef::of::<SecurityAutoConfiguration>()];
+    #[cfg(feature = "ssl")]
+    after.push(ConfigRef::of::<oxbloom_boot::SslAutoConfiguration>());
+    assert_eq!(WebServerAutoConfiguration::after(), after);
 
     // Listed in reverse, the web one still runs after the security one.
     let reversed = AutoConfigurations::new()

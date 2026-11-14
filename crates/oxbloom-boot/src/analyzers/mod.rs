@@ -11,6 +11,8 @@ mod logging;
 mod port;
 #[cfg(feature = "security")]
 mod security;
+#[cfg(feature = "ssl")]
+mod ssl;
 
 use crate::failure::FailureAnalyzer;
 
@@ -30,5 +32,7 @@ pub(crate) fn builtin() -> Vec<Arc<dyn FailureAnalyzer>> {
     analyzers.push(Arc::new(security::JwtConfigAnalyzer));
     #[cfg(feature = "logging")]
     analyzers.push(Arc::new(logging::LoggingConfigAnalyzer));
+    #[cfg(feature = "ssl")]
+    analyzers.push(Arc::new(ssl::SslAnalyzer));
     analyzers
 }

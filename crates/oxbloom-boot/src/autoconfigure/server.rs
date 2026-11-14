@@ -6,6 +6,8 @@ use oxbloom_config::Config;
 use oxbloom_di::{Conditions, Configuration, ContainerBuilder, DiError, component};
 #[cfg(feature = "security")]
 use oxbloom_security::SecurityFilterChain;
+#[cfg(feature = "ssl")]
+use oxbloom_ssl::SslBundles;
 use oxbloom_web::{App, Controller, ErrorRenderer, Filter, ProblemRenderer};
 
 use crate::autoconfig::{AutoConfiguration, ConfigRef};
@@ -26,7 +28,11 @@ use crate::web::WebServer;
 /// bean exists. The `server.*` keys (limits, timeouts, forwarded headers, error detail) are
 /// read by [`WebServer::new`]; an unusable value fails the build with the `ConfigError` naming
 /// the key (never the value). With `security` it runs after
-/// [`SecurityAutoConfiguration`](crate::SecurityAutoConfiguration). A duplicate route fails the
+/// [`SecurityAutoConfiguration`](crate::SecurityAutoConfiguration). With `ssl` it runs after
+/// `SslAutoConfiguration` and builds the server with `WebServer::with_ssl` from the
+/// `SslBundles` bean, when there is one: `server.ssl.bundle` then makes the port speak only
+/// HTTPS, and an unknown or trust-only bundle fails the build with a `ConfigError` on that key
+/// that lists the available bundle names. A duplicate route fails the
 /// build as `DiError::Creation` for `WebServer` with the `RouteError` as source; a bad
 /// `server.address` or `server.port` has the `ConfigError` naming the key as source.
 ///
@@ -104,11 +110,13 @@ impl AutoConfiguration for WebServerAutoConfiguration {
     }
 
     fn after() -> Vec<ConfigRef> {
-        #[cfg(feature = "security")]
-        let after = vec![ConfigRef::of::<super::SecurityAutoConfiguration>()];
-        #[cfg(not(feature = "security"))]
-        let after = Vec::new();
-        after
+        [
+            #[cfg(feature = "security")]
+            ConfigRef::of::<super::SecurityAutoConfiguration>(),
+            #[cfg(feature = "ssl")]
+            ConfigRef::of::<super::SslAutoConfiguration>(),
+        ]
+        .into()
     }
 
     fn properties() -> &'static [PropertyMetadata] {
@@ -124,39 +132,37 @@ fn problem_renderer(config: Arc<Config>) -> Result<ProblemRenderer, DiError> {
         .map_err(DiError::creation_from::<ProblemRenderer>)
 }
 
-/// The server; the security chain is one more filter, placed by its own `order()`.
-#[cfg(feature = "security")]
+/// The server; the security chain (feature `security`) is one more filter, placed by its own
+/// `order()`, and the SSL bundles (feature `ssl`) serve `server.ssl.bundle`.
 fn web_server(
     config: Arc<Config>,
     controllers: Vec<Arc<dyn Controller>>,
     filters: Vec<Arc<dyn Filter>>,
-    chain: Option<Arc<SecurityFilterChain>>,
+    #[cfg(feature = "security")] chain: Option<Arc<SecurityFilterChain>>,
     renderer: Option<Arc<dyn ErrorRenderer>>,
+    #[cfg(feature = "ssl")] bundles: Option<Arc<SslBundles>>,
 ) -> Result<WebServer, DiError> {
+    #[cfg(feature = "security")]
     let chain = chain.map(|c| -> Arc<dyn Filter> { c });
-    build(&config, chain, filters, controllers, renderer)
-}
-
-/// The server; without the feature `security` there is no chain.
-#[cfg(not(feature = "security"))]
-fn web_server(
-    config: Arc<Config>,
-    controllers: Vec<Arc<dyn Controller>>,
-    filters: Vec<Arc<dyn Filter>>,
-    renderer: Option<Arc<dyn ErrorRenderer>>,
-) -> Result<WebServer, DiError> {
-    build(&config, None, filters, controllers, renderer)
+    #[cfg(not(feature = "security"))]
+    let chain = None;
+    let app = app(chain, filters, controllers, renderer)?;
+    // The `ConfigError` naming the key stays the typed source.
+    #[cfg(feature = "ssl")]
+    let server = WebServer::with_ssl(app, &config, bundles.as_deref());
+    #[cfg(not(feature = "ssl"))]
+    let server = WebServer::new(app, &config);
+    server.map_err(DiError::creation_from::<WebServer>)
 }
 
 /// The `App` of `chain` and `filters` (each placed by its own `Filter::order()`), the optional
-/// renderer and every controller's routes, served by a `WebServer` configured from `config`.
-fn build(
-    config: &Config,
+/// renderer and every controller's routes.
+fn app(
     chain: Option<Arc<dyn Filter>>,
     filters: Vec<Arc<dyn Filter>>,
     controllers: Vec<Arc<dyn Controller>>,
     renderer: Option<Arc<dyn ErrorRenderer>>,
-) -> Result<WebServer, DiError> {
+) -> Result<App, DiError> {
     let mut app = App::new();
     if let Some(renderer) = renderer {
         app = app.error_renderer(renderer);
@@ -169,8 +175,7 @@ fn build(
             .routes(controller.routes())
             .map_err(DiError::creation_from::<WebServer>)?;
     }
-    // The `ConfigError` naming the key stays the typed source.
-    WebServer::new(app, config).map_err(DiError::creation_from::<WebServer>)
+    Ok(app)
 }
 
 /// Exactly the keys `WebServer::new` reads, with its defaults (pinned by tests).

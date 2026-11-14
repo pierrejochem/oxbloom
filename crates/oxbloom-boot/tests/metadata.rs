@@ -50,6 +50,7 @@ fn builder_lists_boot_keys_sorted() {
         "oxbloom.main.conditions-report",
         "oxbloom.profiles.active",
         "oxbloom.profiles.group",
+        "server.ssl.bundle",
     ];
     // The `logging` feature adds the `logging.*` keys, which sort after `application.name`.
     if cfg!(feature = "logging") {
@@ -73,7 +74,7 @@ fn builder_lists_boot_keys_sorted() {
         );
     }
     assert_eq!(keys, expected);
-    assert_eq!(boot_properties().len(), 7);
+    assert_eq!(boot_properties().len(), 8);
 }
 
 static ONE_TWO: [PropertyMetadata; 2] = [

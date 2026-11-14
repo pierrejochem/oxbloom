@@ -10,6 +10,7 @@ default = []
 web = ["dep:oxbloom-web", "dep:serde", "dep:tracing", "tokio/net"]
 security = ["dep:oxbloom-security", "oxbloom-security/di"]
 logging = ["dep:oxbloom-logging", "dep:tracing"]
+ssl = ["web", "dep:oxbloom-ssl", "oxbloom-ssl/di", "oxbloom-web/tls", "dep:tokio-rustls"]
 
 [dependencies]
 oxbloom-config = { version = "0.1.0", path = "../oxbloom-config", features = ["di"] }
@@ -18,11 +19,15 @@ oxbloom-di = { version = "0.1.0", path = "../oxbloom-di" }
 oxbloom-logging = { version = "0.1.0", path = "../oxbloom-logging", optional = true }
 oxbloom-macros = { version = "0.1.0", path = "../oxbloom-macros" }
 oxbloom-security = { version = "0.1.0", path = "../oxbloom-security", optional = true }
+oxbloom-ssl = { version = "0.1.0", path = "../oxbloom-ssl", optional = true }
 # Default features on purpose: they include the `gzip`, `brotli` and `zstd` codecs that
 # `server.compression.enabled` needs. Boot forwards no codec features of its own.
 oxbloom-web = { version = "0.1.0", path = "../oxbloom-web", optional = true }
 serde = { version = "1.0.229", features = ["derive"], optional = true }
 tracing = { version = "0.1.44", optional = true }
+# The server-side TLS acceptor of `server.ssl.bundle`; the bundle's `ServerConfig` picks the
+# crypto provider (`aws-lc-rs`), so no provider feature here.
+tokio-rustls = { version = "0.26.6", default-features = false, optional = true }
 async-trait = "0.1.92"
 tokio = { version = "1.54.1", features = ["rt", "sync", "time", "macros", "signal"] }
 
@@ -36,7 +41,12 @@ jsonwebtoken = { version = "11.1.0", features = ["rust_crypto"] }
 # `TestApp` against boot built with `web` and without `security`.
 oxbloom-test = { path = "../oxbloom-test", features = ["web", "security"] }
 oxbloom-web = { version = "0.1.0", path = "../oxbloom-web" }
+# Test certificates for `tests/autoconfigure_ssl.rs` are generated at test time; `aws-lc-rs`
+# only, no `ring`. The rustls client there speaks HTTPS until `TestClient` has an HTTPS mode.
+rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs", "pem"] }
+rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 serde_json = "1.0.154"
 tempfile = "3.27.0"
 tokio = { version = "1.54.1", features = ["rt", "macros", "time", "signal", "net", "io-util"] }
+tokio-rustls = { version = "0.26.6", default-features = false }
 trybuild = "1.0.122"

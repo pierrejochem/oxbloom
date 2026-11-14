@@ -6,6 +6,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use oxbloom_config::{Config, ConfigError, DataSize};
+#[cfg(feature = "ssl")]
+use oxbloom_ssl::SslBundles;
 use oxbloom_web::{
     App, CompressionConfig, CompressionLevel, Controller, CorsConfig, DiskResources,
     ForwardStrategy, RouteError, StaticResources, TrustedProxies,
@@ -14,6 +16,8 @@ use serde::{Deserialize, de::DeserializeOwned};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
+#[cfg(feature = "ssl")]
+use tokio_rustls::TlsAcceptor;
 
 use crate::error::ServiceError;
 use crate::service::Service;
@@ -63,6 +67,7 @@ const HEADER_READ_TIMEOUT: &str = "server.header-read-timeout";
 const FORWARD_STRATEGY: &str = "server.forward-headers.strategy";
 const TRUSTED_PROXIES: &str = "server.forward-headers.trusted-proxies";
 const INCLUDE_MESSAGE: &str = "server.error.include-message";
+const SSL_BUNDLE: &str = "server.ssl.bundle";
 
 /// The limits, timeouts and forwarded-header settings of the `server.*` keys that are present;
 /// `None` for an absent key, so the value the `App` already has stays.
@@ -380,6 +385,73 @@ pub(crate) fn include_message(config: &Config) -> Result<bool, ConfigError> {
     }
 }
 
+/// Reads `server.ssl.bundle`: `None` when absent, the bundle name otherwise.
+fn ssl_bundle_name(config: &Config) -> Result<Option<String>, ConfigError> {
+    read(config, SSL_BUNDLE, "must be the name of an SSL bundle")
+}
+
+/// The names of `bundles` for an error text, or `none`.
+#[cfg(feature = "ssl")]
+fn available(bundles: Option<&SslBundles>) -> String {
+    let names = bundles.map(SslBundles::names).unwrap_or_default();
+    if names.is_empty() {
+        "none".to_owned()
+    } else {
+        names.join(", ")
+    }
+}
+
+/// The TLS acceptor of `server.ssl.bundle`: `None` when the key is absent, an error naming the
+/// key and listing the available bundle names when the bundle is missing or has no identity.
+/// The texts carry bundle names only, never a file path or file content.
+#[cfg(feature = "ssl")]
+fn tls_acceptor(
+    config: &Config,
+    bundles: Option<&SslBundles>,
+) -> Result<Option<TlsAcceptor>, ConfigError> {
+    let Some(name) = ssl_bundle_name(config)? else {
+        return Ok(None);
+    };
+    let unknown = || {
+        ConfigError::invalid(
+            SSL_BUNDLE,
+            format!(
+                "names an SSL bundle that does not exist; available bundles: {}",
+                available(bundles)
+            ),
+        )
+    };
+    let bundle = bundles
+        .ok_or_else(unknown)?
+        .get(&name)
+        .map_err(|_| unknown())?;
+    let server = bundle.server_config().map_err(|_| {
+        ConfigError::invalid(
+            SSL_BUNDLE,
+            format!(
+                "names SSL bundle `{}`, which has no certificate and private key, but a server \
+                 needs both; available bundles: {}",
+                bundle.name(),
+                available(bundles)
+            ),
+        )
+    })?;
+    Ok(Some(TlsAcceptor::from(server)))
+}
+
+/// Without the feature `ssl` a set `server.ssl.bundle` is an error, so the server never falls
+/// back to plain HTTP when HTTPS was asked for.
+#[cfg(not(feature = "ssl"))]
+fn refuse_ssl_bundle(config: &Config) -> Result<(), ConfigError> {
+    match ssl_bundle_name(config)? {
+        None => Ok(()),
+        Some(_) => Err(ConfigError::invalid(
+            SSL_BUNDLE,
+            "needs the `ssl` feature of `oxbloom-boot`",
+        )),
+    }
+}
+
 impl ServerProperties {
     fn from_config(config: &Config) -> Result<Self, ConfigError> {
         match config.get::<ServerProperties>("server") {
@@ -392,7 +464,8 @@ impl ServerProperties {
     }
 }
 
-/// A [`Service`] that serves an [`oxbloom_web::App`] over HTTP.
+/// A [`Service`] that serves an [`oxbloom_web::App`] over HTTP, or over HTTPS when built with
+/// `WebServer::with_ssl` (feature `ssl`) and `server.ssl.bundle`.
 ///
 /// Available with the cargo feature `web`. It reads `server.address` (default
 /// `127.0.0.1`) and `server.port` (default `8080`, `0` picks a free port) from
@@ -439,6 +512,9 @@ struct Inner {
     app: Mutex<Option<App>>,
     local_addr: Mutex<Option<SocketAddr>>,
     running: Mutex<Option<Running>>,
+    /// The acceptor of `server.ssl.bundle`; with one the port speaks only HTTPS.
+    #[cfg(feature = "ssl")]
+    tls: Option<TlsAcceptor>,
 }
 
 /// The serving task and the sender that ends it.
@@ -613,6 +689,10 @@ impl WebServer {
     /// or route set in code. An explicitly empty `server.cors.allowed-origins` list fails, and
     /// the error of an unusable CORS list gives the reason without any configured value.
     ///
+    /// `server.ssl.bundle` needs `WebServer::with_ssl` (feature `ssl`), which receives the SSL
+    /// bundles. `new` has none, so a set `server.ssl.bundle` is a `ConfigError` on that key
+    /// instead of a silent fallback to plain HTTP.
+    ///
     /// `server.header-read-timeout` must be above zero and at most one day. An empty
     /// `trusted-proxies` list with strategy `framework` trusts nobody, so the strategy has no
     /// effect; the default list is loopback only, so a reverse proxy on another host is not
@@ -645,6 +725,74 @@ impl WebServer {
     /// # Ok::<(), ConfigError>(())
     /// ```
     pub fn new(app: App, config: &Config) -> Result<WebServer, ConfigError> {
+        #[cfg(feature = "ssl")]
+        return Self::with_ssl(app, config, None);
+        #[cfg(not(feature = "ssl"))]
+        {
+            refuse_ssl_bundle(config)?;
+            Self::build(app, config)
+        }
+    }
+
+    /// Creates a server for `app` like [`WebServer::new`], serving HTTPS with the identity of
+    /// the bundle that `server.ssl.bundle` names in `bundles`.
+    ///
+    /// Available with the cargo feature `ssl`. Without `server.ssl.bundle` this is exactly
+    /// [`WebServer::new`]: plain HTTP. With it, the port speaks only HTTPS: there is no HTTP
+    /// listener and no redirect. The TLS configuration is the bundle's
+    /// [`server_config`](oxbloom_ssl::SslBundle::server_config) (ALPN `http/1.1` only), which
+    /// resolves the certificate at every handshake, so a reloaded bundle reaches the next
+    /// connection without a restart.
+    ///
+    /// # Errors
+    ///
+    /// Every error of [`WebServer::new`], and a `ConfigError::Invalid` on `server.ssl.bundle`
+    /// when `bundles` is `None`, has no bundle of that name, or the bundle has no certificate
+    /// and private key. Its message lists the available bundle names and never a file path or
+    /// file content.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_boot::WebServer;
+    /// use oxbloom_config::{Config, ConfigError};
+    /// use oxbloom_ssl::SslBundles;
+    /// use oxbloom_web::App;
+    ///
+    /// # let generated = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])?;
+    /// # let (cert, key) = (generated.cert.pem(), generated.signing_key.serialize_pem());
+    /// // `cert` and `key` hold PEM text; a file path works the same way.
+    /// let config = Config::from_str(&format!(
+    ///     "[server]\nport = 0\n[server.ssl]\nbundle = \"web\"\n\
+    ///      [ssl.bundle.pem.web]\ncertificate = '''\n{cert}'''\nprivate-key = '''\n{key}'''"
+    /// ))?;
+    /// let bundles = SslBundles::from_config(&config)?;
+    /// let server = WebServer::with_ssl(App::new(), &config, Some(&bundles))?;
+    /// # let _ = server;
+    ///
+    /// // An unknown name is an error on the key that lists the bundles.
+    /// let typo = Config::from_str("[server.ssl]\nbundle = \"wbe\"")?;
+    /// let err = WebServer::with_ssl(App::new(), &typo, Some(&bundles)).unwrap_err();
+    /// assert!(matches!(err, ConfigError::Invalid { ref key, .. } if key == "server.ssl.bundle"));
+    /// assert!(err.to_string().contains("available bundles: web"));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[cfg(feature = "ssl")]
+    pub fn with_ssl(
+        app: App,
+        config: &Config,
+        bundles: Option<&SslBundles>,
+    ) -> Result<WebServer, ConfigError> {
+        let tls = tls_acceptor(config, bundles)?;
+        Self::build(app, config, tls)
+    }
+
+    /// The server of the `server.*` keys; HTTPS with `tls`.
+    fn build(
+        app: App,
+        config: &Config,
+        #[cfg(feature = "ssl")] tls: Option<TlsAcceptor>,
+    ) -> Result<WebServer, ConfigError> {
         let properties = ServerProperties::from_config(config)?;
         let limits = Limits::from_config(config)?;
         include_message(config)?;
@@ -657,6 +805,8 @@ impl WebServer {
                 app: Mutex::new(Some(app)),
                 local_addr: Mutex::new(None),
                 running: Mutex::new(None),
+                #[cfg(feature = "ssl")]
+                tls,
             }),
         })
     }
@@ -707,9 +857,16 @@ impl Service for WebServer {
             .local_addr()
             .map_err(|e| ServiceError::new(BindError::new(wanted, e)))?;
         let (shutdown, stopped) = oneshot::channel::<()>();
-        let task = tokio::spawn(app.serve(listener, async {
+        let stopped = async {
             let _ = stopped.await;
-        }));
+        };
+        #[cfg(feature = "ssl")]
+        let task = match &self.inner.tls {
+            Some(acceptor) => tokio::spawn(app.serve_tls(listener, acceptor.clone(), stopped)),
+            None => tokio::spawn(app.serve(listener, stopped)),
+        };
+        #[cfg(not(feature = "ssl"))]
+        let task = tokio::spawn(app.serve(listener, stopped));
         *lock(&self.inner.local_addr) = Some(addr);
         *lock(&self.inner.running) = Some(Running { shutdown, task });
         #[cfg(feature = "logging")]

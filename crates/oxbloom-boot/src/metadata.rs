@@ -115,7 +115,7 @@ fn push_string(out: &mut String, s: &str) {
     out.push('"');
 }
 
-static BOOT: [PropertyMetadata; 7] = [
+static BOOT: [PropertyMetadata; 8] = [
     PropertyMetadata::new(
         "application.name",
         "String",
@@ -161,14 +161,24 @@ static BOOT: [PropertyMetadata; 7] = [
         "console prints the conditions evaluation report after the container is built, off \
          does not.",
     ),
+    PropertyMetadata::new(
+        "server.ssl.bundle",
+        "String",
+        None,
+        "The SSL bundle whose certificate and private key the web server uses; the port then \
+         speaks only HTTPS. Unset, the server speaks plain HTTP. Needs the `ssl` feature, and \
+         the bundle must have an identity.",
+    ),
 ];
 
 /// The keys that the framework reads itself: `application.name` (the name in the startup
 /// events), `oxbloom.config.import` and
 /// `oxbloom.profiles.active` and `oxbloom.profiles.group` (read by the config loader), and
 /// `oxbloom.main.banner-mode`, `oxbloom.main.conditions-report` and `oxbloom.logging.enabled`
-/// (read by boot). The last one and `application.name` are listed with or without the `logging`
-/// feature, so the list does not depend on features.
+/// (read by boot), and `server.ssl.bundle` (read by the web server). `oxbloom.logging.enabled`
+/// and `application.name` are listed with or without the `logging` feature, and
+/// `server.ssl.bundle` with or without the `ssl` feature, so the list does not depend on
+/// features.
 ///
 /// # Examples
 ///
@@ -177,7 +187,8 @@ static BOOT: [PropertyMetadata; 7] = [
 ///
 /// let keys: Vec<_> = boot_properties().iter().map(|p| p.key).collect();
 /// assert!(keys.contains(&"oxbloom.main.banner-mode"));
-/// assert_eq!(keys.len(), 7);
+/// assert!(keys.contains(&"server.ssl.bundle"));
+/// assert_eq!(keys.len(), 8);
 /// ```
 pub fn boot_properties() -> &'static [PropertyMetadata] {
     &BOOT
