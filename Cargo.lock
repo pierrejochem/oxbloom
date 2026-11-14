@@ -1586,6 +1586,7 @@ dependencies = [
  "async-trait",
  "http",
  "jsonwebtoken",
+ "oxbloom-actuator",
  "oxbloom-config",
  "oxbloom-core",
  "oxbloom-di",

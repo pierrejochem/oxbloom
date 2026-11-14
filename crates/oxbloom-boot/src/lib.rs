@@ -91,6 +91,10 @@
 //! HTTPS with the bundle that `server.ssl.bundle` names, and a failure report for
 //! `oxbloom_ssl::SslError` that names the key to fix and never a secret.
 //!
+//! Cargo feature `actuator` (implies `web`) adds `ActuatorAutoConfiguration`, which serves the
+//! health, info and (with `logging`) loggers endpoints of `oxbloom-actuator` and keeps the
+//! readiness state in step with the run: accepting at `ready`, refusing at `stopping`.
+//!
 //! Cargo feature `logging` installs the `oxbloom_logging` subscriber, configured by the
 //! `logging.*` keys, and registers its `LoggingSystem` as a bean so levels can be changed at
 //! runtime. Turn it off with `OxbloomApplicationBuilder::logging(false)` or
@@ -158,6 +162,8 @@ mod web;
 pub use app::{OxbloomApplication, OxbloomApplicationBuilder};
 pub use arguments::ApplicationArguments;
 pub use autoconfig::{AutoConfiguration, AutoConfigurations, ConfigRef};
+#[cfg(feature = "actuator")]
+pub use autoconfigure::ActuatorAutoConfiguration;
 #[cfg(feature = "ssl")]
 pub use autoconfigure::SslAutoConfiguration;
 #[cfg(any(feature = "security", feature = "web"))]

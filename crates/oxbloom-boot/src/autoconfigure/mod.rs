@@ -6,6 +6,8 @@
 //! `dyn Filter` with `web`) are collected from the container. With `ssl`, the web server
 //! receives the `SslBundles` bean for `server.ssl.bundle`.
 
+#[cfg(feature = "actuator")]
+mod actuator;
 #[cfg(feature = "security")]
 mod jwt;
 #[cfg(feature = "web")]
@@ -17,6 +19,8 @@ mod server;
 #[cfg(feature = "ssl")]
 mod ssl;
 
+#[cfg(feature = "actuator")]
+pub use actuator::ActuatorAutoConfiguration;
 #[cfg(feature = "security")]
 pub use jwt::JwtDecoderAutoConfiguration;
 #[cfg(feature = "web")]
@@ -32,8 +36,9 @@ use crate::autoconfig::AutoConfigurations;
 
 /// The auto-configurations of the enabled features, in order: with `security`,
 /// `JwtDecoderAutoConfiguration` and then `SecurityAutoConfiguration`; with `ssl`,
-/// `SslAutoConfiguration`; with `web`, `RequestLogAutoConfiguration` and then
-/// `WebServerAutoConfiguration` (after the others when several features are on). Remove one
+/// `SslAutoConfiguration`; with `actuator`, `ActuatorAutoConfiguration`; with `web`,
+/// `RequestLogAutoConfiguration` and then `WebServerAutoConfiguration` (after the others when
+/// several features are on). Remove one
 /// with
 /// [`exclude`](crate::OxbloomApplicationBuilder::exclude).
 ///
@@ -43,15 +48,17 @@ use crate::autoconfig::AutoConfigurations;
 /// use oxbloom_boot::{Banner, OxbloomApplication, OxbloomApplicationBuilder, auto_configurations};
 /// use oxbloom_config::Config;
 ///
-/// // `security` adds two auto-configurations, `ssl` one and `web` two.
+/// // `security` adds two auto-configurations, `ssl` one, `actuator` one and `web` two.
 /// let expected = 2 * usize::from(cfg!(feature = "security"))
 ///     + usize::from(cfg!(feature = "ssl"))
+///     + usize::from(cfg!(feature = "actuator"))
 ///     + 2 * usize::from(cfg!(feature = "web"));
 /// assert_eq!(auto_configurations().len(), expected);
 ///
 /// # tokio::runtime::Builder::new_current_thread().build()?.block_on(async {
 /// // No `security.jwt` section and no controller: the JWT decoder and the web server are
-/// // skipped, the default chain (every request must be authenticated) is registered.
+/// // skipped, the default chain (every request must be authenticated) is registered. The
+/// // actuator joins only an application with a controller of its own, so it is skipped too.
 /// OxbloomApplication::builder()
 ///     .with_config(Config::from_str("")?)
 ///     .banner(Banner::off())
@@ -86,6 +93,12 @@ use crate::autoconfig::AutoConfigurations;
 ///     assert_eq!(keys(all(), "ssl."), oxbloom_ssl::PROPERTIES.len());
 ///     assert_eq!(keys(all().exclude::<SslAutoConfiguration>(), "ssl."), 0);
 /// }
+/// #[cfg(feature = "actuator")]
+/// {
+///     use oxbloom_boot::ActuatorAutoConfiguration;
+///     assert_eq!(keys(all(), "management."), 9);
+///     assert_eq!(keys(all().exclude::<ActuatorAutoConfiguration>(), "management."), 0);
+/// }
 /// # let _ = (keys, all);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// # })?;
@@ -99,6 +112,8 @@ pub fn auto_configurations() -> AutoConfigurations {
         .add::<SecurityAutoConfiguration>();
     #[cfg(feature = "ssl")]
     let list = list.add::<SslAutoConfiguration>();
+    #[cfg(feature = "actuator")]
+    let list = list.add::<ActuatorAutoConfiguration>();
     #[cfg(feature = "web")]
     let list = list
         .add::<RequestLogAutoConfiguration>()
