@@ -6,6 +6,7 @@ developer documentation.
 - **API reference:** one runnable example per public function, grouped by crate.
 - **Roadmaps:** the planned core features and modules.
 - **Design specs and implementation plans:** how each slice was designed and built.
+- **Architecture decisions:** one [architecture decision record](adr/) per design decision, each linked to the spec it came from.
 - **Rustdoc:** the generated API documentation of every crate is at [`api/`](../api/oxbloom_boot/index.html).
 
 The source is at <https://github.com/pierrejochem/oxbloom>.
