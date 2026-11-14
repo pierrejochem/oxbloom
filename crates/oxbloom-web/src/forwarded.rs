@@ -303,14 +303,20 @@ fn parse_net(entry: &str) -> Option<(IpAddr, u8)> {
 /// `Framework` and the TCP peer (the one address no client can forge) is a trusted proxy.
 /// The same holds for `proto` and `host`: an untrusted client could otherwise claim `https` or
 /// any host and steer redirects, absolute links or security decisions built on them.
+///
+/// `transport` is the scheme of the connection itself: `Https` when the server terminated TLS.
+/// It is the scheme whenever the forwarded headers are not used. Trusted forwarded headers keep
+/// their meaning: they describe the client's own connection to the first proxy, so a missing
+/// `proto` there still means `Http`.
 pub(crate) fn resolve_client(
     peer: SocketAddr,
     headers: &HeaderMap,
     cfg: &ForwardedConfig,
+    transport: Scheme,
 ) -> ClientInfo {
     let fallback = ClientInfo {
         addr: peer,
-        scheme: Scheme::Http,
+        scheme: transport,
         host: None,
     };
     if cfg.strategy != ForwardStrategy::Framework || !cfg.trusted.contains(peer.ip()) {
@@ -578,7 +584,7 @@ mod tests {
     const PEER: &str = "10.0.0.1:5555";
 
     fn resolve(cfg: &ForwardedConfig, pairs: &[(&str, &str)]) -> ClientInfo {
-        resolve_client(sa(PEER), &headers(pairs), cfg)
+        resolve_client(sa(PEER), &headers(pairs), cfg, Scheme::Http)
     }
 
     fn peer_only() -> ClientInfo {
@@ -798,6 +804,7 @@ mod tests {
             sa("[::ffff:10.0.0.1]:5555"),
             &headers(&[("x-forwarded-for", "203.0.113.9")]),
             &cfg,
+            Scheme::Http,
         );
         assert_eq!(got.addr, sa("203.0.113.9:0"));
     }
@@ -1016,5 +1023,33 @@ mod tests {
         );
         assert_eq!(got.scheme, Scheme::Http);
         assert_eq!(got.host.as_deref(), Some("example.com"));
+    }
+
+    #[test]
+    fn tls_transport_is_https_unless_a_trusted_proxy_says_otherwise() {
+        let tls = |cfg: &ForwardedConfig, pairs: &[(&str, &str)]| {
+            resolve_client(sa(PEER), &headers(pairs), cfg, Scheme::Https)
+        };
+        let spoofed = [("x-forwarded-proto", "http")];
+        // No forwarding, or an untrusted peer: the connection's own scheme.
+        assert_eq!(
+            tls(&ForwardedConfig::default(), &spoofed).scheme,
+            Scheme::Https
+        );
+        assert_eq!(
+            tls(&framework(&["192.0.2.1"]), &spoofed).scheme,
+            Scheme::Https
+        );
+        // Unparsable headers from a trusted peer fall back to the connection as well.
+        let cfg = framework(&["10.0.0.1"]);
+        assert_eq!(tls(&cfg, &[("forwarded", "for=\"")]).scheme, Scheme::Https);
+        // A trusted proxy's headers describe the client's connection to it.
+        assert_eq!(tls(&cfg, &spoofed).scheme, Scheme::Http);
+        assert_eq!(
+            tls(&cfg, &[("x-forwarded-for", "203.0.113.9")]).scheme,
+            Scheme::Http
+        );
+        let got = tls(&cfg, &[("forwarded", "for=203.0.113.9;proto=https")]);
+        assert_eq!(got.scheme, Scheme::Https);
     }
 }

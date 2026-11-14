@@ -20,7 +20,9 @@ oxbloom-di = { version = "0.1.0", path = "../oxbloom-di", optional = true }
 oxbloom-macros = { version = "0.1.0", path = "../oxbloom-macros" }
 serde = { version = "1.0.229", optional = true }
 serde_json = { version = "1.0.154", optional = true }
-tokio = { version = "1.54.1", features = ["rt", "net", "signal", "macros", "time", "fs"] }
+tokio = { version = "1.54.1", features = ["rt", "net", "signal", "macros", "time", "fs", "sync"] }
+# The caller builds the `rustls::ServerConfig` and picks its crypto provider, so no provider here.
+tokio-rustls = { version = "0.26.6", default-features = false, optional = true }
 tracing = "0.1.44"
 zstd = { version = "0.14.3", optional = true }
 
@@ -28,9 +30,13 @@ zstd = { version = "0.14.3", optional = true }
 brotli = { version = "9.0.0", default-features = false, features = ["std"] }
 flate2 = "1.1.10"
 oxbloom-di = { path = "../oxbloom-di" }
+# Test certificates for `tests/tls.rs` are generated at test time; `aws-lc-rs` only, no `ring`.
+rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs"] }
+rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-tokio = { version = "1.54.1", features = ["rt", "macros", "net", "io-util", "time", "rt-multi-thread", "sync"] }
+tokio = { version = "1.54.1", features = ["rt", "macros", "net", "io-util", "time", "rt-multi-thread", "sync", "test-util"] }
+tokio-rustls = { version = "0.26.6", default-features = false }
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["std", "fmt"] }
 trybuild = "1.0.122"
 zstd = "0.14.3"
@@ -43,3 +49,4 @@ brotli = ["dep:brotli"]
 zstd = ["dep:zstd"]
 json = ["dep:serde", "dep:serde_json"]
 di = ["dep:oxbloom-di"]
+tls = ["dep:tokio-rustls"]

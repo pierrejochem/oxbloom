@@ -12,7 +12,7 @@ use hyper::service::service_fn;
 use hyper_util::rt::{TokioIo, TokioTimer};
 use hyper_util::server::graceful::GracefulShutdown;
 use oxbloom_core::HttpMethod;
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinSet;
 
 use crate::catch::{CatchUnwind, panic_response, request_info};
@@ -20,11 +20,15 @@ use crate::filter::{BodyLimitFilter, BodyTooLarge, ErrorHandlingFilter, run_pipe
 use crate::forwarded::resolve_client;
 use crate::{
     ClientInfo, ErrorRenderer, Filter, ForwardedConfig, ProblemRenderer, Request, Response, Route,
-    RouteError, Router, RouterConfig,
+    RouteError, Router, RouterConfig, Scheme,
 };
 
 /// The longest header read timeout: one day.
 const MAX_HEADER_READ_TIMEOUT: Duration = Duration::from_secs(86_400);
+
+/// How long a client may take to complete its TLS handshake.
+#[cfg(feature = "tls")]
+const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Application builder and HTTP/1.1 server.
 ///
@@ -143,9 +147,9 @@ impl App {
         self
     }
 
-    /// How long [`App::serve`] waits for open connections after the shutdown signal. When it
-    /// expires, the remaining connections are dropped and a warning is logged on target
-    /// `oxbloom::web`. Default 30 s.
+    /// How long [`App::serve`] (and `App::serve_tls`, feature `tls`) waits for open connections
+    /// after the shutdown signal. When it expires, the remaining connections are dropped and a
+    /// warning is logged on target `oxbloom::web`. Default 30 s.
     ///
     /// # Examples
     ///
@@ -521,7 +525,7 @@ impl App {
         if too_large {
             req.body = Bytes::new();
         }
-        let client = peer.map(|p| resolve_client(p, &req.headers, &self.forwarded));
+        let client = peer.map(|p| resolve_client(p, &req.headers, &self.forwarded, Scheme::Http));
         run_request(
             &self.filters,
             &self.router,
@@ -603,12 +607,88 @@ impl App {
         listener: TcpListener,
         shutdown: impl Future<Output = ()>,
     ) -> io::Result<()> {
+        self.serve_on(listener, Plain, shutdown).await
+    }
+
+    /// Serves HTTPS on `listener` until `shutdown` completes: [`App::serve`] with a TLS
+    /// handshake in front of each connection. Requires the `tls` feature.
+    ///
+    /// The shutdown and its [`App::shutdown_timeout`], the header read timeout, the body limit,
+    /// the filters and the router work exactly as in [`App::serve`]. Each accepted connection
+    /// is handshaken in its own task, so a slow client never delays the others. A client that
+    /// has not finished its handshake after 10 seconds is dropped, and a handshake still running
+    /// when shutdown starts is dropped at once. A failed handshake is logged at `debug` on target
+    /// `oxbloom::web` with the peer address and the error kind, never with bytes the client sent.
+    ///
+    /// The connection speaks HTTP/1.1 only. Set `alpn_protocols` of the `rustls::ServerConfig`
+    /// behind `acceptor` to `http/1.1` alone, so a client that offers only `h2` fails the
+    /// handshake; a connection that still negotiates another protocol is closed. A client that
+    /// offers no ALPN is served HTTP/1.1.
+    ///
+    /// Every request reports the scheme [`Scheme::Https`] through [`Request::scheme`], unless a
+    /// trusted proxy's forwarded headers say otherwise (see [`App::forwarded`]).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use oxbloom_web::{App, HttpMethod, Route};
+    /// use rustls::ServerConfig;
+    /// use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
+    /// use tokio::net::{TcpListener, TcpStream};
+    /// use tokio_rustls::TlsAcceptor;
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let key = rcgen::KeyPair::generate()?;
+    /// # let cert = rcgen::CertificateParams::new(vec!["localhost".to_string()])?.self_signed(&key)?;
+    /// # let (certs, key) = (
+    /// #     vec![cert.der().clone()],
+    /// #     PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key.serialize_der())),
+    /// # );
+    /// // `certs` and `key` are the server's certificate chain and private key.
+    /// let mut config = ServerConfig::builder()
+    ///     .with_no_client_auth()
+    ///     .with_single_cert(certs, key)?;
+    /// config.alpn_protocols = vec![b"http/1.1".to_vec()];
+    ///
+    /// let app = App::new()
+    ///     .route(Route::new(HttpMethod::Get, "/ping", |_| async { "pong" }))?;
+    /// let listener = TcpListener::bind("127.0.0.1:0").await?;
+    /// let acceptor = TlsAcceptor::from(Arc::new(config));
+    /// // Serve until Ctrl-C; this example stops at once.
+    /// // app.serve_tls(listener, acceptor, async { let _ = tokio::signal::ctrl_c().await; })
+    /// app.serve_tls(listener, acceptor, async {}).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(feature = "tls")]
+    pub async fn serve_tls(
+        self,
+        listener: TcpListener,
+        acceptor: tokio_rustls::TlsAcceptor,
+        shutdown: impl Future<Output = ()>,
+    ) -> io::Result<()> {
+        self.serve_on(listener, Tls(acceptor), shutdown).await
+    }
+
+    /// The accept loop of [`App::serve`] and `App::serve_tls`. Each accepted stream is opened by
+    /// `transport` inside its connection task, then served by the same HTTP/1.1 connection.
+    async fn serve_on<T: Transport>(
+        self,
+        listener: TcpListener,
+        transport: T,
+        shutdown: impl Future<Output = ()>,
+    ) -> io::Result<()> {
         let pipeline = Arc::new((self.filters, self.router, self.renderer, self.forwarded));
         let max_body = self.max_body_bytes;
         let graceful = GracefulShutdown::new();
         let mut http = hyper::server::conn::http1::Builder::new();
         http.timer(TokioTimer::new())
             .header_read_timeout(self.header_read_timeout);
+        // Tells connections still opening their stream (a TLS handshake) to give up, so they do
+        // not hold the graceful shutdown open: they have no request in flight yet.
+        let (stopping, stop) = tokio::sync::watch::channel(());
         // Connection tasks live in this set, so they can be aborted when the shutdown timeout
         // expires; dropping the set aborts every task still in it.
         let mut conns = JoinSet::new();
@@ -628,18 +708,32 @@ impl App {
                 let pipeline = Arc::clone(&pipeline);
                 async move {
                     let (filters, router, renderer, forwarded) = &*pipeline;
-                    let client = resolve_client(peer, req.headers(), forwarded);
+                    let client = resolve_client(peer, req.headers(), forwarded, T::SCHEME);
                     let res = dispatch(filters, router, &**renderer, req, max_body, client).await;
                     Ok::<_, Infallible>(res)
                 }
             });
-            let conn = http.serve_connection(TokioIo::new(stream), svc);
-            let conn = graceful.watch(conn);
+            // Taken now, before any later shutdown signal, so a connection whose stream opens
+            // after shutdown started is told to close at once.
+            let watcher = graceful.watcher();
+            let http = http.clone();
+            let transport = transport.clone();
+            let mut stop = stop.clone();
             conns.spawn(async move {
-                let _ = conn.await;
+                let io = tokio::select! {
+                    biased;
+                    io = transport.open(stream, peer) => io,
+                    _ = stop.changed() => None,
+                };
+                if let Some(io) = io {
+                    let _ = watcher
+                        .watch(http.serve_connection(TokioIo::new(io), svc))
+                        .await;
+                }
             });
         }
         drop(listener);
+        let _ = stopping.send(());
         if tokio::time::timeout(self.shutdown_timeout, graceful.shutdown())
             .await
             .is_err()
@@ -652,6 +746,77 @@ impl App {
         }
         conns.abort_all();
         Ok(())
+    }
+}
+
+/// How the server turns an accepted TCP stream into the stream it speaks HTTP/1.1 on.
+trait Transport: Clone + Send + 'static {
+    /// The stream HTTP/1.1 is served on.
+    type Io: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static;
+
+    /// The scheme of a request on this transport when no trusted proxy states another.
+    const SCHEME: Scheme;
+
+    /// Opens `stream`, accepted from `peer`. `None` drops the connection.
+    fn open(
+        &self,
+        stream: TcpStream,
+        peer: SocketAddr,
+    ) -> impl Future<Output = Option<Self::Io>> + Send + 'static;
+}
+
+/// Plain HTTP: the TCP stream as it is.
+#[derive(Clone)]
+struct Plain;
+
+impl Transport for Plain {
+    type Io = TcpStream;
+    const SCHEME: Scheme = Scheme::Http;
+
+    fn open(
+        &self,
+        stream: TcpStream,
+        _peer: SocketAddr,
+    ) -> impl Future<Output = Option<TcpStream>> + Send + 'static {
+        std::future::ready(Some(stream))
+    }
+}
+
+/// HTTPS: a TLS handshake with a timeout, then HTTP/1.1 inside the TLS stream.
+#[cfg(feature = "tls")]
+#[derive(Clone)]
+struct Tls(tokio_rustls::TlsAcceptor);
+
+#[cfg(feature = "tls")]
+impl Transport for Tls {
+    type Io = tokio_rustls::server::TlsStream<TcpStream>;
+    const SCHEME: Scheme = Scheme::Https;
+
+    fn open(
+        &self,
+        stream: TcpStream,
+        peer: SocketAddr,
+    ) -> impl Future<Output = Option<Self::Io>> + Send + 'static {
+        let accept = self.0.accept(stream);
+        async move {
+            let err = match tokio::time::timeout(TLS_HANDSHAKE_TIMEOUT, accept).await {
+                Ok(Ok(tls)) => match tls.get_ref().1.alpn_protocol() {
+                    None | Some(b"http/1.1") => return Some(tls),
+                    // The caller's config offered another protocol and the client chose it.
+                    Some(_) => io::Error::from(io::ErrorKind::Unsupported),
+                },
+                Ok(Err(e)) => e,
+                Err(_) => io::Error::from(io::ErrorKind::TimedOut),
+            };
+            // The kind only: the error text of a failed handshake may describe what was sent.
+            tracing::debug!(
+                target: "oxbloom::web",
+                %peer,
+                kind = ?err.kind(),
+                "TLS handshake failed; connection dropped"
+            );
+            None
+        }
     }
 }
 
