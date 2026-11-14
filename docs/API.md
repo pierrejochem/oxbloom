@@ -5551,8 +5551,10 @@ assert_eq!((status, parts.len()), (Status::Up, 0));
 
 The application's `build.rs` calls `oxbloom_actuator::build::emit()` (with `oxbloom-actuator` as a build
 dependency). It prints the package name and version, the short git sha, the git branch and the build time (in
-seconds since the Unix epoch), leaves the git facts out when `git` fails and never fails the build. It tracks
-`build.rs` and `.git/HEAD` only, so the sha of an incremental build can be stale. The macro `build_info!()`
+seconds since the Unix epoch), leaves the git facts out when `git` fails and never fails the build. The branch is
+left out on a detached checkout. The script reruns when `build.rs`, the git `HEAD`, the current branch ref or
+`packed-refs` changes (the git directory comes from `git rev-parse --absolute-git-dir`), so a new commit
+refreshes the sha. The macro `build_info!()`
 expands in the application's crate and reads those variables with `option_env!`, which a library function
 could not do; it returns a `BuildInfo`. `BuildInfo` has the `Option<String>` fields `name`, `version`,
 `git_sha`, `git_branch` and `build_time`, derives `Default`, and leaves absent fields out of the JSON.

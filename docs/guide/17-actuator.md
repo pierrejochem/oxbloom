@@ -198,9 +198,9 @@ pub fn build_info() -> BuildInfo {
 // In the builder: `.bean(build_info)`
 ```
 
-`emit` records the package name and version of the application, the short git sha and the git branch, and the build time in seconds since the Unix epoch. A missing `git` or a directory that is not a repository leaves the git facts out and never fails the build. Without a `BuildInfo` bean all facts are absent.
+`emit` records the package name and version of the application, the short git sha and the git branch, and the build time in seconds since the Unix epoch. A missing `git` or a directory that is not a repository leaves the git facts out and never fails the build. On a detached checkout the branch is left out. Without a `BuildInfo` bean all facts are absent.
 
-The git sha and branch can go stale. The build script runs again only when `build.rs` or `.git/HEAD` changes, and that path is relative to the application's package directory. A new commit on the same branch does not touch `.git/HEAD`, so the sha of an incremental build can be older than the checkout. A clean build always has the right values.
+The build script runs again when `build.rs`, the git `HEAD`, the ref of the current branch or `packed-refs` changes. `emit` finds the git directory with `git rev-parse --absolute-git-dir`, so this works from any member of a workspace, and a new commit or a branch switch refreshes the sha. Outside a git checkout only `build.rs` is watched, and an unchanged checkout does not rebuild the application.
 
 ## Log levels
 
