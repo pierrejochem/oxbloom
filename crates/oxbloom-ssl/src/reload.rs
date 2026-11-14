@@ -265,7 +265,7 @@ impl ReloadTask {
             return ReloadTask { running: None };
         };
         let stopped = Arc::new(Mutex::new(false));
-        let dispatch = tracing::dispatcher::get_default(Dispatch::clone);
+        let dispatch = current_subscriber();
         let task = poll(poller, first, interval, Arc::clone(&stopped), dispatch);
         let abort = match tokio::runtime::Handle::try_current() {
             Ok(runtime) => runtime.spawn(task).abort_handle(),
@@ -305,7 +305,8 @@ impl ReloadTask {
     }
 
     /// Ends the polling task. When it returns, a reload in progress has finished and no other
-    /// one starts. Dropping the task does the same.
+    /// one starts, so the call may wait for a pass that is reading files. Dropping the task
+    /// does the same.
     ///
     /// # Examples
     ///
@@ -379,26 +380,40 @@ fn own_thread(
     Some(abort)
 }
 
+/// The subscriber that is current on this thread, or `None` when there is none. Forcing the
+/// no-op subscriber on the task would hide the global subscriber installed later, so the
+/// task then reports to whatever default exists when each event is emitted.
+fn current_subscriber() -> Option<Dispatch> {
+    tracing::dispatcher::get_default(|dispatch| {
+        (!dispatch.is::<tracing::subscriber::NoSubscriber>()).then(|| dispatch.clone())
+    })
+}
+
 /// The polling loop: from `first` on, every `interval`, one [`Poller::tick`] on the blocking
-/// pool, reported to `dispatch` (the subscriber that was current when the task started).
+/// pool, reported to `dispatch` (the subscriber that was current when the task started) or,
+/// without one, to the default subscriber at the time of each event.
 async fn poll(
     poller: Poller,
     first: tokio::time::Instant,
     interval: Duration,
     stopped: Arc<Mutex<bool>>,
-    dispatch: Dispatch,
+    dispatch: Option<Dispatch>,
 ) {
     let mut ticker = tokio::time::interval_at(first, interval);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         ticker.tick().await;
-        let (poller, stopped, dispatch) = (poller.clone(), Arc::clone(&stopped), dispatch.clone());
+        let (poller, stopped, pass_dispatch) =
+            (poller.clone(), Arc::clone(&stopped), dispatch.clone());
         let pass = tokio::task::spawn_blocking(move || {
             let stopped = lock(&stopped);
             if *stopped {
                 return false;
             }
-            tracing::dispatcher::with_default(&dispatch, || poller.tick());
+            match &pass_dispatch {
+                Some(dispatch) => tracing::dispatcher::with_default(dispatch, || poller.tick()),
+                None => poller.tick(),
+            }
             true
         })
         .await;
@@ -407,7 +422,18 @@ async fn poll(
             Ok(false) => break,
             Err(e) if e.is_cancelled() => break,
             // A panicking pass is skipped; the next tick tries again.
-            Err(_) => {}
+            Err(_) => {
+                let warn = || {
+                    tracing::warn!(
+                        target: TARGET,
+                        "a pass of the SSL reload task panicked; trying again on the next tick"
+                    )
+                };
+                match &dispatch {
+                    Some(dispatch) => tracing::dispatcher::with_default(dispatch, warn),
+                    None => warn(),
+                }
+            }
         }
     }
 }
@@ -430,6 +456,32 @@ mod tests {
             }),
             "key-mismatch"
         );
+    }
+
+    #[test]
+    fn only_a_real_subscriber_is_captured_for_the_task() {
+        assert!(current_subscriber().is_none());
+        let scoped = Dispatch::new(tracing::subscriber::NoSubscriber::default());
+        tracing::dispatcher::with_default(&scoped, || assert!(current_subscriber().is_none()));
+
+        struct Real;
+        impl tracing::Subscriber for Real {
+            fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+                true
+            }
+            fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+                tracing::span::Id::from_u64(1)
+            }
+            fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+            fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+            fn event(&self, _: &tracing::Event<'_>) {}
+            fn enter(&self, _: &tracing::span::Id) {}
+            fn exit(&self, _: &tracing::span::Id) {}
+        }
+        let real = Dispatch::new(Real);
+        tracing::dispatcher::with_default(&real, || {
+            assert!(current_subscriber().is_some_and(|d| d.is::<Real>()));
+        });
     }
 
     #[test]

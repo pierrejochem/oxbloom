@@ -254,7 +254,9 @@ impl SslBundles {
     /// from it uses the new identity. A bundle that fails keeps its old material. Nothing calls
     /// this automatically; [`SslBundles::start_reload`] polls instead. A client configuration
     /// fixes its trust store when [`SslBundle::client_config`] builds it, so a reloaded trust
-    /// store reaches only configurations built afterwards.
+    /// store reaches only configurations built afterwards. The call reads the files on the
+    /// calling thread with blocking I/O; inside an async task, run it on a blocking thread
+    /// such as `tokio::task::spawn_blocking`.
     ///
     /// # Errors
     ///
@@ -310,9 +312,16 @@ impl SslBundles {
     /// files change again. As with [`SslBundles::reload`], a client configuration built
     /// earlier keeps its trust store.
     ///
+    /// A certificate file and a key file that are replaced one after the other can be seen
+    /// between the two writes, which gives one `key-mismatch` warning before the second write
+    /// is picked up. Replace both at once, with a directory or symlink swap as Kubernetes
+    /// secret mounts do, to avoid it.
+    ///
     /// With an interval of zero the returned task does nothing. Inside a Tokio runtime, which
     /// needs its time driver, the task runs on that runtime; outside one, on its own thread.
-    /// Events go to the subscriber that is current when the task starts.
+    /// Events go to the subscriber that is current when the task starts or, when there is
+    /// none, to the default subscriber when each event is emitted, so a global subscriber
+    /// installed later still receives them.
     ///
     /// # Examples
     ///

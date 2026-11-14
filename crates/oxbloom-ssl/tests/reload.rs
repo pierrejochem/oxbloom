@@ -481,3 +481,37 @@ fn the_container_starts_and_stops_the_task() {
     let_ticks_pass(4);
     assert_eq!(served_leaf(server, &new_ca), Some(issued.cert_der));
 }
+
+#[test]
+fn a_panicking_pass_is_logged_and_the_next_tick_tries_again() {
+    let (events, _guard) = capture();
+    let web = web_files();
+    let bundles = load(&web_toml("50ms", &web.cert, &web.key));
+    let server = bundles.get("web").unwrap().server_config().unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    {
+        let calls = Arc::clone(&calls);
+        oxbloom_ssl::__private::set_read_hook(&bundles, move |_| {
+            if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                panic!("the test hook panics once");
+            }
+        });
+    }
+    let task = bundles.start_reload();
+
+    let new_ca = ca();
+    let issued = new_ca.issue(&["localhost"]);
+    replace(&web.key, &issued.key_pem);
+    replace(&web.cert, &issued.chain_pem);
+
+    assert!(
+        wait_for(|| served_leaf(server.clone(), &new_ca).as_ref() == Some(&issued.cert_der)),
+        "the next tick did not reload after the panic"
+    );
+    let warnings = events.ssl(Level::WARN);
+    assert!(
+        warnings.iter().any(|e| e.text.contains("panicked")),
+        "no panic warning: {warnings:?}"
+    );
+    task.stop();
+}
