@@ -515,7 +515,7 @@ Delivered:
 - `TodoCleanup::purge_at` in `examples/todos` is `#[retryable(max_attempts = 3, initial = "50ms")]`, with `TodoStore::fail_next`, tests, a README section and a `[tasks.retry]` block in `application.toml`.
 - ADR 0085 and the retry chapter of the guide.
 
-Gate numbers at the end of C9b: to be filled in after the final gate.
+Gate numbers at the end of C9b: `cargo test --workspace --all-features` 2700 passed, 0 failed, 8 ignored (2619 before C9b); `oxbloom-tasks` 178, `oxbloom-macros` 25, `oxbloom-boot` 505 (all features); `make check-examples` 54; clippy `-D warnings` and `cargo fmt --check` clean; the boot stack probes are unchanged at 238 KB (237 overflows) and 239 KB with all features (238 overflows); the five `tasks` feature builds of `oxbloom-boot` and the `--no-default-features --features tasks` doc tests (112) pass.
 
 Limits that users must know (also in the guide):
 - The defaults are process-wide state. Each context's `RetryAutoConfiguration` overwrites them, a context without it keeps what the process set before, they stay after the run ends, and `oxbloom-test` has no reset (call `reset_defaults()` in a test).
