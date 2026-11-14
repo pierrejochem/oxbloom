@@ -40,6 +40,8 @@ pub struct ActuatorController {
     availability: Arc<Availability>,
     runner: Arc<HealthRunner>,
     info: Arc<Info>,
+    #[cfg(feature = "logging")]
+    loggers: Option<Arc<oxbloom_logging::LoggingSystem>>,
 }
 
 impl ActuatorController {
@@ -70,7 +72,59 @@ impl ActuatorController {
             availability,
             runner,
             info,
+            #[cfg(feature = "logging")]
+            loggers: None,
         }
+    }
+
+    /// Serves the `loggers` endpoint over `logging`: `GET {base}/loggers` answers
+    /// `{"levels":{target:level}}` (levels in upper case, `root` included),
+    /// `GET {base}/loggers/{target}` answers `{"configuredLevel":..,"effectiveLevel":..}` and
+    /// `POST {base}/loggers/{target}` with `{"configuredLevel":"DEBUG"}` sets the level and
+    /// answers 204.
+    ///
+    /// A target without a level of its own is not an error: `configuredLevel` is `null` and
+    /// `effectiveLevel` is the level it inherits, as `LoggingSystem::level` reports. A body
+    /// that is not that JSON object, is over 1 KiB, names an unknown level, or an empty or
+    /// invalid target is a 400 problem answer and changes nothing. The endpoint follows
+    /// `management.endpoint.loggers.enabled`.
+    ///
+    /// Available with the cargo feature `logging`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use std::time::Duration;
+    /// use oxbloom_actuator::*;
+    /// use oxbloom_config::Config;
+    /// use oxbloom_logging::{Level, LoggingSystem};
+    /// use oxbloom_web::{App, Controller, HttpMethod, Request};
+    ///
+    /// # tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap().block_on(async {
+    /// let logging = Arc::new(LoggingSystem::init(&Config::from_str("").unwrap()).unwrap());
+    /// let controller = Arc::new(
+    ///     ActuatorController::new(
+    ///         ActuatorSettings::default(),
+    ///         Arc::new(Availability::new()),
+    ///         Arc::new(HealthRunner::new(vec![], Duration::from_secs(1))),
+    ///         Arc::new(Info { build: BuildInfo::default(), platform: Platform::None, contributors: vec![] }),
+    ///     )
+    ///     .with_loggers(Arc::clone(&logging)),
+    /// );
+    /// let app = App::new().routes(controller.routes()).unwrap();
+    /// let mut req = Request::new(HttpMethod::Post, "/actuator/loggers/app");
+    /// req.headers.insert("content-type", "application/json".parse().unwrap());
+    /// req.body = r#"{"configuredLevel":"DEBUG"}"#.into();
+    /// assert_eq!(app.handle(req).await.status(), 204);
+    /// assert_eq!(logging.level("app"), Level::Debug);
+    /// # });
+    /// ```
+    #[cfg(feature = "logging")]
+    #[must_use]
+    pub fn with_loggers(mut self, logging: Arc<oxbloom_logging::LoggingSystem>) -> Self {
+        self.loggers = Some(logging);
+        self
     }
 }
 
@@ -156,6 +210,12 @@ impl Controller for ActuatorController {
                     async move { Json(body) }
                 },
             ));
+        }
+        #[cfg(feature = "logging")]
+        if self.settings.loggers_enabled
+            && let Some(logging) = &self.loggers
+        {
+            routes.extend(crate::loggers::routes(&base, logging));
         }
         routes
     }

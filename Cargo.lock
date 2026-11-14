@@ -1568,10 +1568,15 @@ dependencies = [
  "async-trait",
  "http",
  "oxbloom-config",
+ "oxbloom-core",
+ "oxbloom-logging",
+ "oxbloom-ssl",
  "oxbloom-web",
+ "rcgen",
  "serde",
  "serde_json",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

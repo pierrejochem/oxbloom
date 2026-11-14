@@ -23,6 +23,10 @@ mod settings;
 
 #[cfg(feature = "web")]
 mod controller;
+#[cfg(feature = "logging")]
+mod loggers;
+#[cfg(feature = "ssl")]
+mod ssl_indicator;
 
 pub use availability::{Availability, Liveness, Readiness};
 pub use health::{Health, HealthIndicator, HealthRunner, Status};
@@ -31,3 +35,6 @@ pub use settings::ActuatorSettings;
 
 #[cfg(feature = "web")]
 pub use controller::ActuatorController;
+
+#[cfg(feature = "ssl")]
+pub use ssl_indicator::SslHealthIndicator;
