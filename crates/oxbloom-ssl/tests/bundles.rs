@@ -315,6 +315,22 @@ fn unknown_key_under_a_bundle_is_a_config_error() {
 }
 
 #[test]
+fn unknown_key_under_ssl_is_a_config_error_that_lists_the_valid_keys() {
+    let err = load("[ssl]\nreload-intervall = \"MARKER-VALUE-91\"\n").unwrap_err();
+    assert!(
+        matches!(&err, SslError::Config(ConfigError::Invalid { .. })),
+        "{err:?}"
+    );
+    let text = err.to_string();
+    assert!(text.contains("`ssl`"), "{text}");
+    assert!(text.contains("`reload-intervall`"), "{text}");
+    for valid in ["reload_interval", "expiry_warning", "bundle"] {
+        assert!(text.contains(valid), "`{valid}` missing from: {text}");
+    }
+    assert!(!text.contains("MARKER-VALUE-91"), "value leaked: {text}");
+}
+
+#[test]
 fn duplicate_name_across_pem_and_pkcs12_is_an_error() {
     let ca = ca();
     let err = load(&format!(

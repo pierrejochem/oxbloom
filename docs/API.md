@@ -5170,7 +5170,8 @@ directly when you build TLS configurations yourself. The guide chapter is
 - Errors, `Debug` output and log events name the bundle and the key to fix, never a private key, a
   password, a file path or file contents.
 - Bundle names are unique across `pem` and `pkcs12` and match like configuration keys (case-insensitive,
-  ignoring `-` and `_`). An unknown key under a bundle is a configuration error that lists the valid keys.
+  ignoring `-` and `_`). An unknown key under `ssl` or under a bundle is a configuration error that names the key
+  and lists the valid keys.
 - Validity problems only warn; they never stop the startup.
 - The feature `di` implements `oxbloom_di::Lifecycle` for `SslBundles`.
 

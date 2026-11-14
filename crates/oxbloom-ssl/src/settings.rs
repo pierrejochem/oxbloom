@@ -75,7 +75,7 @@ const DEFAULT_EXPIRY_WARNING: Duration = Duration::from_secs(14 * 24 * 60 * 60);
 
 /// The `ssl` subtree as written; every part is optional.
 #[derive(Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 struct RawSsl {
     reload_interval: Duration,
     expiry_warning: Duration,

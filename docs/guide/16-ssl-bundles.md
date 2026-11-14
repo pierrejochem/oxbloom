@@ -48,7 +48,7 @@ Rules that hold for every bundle:
 
 - A value that starts with `-----BEGIN` (after leading whitespace) is inline PEM. Any other value is a file path, relative to the current directory of the process.
 - `certificate` without `private-key`, or the reverse, is an error naming the missing key. A bundle with neither an identity nor a trust store is an error too.
-- A name is unique across `pem` and `pkcs12`. Names and keys match like the rest of the configuration: case-insensitive, ignoring `-` and `_`. An unknown key under a bundle is an error that lists the valid keys.
+- A name is unique across `pem` and `pkcs12`. Names and keys match like the rest of the configuration: case-insensitive, ignoring `-` and `_`. An unknown key under `ssl` or under a bundle (a typo such as `ssl.reload-intervall`) is an error that names the key and lists the valid keys.
 - `private-key` and `password` are `Secret` values. No error, `Debug` output, log event or failure report contains a private key, a password, a file path or file contents; they name the bundle and the key to fix instead.
 - The property metadata lists every key (`OxbloomApplicationBuilder::property_metadata()`), and the conditions report says why `SslAutoConfiguration` ran or not.
 
