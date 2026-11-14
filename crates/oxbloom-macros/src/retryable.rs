@@ -272,7 +272,9 @@ pub(crate) fn expand(args: TokenStream2, input: TokenStream2) -> TokenStream2 {
     };
     // With all six fields given, a struct update would trip Clippy's `needless_update`.
     let rest = (fields.len() < 6).then(|| quote! { ..::oxbloom_tasks::__private::Overrides::NONE });
-    let block = &item.block;
+    // The statements go straight into the async block: nesting the method's braces there
+    // would trip rustc's `unused_braces` on a one-line body.
+    let stmts = &item.block.stmts;
     let pin = output_pin(&item.sig.output);
     let span = method.span();
     let body = quote_spanned! {span=>
@@ -285,7 +287,7 @@ pub(crate) fn expand(args: TokenStream2, input: TokenStream2) -> TokenStream2 {
             #retry_if,
             || async {
                 #pin
-                #block
+                #(#stmts)*
             },
         )
         .await
