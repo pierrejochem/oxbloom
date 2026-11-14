@@ -109,7 +109,7 @@ html { font-family: var(--font-sans); }
 body { font-family: var(--font-sans); font-size: 16px; line-height: 1.6; background: var(--bg); color: var(--fg); }
 
 /* Headings: Fraunces */
-.content h1, .content h2, .content h3, .content h4, .menu-title {
+.content h1, .content h2, .content h3, .content h4 {
   font-family: var(--font-display);
   font-weight: 600;
   letter-spacing: -0.01em;
@@ -119,7 +119,6 @@ body { font-family: var(--font-sans); font-size: 16px; line-height: 1.6; backgro
 .content h2 { font-size: 1.7rem; line-height: 1.25; padding-bottom: .3em; border-bottom: 1px solid var(--hairline); }
 .content h3 { font-size: 1.35rem; }
 .content h1 a.header, .content h2 a.header, .content h3 a.header, .content h4 a.header { color: inherit; }
-.menu-title { font-size: 1.15rem; }
 
 /* Links */
 .content a { color: var(--oxide-text); text-decoration-color: var(--bloom); text-underline-offset: 3px; }
@@ -232,7 +231,7 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--oxide); outline
   -webkit-backdrop-filter: saturate(1.4) blur(12px); backdrop-filter: saturate(1.4) blur(12px);
   border-bottom: 1px solid var(--hairline);
 }
-.menu-title { font-size: 1rem; font-weight: 600; text-align: left; padding-left: 8px; }
+.menu-title { font: 500 14px/1 var(--font-sans); letter-spacing: 0; color: var(--ink-muted); text-align: left; padding-left: 8px; }
 .icon-button { color: var(--icons); border-radius: 8px; }
 .icon-button:hover { color: var(--icons-hover); background: var(--surface-000); }
 .ox-nav { display: flex; align-items: center; gap: 4px; margin-right: 6px; }
