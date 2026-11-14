@@ -584,13 +584,25 @@ Follow-ups from Slice 6a, not yet scheduled:
 - `#[non_exhaustive]` on the security enums.
 
 Deferred minors from the Slice 6a reviews:
-- Hostile stored hash parameters are not capped in `matches`.
-- `upgrade_encoding` ignores the algorithm variant and the version.
-- `Argon2PasswordEncoder::new` does not cap `memory_kib` upward beyond what the crate accepts.
-- `DelegatingPasswordEncoder::new` accepts ids with braces.
-- The config check accepts any PHC algorithm after `{argon2}`.
-- The raw password is not zeroized.
-- There is no failure-analyzer text for the new keys.
+- Hostile stored hash parameters are not capped in `matches`: it takes memory, iterations and lanes from the stored hash, so a hostile hash (a huge iteration or memory value) can hang or exhaust a login; a ceiling on the parsed costs and a test are needed.
+- `upgrade_encoding` ignores the algorithm variant and the version, so an `argon2i` or `argon2d` hash or a version other than 19 reports no upgrade.
+- `Argon2PasswordEncoder::new` does not cap `memory_kib` upward beyond what the crate accepts: `new(u32::MAX, 1, 1)` passes validation and `encode` then panics on out-of-memory. The `expect` message in `encode` is inaccurate and there is no `# Panics` note.
+- `DelegatingPasswordEncoder::new` accepts empty ids and ids that contain braces.
+- Encoder tests are missing for `{}`, an empty rest after `{argon2}`, nested braces, hostile parameters and a registered id that is not the default.
+- `DaoAuthenticationProvider::new` runs `encode` synchronously for the dummy hash, which blocks an async worker when it is called from async code; a rustdoc note is missing.
+- A user with a malformed stored hash answers faster than an unknown user, because nothing is hashed: a narrow timing difference.
+- The raw password is copied into a plain `String` for `spawn_blocking` and is not zeroized.
+- No test captures the tracing output of a failed login, and the test for disabled and locked accounts checks the status but not the equality of `WWW-Authenticate`.
+- The Basic `HeaderValue` is formatted for every 401 with an `.ok()` fallback instead of once in `build()`.
+- A stale doc comment in `chain.rs` (`basic` versus `scheme`) remains, and the `http_basic` doc implies two challenges on a failed login, while only an anonymous request gets both.
+- The realm check in `HttpSecurity::build` uses `is_ascii_control`, so C1 control characters pass; the realm rule is duplicated between `password_config.rs` and `HttpBasic::realm`.
+- A long Basic token is fully decoded before the 1024-byte caps of the provider apply; a cheap length check before decoding is missing.
+- Untested cases: `ProviderUnavailable` giving 503 in a Basic chain, the answer for a malformed header on a mixed chain, and the non-UTF-8 and non-text header cases, which assert the status only.
+- There is no failure-analyzer text for the new keys (the analyzer covers only `security.jwt`), and `TestApp::secured()` now also adds `PasswordEncoderAutoConfiguration`.
+- The config check accepts any PHC algorithm after `{argon2}`, so a `pbkdf2` or `scrypt` hash passes startup and then fails silently with a 401; only `argon2id`, `argon2i` and `argon2d` should pass.
+- The `security.http-basic.*` keys sit in the metadata of `PasswordEncoderAutoConfiguration` although `SecurityAutoConfiguration` reads them, so excluding the first hides keys that the chain applies.
+- The "not echoed" test covers only the above-bound value, and every Argon2 parameter rejection is reported on `memory-kib`.
+- In the example, a rewrapped doc paragraph above `PublicPaths` in `api.rs` has a broken short line, the `AdminController` doc says "guarded by HTTP Basic" although its doctest has no chain, the `stats()` test helper returns an opaque tuple, and `tests/basic.rs` hand-rolls Base64.
 
 Rulings made during Slice 6a:
 - Argon2 comes from the RustCrypto `argon2` crate, which is pure Rust, so the dependency tree stays free of `ring`.

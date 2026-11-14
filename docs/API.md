@@ -3664,7 +3664,7 @@ either feature the function does not exist. Remove one entry with `exclude::<A>(
 ```rust
 use oxbloom_boot::auto_configurations;
 
-// 2 with `security` only, 1 with `web` only, 3 with both.
+// 3 with `security` only, 2 with `web` only, 5 with both.
 assert!(auto_configurations().len() >= 1);
 ```
 
