@@ -8,16 +8,23 @@ rust-version.workspace = true
 # The features gate optional parts that later tasks add; the health and availability types
 # are always available.
 [features]
-web = []
+web = ["dep:oxbloom-web", "dep:http"]
 logging = []
 ssl = []
 di = []
 
 [dependencies]
 async-trait = "0.1.92"
+http = { version = "1.5.0", optional = true }
+oxbloom-config = { version = "0.1.0", path = "../oxbloom-config" }
+oxbloom-web = { version = "0.1.0", path = "../oxbloom-web", optional = true }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 tokio = { version = "1.54.1", features = ["rt", "time"] }
 
 [dev-dependencies]
 tokio = { version = "1.54.1", features = ["rt", "time", "macros"] }
+
+[[test]]
+name = "controller"
+required-features = ["web"]

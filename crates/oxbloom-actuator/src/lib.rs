@@ -19,7 +19,15 @@ mod availability;
 pub mod build;
 mod health;
 mod info;
+mod settings;
+
+#[cfg(feature = "web")]
+mod controller;
 
 pub use availability::{Availability, Liveness, Readiness};
 pub use health::{Health, HealthIndicator, HealthRunner, Status};
 pub use info::{BuildInfo, Info, InfoContributor, Platform};
+pub use settings::ActuatorSettings;
+
+#[cfg(feature = "web")]
+pub use controller::ActuatorController;
