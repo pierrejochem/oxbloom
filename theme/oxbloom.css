@@ -1,0 +1,176 @@
+/* Oxbloom look and feel for the mdBook site. Colours, fonts and radii come from
+   branding/tokens.css (copied to assets/ by scripts/gen-book-summary.sh); this file maps
+   them onto the mdBook theme variables and restyles the chrome. */
+@import url("../assets/tokens.css");
+
+/* Paper (light) */
+:root.light, :root.rust {
+  --bg: var(--surface-100);
+  --fg: var(--ink);
+  --sidebar-bg: var(--surface-000);
+  --sidebar-fg: var(--ink);
+  --sidebar-non-existant: var(--ink-muted);
+  --sidebar-active: var(--oxide-text);
+  --sidebar-spacer: var(--hairline);
+  --sidebar-header-border-color: var(--oxide);
+  --scrollbar: var(--control-border);
+  --icons: var(--ink-muted);
+  --icons-hover: var(--oxide-text);
+  --links: var(--oxide-text);
+  --inline-code-color: var(--oxblood);
+  --theme-popup-bg: var(--surface-200);
+  --theme-popup-border: var(--hairline);
+  --theme-hover: var(--surface-000);
+  --quote-bg: var(--surface-000);
+  --quote-border: var(--hairline);
+  --warning-border: var(--oxide);
+  --table-border-color: var(--hairline);
+  --table-header-bg: var(--surface-000);
+  --table-alternate-bg: var(--surface-100);
+  --searchbar-border-color: var(--control-border);
+  --searchbar-bg: var(--surface-200);
+  --searchbar-fg: var(--ink);
+  --searchbar-shadow-color: var(--bloom);
+  --searchresults-header-fg: var(--ink-muted);
+  --searchresults-border-color: var(--hairline);
+  --searchresults-li-bg: var(--surface-000);
+  --search-mark-bg: var(--bloom);
+  --color-scheme: light;
+  --footnote-highlight: var(--bloom);
+  --overlay-bg: rgba(28, 23, 20, 0.35);
+  --blockquote-note-color: var(--oxide-text);
+  --blockquote-tip-color: var(--sprout);
+  --blockquote-important-color: var(--oxblood);
+  --blockquote-warning-color: var(--oxide);
+  --blockquote-caution-color: var(--oxblood);
+}
+
+/* Forge (dark) */
+:root.coal, :root.navy, :root.ayu {
+  --bg: var(--surface-100);
+  --fg: var(--ink);
+  --sidebar-bg: var(--surface-000);
+  --sidebar-fg: var(--ink);
+  --sidebar-non-existant: var(--ink-muted);
+  --sidebar-active: var(--oxide-text);
+  --sidebar-spacer: var(--hairline);
+  --sidebar-header-border-color: var(--oxide);
+  --scrollbar: var(--control-border);
+  --icons: var(--ink-muted);
+  --icons-hover: var(--oxide-text);
+  --links: var(--oxide-text);
+  --inline-code-color: var(--bloom-text, #f4b39a);
+  --theme-popup-bg: var(--surface-200);
+  --theme-popup-border: var(--hairline);
+  --theme-hover: var(--surface-000);
+  --quote-bg: var(--surface-200);
+  --quote-border: var(--hairline);
+  --warning-border: var(--oxide);
+  --table-border-color: var(--hairline);
+  --table-header-bg: var(--surface-200);
+  --table-alternate-bg: var(--surface-100);
+  --searchbar-border-color: var(--control-border);
+  --searchbar-bg: var(--surface-200);
+  --searchbar-fg: var(--ink);
+  --searchbar-shadow-color: var(--oxide);
+  --searchresults-header-fg: var(--ink-muted);
+  --searchresults-border-color: var(--hairline);
+  --searchresults-li-bg: var(--surface-200);
+  --search-mark-bg: var(--bloom);
+  --color-scheme: dark;
+  --footnote-highlight: var(--bloom);
+  --overlay-bg: rgba(0, 0, 0, 0.5);
+  --blockquote-note-color: var(--oxide-text);
+  --blockquote-tip-color: var(--sprout);
+  --blockquote-important-color: var(--bloom);
+  --blockquote-warning-color: var(--oxide);
+  --blockquote-caution-color: var(--code-keyword);
+}
+
+/* Tokens set the page palette per theme class: keep them in step with the mdBook theme. */
+:root.light, :root.rust { color-scheme: light; }
+:root.coal, :root.navy, :root.ayu { color-scheme: dark; }
+:root.coal, :root.navy, :root.ayu {
+  --oxide: #e0714f; --oxide-text: #ec8a6a; --on-oxide: #1c1714; --bloom: #7a3626; --sprout: #9cbf66;
+  --ink: #f3ece5; --ink-muted: #b2a498; --surface-100: #15110f; --surface-200: #201a17;
+  --surface-000: #0f0c0a; --hairline: #3a302b; --control-border: #7d6e63;
+  --code-bg: #0f0c0a; --shadow-card: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.35);
+}
+:root.light, :root.rust {
+  --oxide: #b5462a; --oxide-text: #a23d23; --on-oxide: #ffffff; --bloom: #f4b39a; --sprout: #56722b;
+  --ink: #1c1714; --ink-muted: #66594f; --surface-100: #fbf7f2; --surface-200: #ffffff;
+  --surface-000: #f3ece3; --hairline: #e4d9cd; --control-border: #8c7d71;
+  --code-bg: #1c1714; --shadow-card: 0 1px 2px rgba(28,23,20,.06), 0 8px 24px rgba(28,23,20,.06);
+}
+
+:root { --mono-font: var(--font-mono); --content-max-width: 820px; }
+
+html { font-family: var(--font-sans); }
+body { font-family: var(--font-sans); font-size: 16px; line-height: 1.6; background: var(--bg); color: var(--fg); }
+
+/* Headings: Fraunces */
+.content h1, .content h2, .content h3, .content h4, .menu-title {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+.content h1 { font-size: 2.4rem; line-height: 1.15; letter-spacing: -0.02em; margin-top: 0; }
+.content h2 { font-size: 1.7rem; line-height: 1.25; padding-bottom: .3em; border-bottom: 1px solid var(--hairline); }
+.content h3 { font-size: 1.35rem; }
+.content h1 a.header, .content h2 a.header, .content h3 a.header, .content h4 a.header { color: inherit; }
+.menu-title { font-size: 1.15rem; }
+
+/* Links */
+.content a { color: var(--oxide-text); text-decoration-color: var(--bloom); text-underline-offset: 3px; }
+.content a:hover { color: var(--oxblood); text-decoration-color: currentColor; }
+.coal .content a:hover, .navy .content a:hover, .ayu .content a:hover { color: var(--bloom); }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--oxide); outline-offset: 2px; }
+
+/* Sidebar: logo, hairlines, active item */
+.sidebar { border-right: 1px solid var(--hairline); font-family: var(--font-sans); }
+.sidebar .sidebar-scrollbox { padding-top: 72px; }
+.sidebar::before {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 1;
+  content: "";
+  display: block;
+  height: 44px;
+  margin: 18px 16px 6px;
+  background: url("../assets/logo.svg") left center / contain no-repeat;
+}
+.coal .sidebar::before, .navy .sidebar::before, .ayu .sidebar::before { background-image: url("../assets/logo-reversed.svg"); }
+.chapter li.part-title {
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--oxide-text);
+}
+.chapter li a.active { font-weight: 600; }
+
+/* Top bar */
+#mdbook-menu-bar, .menu-bar { background: var(--bg); border-bottom: 1px solid var(--hairline); }
+.nav-chapters { color: var(--oxide-text); }
+
+/* Code */
+:not(pre) > code {
+  font-family: var(--font-mono); font-size: .875em;
+  background: var(--surface-000); border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm); padding: .1em .35em; color: var(--inline-code-color);
+}
+pre { border-radius: var(--radius-md); box-shadow: var(--shadow-card); }
+pre > code { font-family: var(--font-mono); font-size: 14px; line-height: 1.55; }
+pre > .buttons button { border-radius: var(--radius-sm); }
+pre code.hljs { background: var(--code-bg) !important; color: var(--code-ink, #f3ece5) !important; border-radius: var(--radius-md); }
+:not(pre) > code.hljs { background: var(--surface-000) !important; color: var(--inline-code-color) !important; }
+.hljs-keyword, .hljs-selector-tag, .hljs-built_in, .hljs-type, .hljs-meta { color: var(--code-keyword, #ec8a6a) !important; }
+.hljs-string, .hljs-attr, .hljs-literal, .hljs-number, .hljs-symbol { color: var(--code-string, #b5d48a) !important; }
+.hljs-comment, .hljs-quote, .hljs-doctag { color: var(--code-comment, #9a8c80) !important; font-style: italic; }
+.hljs-title, .hljs-section, .hljs-name { color: #f3ece5 !important; }
+
+/* Tables, quotes */
+table { border-collapse: collapse; border-radius: var(--radius-sm); overflow: hidden; }
+table th { font-family: var(--font-sans); font-weight: 600; text-align: left; }
+table td, table th { border: 1px solid var(--table-border-color); padding: .5em .8em; }
+blockquote { border-inline-start: 4px solid var(--oxide); border-radius: var(--radius-sm); background: var(--quote-bg); }
+
+/* Search */
+#mdbook-searchbar { border-radius: var(--radius-md); font-family: var(--font-sans); }

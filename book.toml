@@ -9,4 +9,7 @@ build-dir = "book-out"
 
 [output.html]
 git-repository-url = "https://github.com/pierrejochem/oxbloom"
+additional-css = ["theme/oxbloom.css"]
+default-theme = "light"
+preferred-dark-theme = "coal"
 site-url = "/oxbloom/"

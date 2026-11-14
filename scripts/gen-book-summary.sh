@@ -4,6 +4,16 @@
 set -euo pipefail
 
 out=docs/SUMMARY.md
+
+# Brand assets for the site: tokens, fonts, logos (copied, not committed).
+rm -rf docs/assets
+mkdir -p docs/assets
+cp branding/tokens.css docs/assets/tokens.css
+cp -r branding/fonts docs/assets/fonts
+cp branding/logos/oxbloom-lockup.svg docs/assets/logo.svg
+cp branding/logos/oxbloom-lockup-reversed.svg docs/assets/logo-reversed.svg
+cp branding/logos/oxbloom-favicon.svg theme/favicon.svg
+cp branding/logos/png/oxbloom-favicon-32.png theme/favicon.png
 title() { sed -n 's/^# //p;T;q' "$1" | head -n 1; }
 
 {
