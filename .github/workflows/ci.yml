@@ -49,14 +49,21 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: oxbloom-web without default features
         run: cargo test -p oxbloom-web --no-default-features
+      - name: oxbloom-web with the tls feature
+        run: cargo test -p oxbloom-web --features tls
+      - name: oxbloom-ssl with all features
+        run: cargo test -p oxbloom-ssl --all-features
       - name: oxbloom-boot builds with each feature set
         run: |
           cargo build -p oxbloom-boot --no-default-features
           cargo build -p oxbloom-boot --no-default-features --features logging
           cargo build -p oxbloom-boot --no-default-features --features web
           cargo build -p oxbloom-boot --no-default-features --features security
+          cargo build -p oxbloom-boot --no-default-features --features ssl
       - name: oxbloom-test with the web feature
         run: cargo test -p oxbloom-test --features web
+      - name: oxbloom-test with the web and tls features
+        run: cargo test -p oxbloom-test --features web,tls
 
   examples:
     name: Examples
