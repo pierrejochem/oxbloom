@@ -25,11 +25,14 @@ use crate::metadata::PropertyMetadata;
 ///
 /// With the feature `ssl`, `security.jwt.jwks-ssl-bundle` names an SSL bundle of the
 /// `oxbloom_ssl::SslBundles` bean; the JWK set is then fetched by a
-/// `ReqwestJwksFetcher::with_tls` built from that bundle's client configuration, in place of a
-/// `dyn JwksFetcher` bean. The fetcher is built once with the decoder and does not follow a
-/// reload of the bundle's files. An unknown name, or a name while there is no bundle (or no
-/// feature `ssl`), is a `ConfigError::Invalid` on that key that lists the available bundle
-/// names. Without the key nothing changes. A broken section fails the build with
+/// `ReqwestJwksFetcher::with_tls` built from that bundle's client configuration. A bundle with
+/// a trust store replaces the platform roots, so only its CAs are trusted; a bundle without
+/// one keeps the platform verifier and only adds its client certificate. The fetcher is built
+/// once with the decoder and does not follow a reload of the bundle's files. An unknown name,
+/// or a name while there is no bundle (or no feature `ssl`), is a `ConfigError::Invalid` on
+/// that key that lists the available bundle names. The key together with a `dyn JwksFetcher`
+/// bean is a `ConfigError::Invalid` on the key as well, since neither may silently win.
+/// Without the key nothing changes. A broken section fails the build with
 /// `DiError::Creation` whose source is the `ConfigError` naming the key; no message carries
 /// the secret.
 ///
@@ -109,8 +112,9 @@ impl AutoConfiguration for JwtDecoderAutoConfiguration {
 /// A `dyn Clock` bean, when there is one, replaces the system time in the `exp` and `nbf`
 /// checks.
 ///
-/// With the feature `ssl`, a `security.jwt.jwks-ssl-bundle` replaces the `dyn JwksFetcher`
-/// bean with a fetcher built from the named bundle of the optional `SslBundles` bean.
+/// With the feature `ssl`, a `security.jwt.jwks-ssl-bundle` builds the fetcher from the named
+/// bundle of the optional `SslBundles` bean; together with a `dyn JwksFetcher` bean it is an
+/// error.
 fn jwt_decoder(
     config: Arc<Config>,
     fetcher: Option<Arc<dyn JwksFetcher>>,
@@ -120,6 +124,13 @@ fn jwt_decoder(
     let creation = DiError::creation_from::<DefaultJwtDecoder>;
     let fetcher = match jwks_ssl_bundle(&config).map_err(creation)? {
         None => fetcher,
+        // Both are explicit choices of the application; neither may silently win.
+        Some(_) if fetcher.is_some() => {
+            return Err(creation(ConfigError::invalid(
+                JWKS_SSL_BUNDLE,
+                "conflicts with a `JwksFetcher` bean; remove one of them",
+            )));
+        }
         #[cfg(feature = "ssl")]
         Some(name) => Some(bundle_fetcher(&name, bundles.as_deref()).map_err(creation)?),
         #[cfg(not(feature = "ssl"))]
@@ -214,10 +225,12 @@ static JWT: [PropertyMetadata; 8] = [
         "String",
         None,
         "The name of the SSL bundle (`ssl.bundle.pem.<name>` or `ssl.bundle.pkcs12.<name>`) \
-         whose trust, and client certificate if it has one, the JWKS client uses; needs the \
-         `ssl` feature and `jwk-set-uri`, and replaces a `JwksFetcher` bean. The client is \
-         built once at startup and does not follow a reload of the bundle. Unset, the \
-         platform certificate verifier is used.",
+         the JWKS client uses; needs the `ssl` feature and `jwk-set-uri`, and is an error \
+         together with a `JwksFetcher` bean. A bundle with a trust store replaces the platform \
+         roots, so a certificate from a public CA is then rejected; a bundle without one keeps \
+         the platform verifier and only adds its client certificate. The client is built once \
+         at startup and does not follow a reload of the bundle. Unset, the platform \
+         certificate verifier is used.",
     ),
     PropertyMetadata::new(
         "security.jwt.public-key-pem",

@@ -3544,7 +3544,10 @@ typed cause, and a built-in analyzer for invalid `security.jwt` configuration ex
 secret. Keys described: `security.jwt.algorithms`, `audience`, `clock-skew-secs`, `issuer`,
 `jwk-set-uri`, `jwks-ssl-bundle`, `public-key-pem` and `secret`. With the feature `ssl`,
 `jwks-ssl-bundle` names an SSL bundle whose trust the JWKS client uses (built once at startup, no
-reload); an unknown name is a `ConfigError::Invalid` on that key listing the available bundle names.
+reload). A bundle with a trust store replaces the platform roots; one without keeps the platform
+verifier and only adds its client certificate. An unknown name is a `ConfigError::Invalid` on that key
+listing the available bundle names, and the key together with a `JwksFetcher` bean is a
+`ConfigError::Invalid` on the key as well.
 
 ```rust
 use oxbloom_boot::{auto_configurations, Banner, JwtDecoderAutoConfiguration, OxbloomApplication};

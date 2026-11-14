@@ -14,7 +14,7 @@ use jsonwebtoken::jwk::{Jwk, JwkSet};
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use oxbloom_boot::{JwtDecoderAutoConfiguration, SslAutoConfiguration, StartupPhase};
 use oxbloom_config::ConfigError;
-use oxbloom_security::JwtDecoder;
+use oxbloom_security::{FetchError, JwksFetcher, JwtDecoder};
 use oxbloom_test::ContextRunner;
 use oxbloom_web::{App, HttpMethod, Route};
 use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair};
@@ -26,9 +26,12 @@ use tokio_rustls::TlsAcceptor;
 const KEY: &str = "security.jwt.jwks-ssl-bundle";
 
 /// A private test CA, its PEM text, and a TLS acceptor for a `localhost` certificate it signed.
+/// The certificate and its key are kept as PEM to serve as a client identity in a bundle.
 struct Ca {
     pem: String,
     acceptor: TlsAcceptor,
+    leaf_cert_pem: String,
+    leaf_key_pem: String,
 }
 
 impl Ca {
@@ -56,6 +59,8 @@ impl Ca {
         Ca {
             pem: ca_cert.pem(),
             acceptor: TlsAcceptor::from(Arc::new(server)),
+            leaf_cert_pem: cert.pem(),
+            leaf_key_pem: key.serialize_pem(),
         }
     }
 }
@@ -94,6 +99,14 @@ fn token(key: &EncodingKey) -> String {
         + 600;
     let claims = serde_json::json!({ "sub": "alice", "exp": exp });
     encode(&header, &claims, key).unwrap()
+}
+
+/// The `security.jwt` section for an ES256 JWK set at `uri` fetched with the bundle `bundle`.
+fn jwt_section(uri: &str, bundle: &str) -> String {
+    format!(
+        "[security.jwt]\nalgorithms = [\"ES256\"]\njwk-set-uri = \"{uri}\"\n\
+         jwks-ssl-bundle = \"{bundle}\"\n"
+    )
 }
 
 /// A trust-only bundle section named `name` for `pem`.
@@ -182,4 +195,81 @@ async fn unknown_jwks_bundle_is_a_config_error_listing_names() {
             );
         })
         .await;
+}
+
+/// A fetcher bean of the application; it is never called in these tests.
+struct OwnFetcher;
+
+#[async_trait::async_trait]
+impl JwksFetcher for OwnFetcher {
+    async fn fetch(&self, _uri: &str) -> Result<jsonwebtoken::jwk::JwkSet, FetchError> {
+        Err(FetchError::Network)
+    }
+}
+
+#[tokio::test]
+async fn jwks_bundle_and_a_jwks_fetcher_bean_together_are_a_config_error() {
+    let ca = Ca::new();
+    let toml = format!(
+        "{}{}",
+        trust_bundle("idp", &ca.pem),
+        jwt_section("https://localhost:1/jwks.json", "idp")
+    );
+    ContextRunner::new()
+        .config_str(toml)
+        .configure(|b| {
+            b.instance(OwnFetcher)
+                .provides(|f: Arc<OwnFetcher>| -> Arc<dyn JwksFetcher> { f })
+        })
+        .auto_configuration::<SslAutoConfiguration>()
+        .auto_configuration::<JwtDecoderAutoConfiguration>()
+        .run_failing(|view| {
+            let error = view.error();
+            assert_eq!(error.phase(), StartupPhase::Container);
+            let config = error.find_cause::<ConfigError>().expect("a config error");
+            assert!(
+                matches!(config, ConfigError::Invalid { key, .. } if key == KEY),
+                "{config:?}"
+            );
+            assert!(
+                config
+                    .to_string()
+                    .contains("conflicts with a `JwksFetcher` bean"),
+                "{config}"
+            );
+            assert!(!config.to_string().contains("idp"), "{config}");
+            let report = error.analysis().expect("a failure report").to_string();
+            assert!(report.contains(KEY), "{report}");
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn identity_only_bundle_keeps_the_platform_verifier() {
+    // The bundle has a client certificate but no trust store, so the server is checked by the
+    // platform verifier, which does not know the private CA: the key set cannot be fetched.
+    let ca = Ca::new();
+    let (key, jwks) = signing_key();
+    let uri = https_jwks(&ca, jwks).await;
+    let toml = format!(
+        "[ssl.bundle.pem.client]\ncertificate = '''\n{}'''\nprivate-key = '''\n{}'''\n{}",
+        ca.leaf_cert_pem,
+        ca.leaf_key_pem,
+        jwt_section(&uri, "client")
+    );
+    let seen: Arc<Mutex<Option<Arc<dyn JwtDecoder>>>> = Arc::default();
+    let slot = Arc::clone(&seen);
+    ContextRunner::new()
+        .config_str(toml)
+        .auto_configuration::<SslAutoConfiguration>()
+        .auto_configuration::<JwtDecoderAutoConfiguration>()
+        .run(move |view| {
+            *slot.lock().unwrap() = Some(view.get::<dyn JwtDecoder>().unwrap());
+        })
+        .await;
+    let decoder = seen.lock().unwrap().take().expect("a decoder");
+    let result = tokio::time::timeout(Duration::from_secs(10), decoder.decode(&token(&key)))
+        .await
+        .expect("the decode timed out");
+    assert!(result.is_err(), "the private CA must not be trusted");
 }

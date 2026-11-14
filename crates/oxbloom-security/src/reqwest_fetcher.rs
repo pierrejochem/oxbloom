@@ -91,6 +91,11 @@ impl ReqwestJwksFetcher {
     /// [`ReqwestJwksFetcher::new`]: no redirects, no `Referer`, the same timeout and the same
     /// 1 MiB body limit. ALPN is left as `client_config` sets it.
     ///
+    /// Trust follows `client_config` alone: a configuration with its own root store trusts only
+    /// those CAs, so a server certificate from a public CA is then rejected. A configuration
+    /// from an SSL bundle without a trust store keeps the platform verifier and only adds the
+    /// bundle's client certificate.
+    ///
     /// The HTTP client is built once, here, from the configuration as it is now. A fetcher
     /// built from an SSL bundle therefore does not follow a later reload of the bundle's
     /// files; build a new fetcher (in an application: restart it) to use new certificates.
