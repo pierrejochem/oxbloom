@@ -115,3 +115,17 @@ todos = "debug"
 # index = "index.html"
 # cache-max-age = "1h"           # 0s sends `no-cache`
 # max-file-bytes = "10MiB"
+
+# HTTP Basic for the admin route `GET /api/admin/stats`. The users are demo values only:
+# `admin` has the password `changeit` and `viewer` has `viewonly`. The passwords are
+# `{argon2}` hashes; plain text is refused at start. Change them before any real use.
+[security.http-basic]
+enabled = true
+
+[security.users.admin]
+password = "{argon2}$argon2id$v=19$m=19456,t=2,p=1$o7wig9MmUHtebFWjVdledQ$cNFCpU97oR+uVTwaudTL1Oe02bQDz9rJYpKVceZoGDo"
+roles = ["ADMIN"]
+
+[security.users.viewer]
+password = "{argon2}$argon2id$v=19$m=19456,t=2,p=1$fBLpZKqG5tOuCf+Krks/zQ$hkOLCeXrKiVoR1MxwIGtt0fD7SeIGfKImKLjKYhe+rw"
+roles = ["USER"]
