@@ -523,6 +523,8 @@ Limits that users must know (also in the guide):
 - The default jitter is `full`; Spring's default is none.
 - The macro keeps its own copy of the duration grammar (a whole number with `ms`, `s`, `m`, `h` or `d`), while the configuration binder accepts more forms.
 - With `max_attempts = 1` the first failure logs the `error` event; an error that `retry_if` rejects logs nothing.
+- `RetryAutoConfiguration` registers `RetryDefaults` without `on_missing_bean`, so a user-registered `RetryDefaults` bean collides, and choosing back-off would skip `set_defaults`.
+- The log label is the bare method name, without the type.
 - A scheduled task that exhausts its attempts logs the retry's `error` event and the scheduler's failed-run event.
 
 Follow-ups from C9b, not yet scheduled:
@@ -536,7 +538,7 @@ Follow-ups from C9b, not yet scheduled:
 Deferred minors from the C9b reviews:
 - Task 1: the doc says `unit_random` is in `[0, 1)` while the clamp is `[0, 1]`. A NaN multiplier silently becomes `max_delay` (the configuration reader and the macro validate it). The `delay_ms` field truncates sub-millisecond delays. The panic test prints stderr noise. There are no event tests for `max_attempts = 1` and for a `retry_if` that returns `false`.
 - Task 2: no test sets every key of both sections through both readers, as a drift guard for the duplicated key lists in `retry_settings.rs` and `settings.rs`. The `retry_settings.rs` doc says the scheduling section is "ignored" although its keys are validated, and its `# Errors` omits it. There is no test that a wrong-typed value under `tasks.retry` stays hidden, some assertions for `0`, NaN and infinity are weak, and the missing upper bound of `max-attempts` is undocumented.
-- Task 3: lifetime-only generics and `where` clauses are rejected but untested, and only the first bad attribute key is reported. An `impl Trait` return type, a nested `mut` pattern and a trait impl are untested, and the docs are silent on a free `async fn` and on an alias without arguments (`fmt::Result`). A body that is a single `return Ok(..);` statement is untested.
+- Task 3: lifetime-only generics and `where` clauses are rejected but untested, and only the first bad attribute key is reported. An `impl Trait` return type, a nested `mut` pattern and a trait impl are untested and the docs are silent on an alias without arguments (`fmt::Result`). A body that is a single `return Ok(..);` statement is untested.
 - Task 4: the end-to-end test with `max-attempts = 3` equals the default, so it cannot tell a configured value from the default by behavior. One assertion (`!contains('0')`) is brittle. A failure after `set_defaults` leaves the new defaults, which follows the process-wide ruling.
 - Task 5: the exhaustion test cannot tell three attempts from one. `purge_at` duplicates the cutoff of `cleanup_at`. A second error log, at the target `todos`, is not in the README. The `application.toml` comment "overrides max-attempts (3)" is misleading, and the table row in `lib.rs` omits the retry block.
 

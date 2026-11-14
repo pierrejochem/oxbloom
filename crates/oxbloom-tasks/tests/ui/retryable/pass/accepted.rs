@@ -98,8 +98,24 @@ impl Client {
     }
 
     #[retryable(max_attempts = 1)]
+    async fn displayed(&self) -> Result<impl std::fmt::Display, Failure> {
+        Ok(self.base.len())
+    }
+
+    #[retryable(max_attempts = 1)]
     async fn diverging(&self) -> Result<u32, Failure> {
         return Err(Failure);
+    }
+}
+
+trait Source {
+    async fn load(&self) -> Result<u32, Failure>;
+}
+
+impl Source for Client {
+    #[retryable(max_attempts = 1)]
+    async fn load(&self) -> Result<u32, Failure> {
+        Ok(self.base.len() as u32)
     }
 }
 
@@ -120,5 +136,7 @@ fn main() {
         assert_eq!(client.coerced_return(true).await.unwrap(), "api");
         assert_eq!(client.coerced_return(false).await.unwrap(), "long");
         assert!(client.diverging().await.is_err());
+        assert_eq!(client.displayed().await.unwrap().to_string(), "3");
+        assert_eq!(client.load().await.unwrap(), 3);
     });
 }

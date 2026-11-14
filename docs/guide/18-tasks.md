@@ -234,6 +234,8 @@ The shape of the method is checked at compile time, and a mistake is an error th
 - The receiver is `&self` or absent. `&mut self` and `self` are rejected, because the body runs again for every attempt and each attempt only borrows the receiver. A free `async fn` is accepted too, since an attribute cannot see whether it sits in a context with beans.
 - The body runs again for every attempt, so it may borrow its arguments but not consume them. An argument that the body must own is cloned inside the body. A `mut` argument is rejected.
 - A `return` inside the body ends that attempt, and `?` works as in any other method.
+- `#[retryable]` must be the topmost attribute on its method. An attribute above it that rewrites the body, such as `#[tracing::instrument]`, can move the arguments into the retry closure and give a confusing error.
+- It cannot be used inside an `#[async_trait]` impl: `async_trait` expands first and turns the method into a plain `fn`, so `#[retryable]` then reports that the method must be `async`.
 - Generic parameters, `max_attempts = 0`, an unknown `backoff` or `jitter` name, a duration that does not parse, an `initial` greater than `max_delay`, a `multiplier` below 1 or not finite, a `retry_if` that is not a path in a string, and an unknown or repeated key are rejected too.
 
 ### Delays

@@ -296,12 +296,12 @@ async fn a_retryable_method_uses_the_configured_defaults_end_to_end() {
     let grabbed: Arc<std::sync::Mutex<Option<Arc<Client>>>> = Arc::default();
     let slot = grabbed.clone();
     ContextRunner::new()
-        .config_str("[tasks.retry]\nmax-attempts = 3\ninitial = \"1ms\"\njitter = \"none\"\n")
+        .config_str("[tasks.retry]\nmax-attempts = 4\ninitial = \"1ms\"\njitter = \"none\"\n")
         .auto_configuration::<RetryAutoConfiguration>()
         .configure(|b| {
             b.instance(Client {
                 calls: AtomicU32::new(0),
-                failures: 2,
+                failures: 3,
             })
         })
         .run(move |view| *slot.lock().unwrap() = view.get::<Client>().ok())
@@ -309,17 +309,17 @@ async fn a_retryable_method_uses_the_configured_defaults_end_to_end() {
     assert_eq!(defaults().initial, Duration::from_millis(1));
     assert_eq!(defaults().jitter, Jitter::None);
 
-    // The bean of the run: two failures and then a success, within the three configured
-    // attempts.
+    // The bean of the run: three failures and then a success, which needs the four configured
+    // attempts (the built-in default is three).
     let client = grabbed.lock().unwrap().clone().expect("a Client bean");
-    assert_eq!(client.fetch().await.unwrap(), 3);
-    assert_eq!(client.calls.load(Ordering::SeqCst), 3);
+    assert_eq!(client.fetch().await.unwrap(), 4);
+    assert_eq!(client.calls.load(Ordering::SeqCst), 4);
 
-    // Three failures use up the configured attempts.
+    // Four failures use up the configured attempts.
     let client = Client {
         calls: AtomicU32::new(0),
-        failures: 3,
+        failures: 4,
     };
     assert!(client.fetch().await.is_err());
-    assert_eq!(client.calls.load(Ordering::SeqCst), 3);
+    assert_eq!(client.calls.load(Ordering::SeqCst), 4);
 }

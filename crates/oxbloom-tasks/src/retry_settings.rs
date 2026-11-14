@@ -44,6 +44,7 @@ const MAX_ATTEMPTS: &str = "tasks.retry.max-attempts";
 const BACKOFF: &str = "tasks.retry.backoff";
 const INITIAL: &str = "tasks.retry.initial";
 const MULTIPLIER: &str = "tasks.retry.multiplier";
+const MAX_DELAY: &str = "tasks.retry.max-delay";
 const JITTER: &str = "tasks.retry.jitter";
 
 impl RetryDefaults {
@@ -55,14 +56,15 @@ impl RetryDefaults {
     /// `tasks.retry.max-delay` (default 30 seconds) and `tasks.retry.jitter` (`none`, `full`
     /// or `equal`, default `full`). Durations take the configuration's duration form, such as
     /// `250ms` or `2s`. A missing section gives [`RetryDefaults::default`]. The
-    /// `tasks.scheduling` section is read by [`TasksSettings::from_config`] and ignored here.
+    /// `tasks.scheduling` section is read by [`TasksSettings::from_config`]; here only its key
+    /// names are validated and its values are not read.
     ///
     /// [`TasksSettings::from_config`]: crate::TasksSettings::from_config
     ///
     /// # Errors
     ///
-    /// Fails with a [`ConfigError`] naming the key for an unknown key under `tasks` or
-    /// `tasks.retry`, a value of the wrong type or a bad duration, a `max-attempts` of zero, a
+    /// Fails with a [`ConfigError`] naming the key for an unknown key under `tasks`,
+    /// `tasks.retry` or `tasks.scheduling`, a value of the wrong type or a bad duration, a `max-attempts` of zero, a
     /// `multiplier` below 1.0 or not finite, an `initial` greater than `max-delay`, and an
     /// unknown `backoff` or `jitter` name. The error never shows the configured value.
     ///
@@ -121,9 +123,15 @@ impl RetryDefaults {
         let initial = raw.initial.unwrap_or(defaults.initial);
         let max_delay = raw.max_delay.unwrap_or(defaults.max_delay);
         if initial > max_delay {
+            // Name the key the user actually set: `max-delay` when `initial` is the default.
+            let key = if raw.initial.is_some() {
+                INITIAL
+            } else {
+                MAX_DELAY
+            };
             return Err(ConfigError::invalid(
-                INITIAL,
-                "must not be greater than tasks.retry.max-delay",
+                key,
+                "initial must not be greater than max-delay",
             ));
         }
         Ok(RetryDefaults {

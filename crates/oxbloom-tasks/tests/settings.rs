@@ -267,4 +267,19 @@ mod retry {
         assert!(text.contains("tasks.retry.initial"), "{text}");
         assert!(!text.contains("banana"), "{text}");
     }
+
+    #[test]
+    fn initial_above_max_delay_names_the_key_the_user_set() {
+        let text = read("[tasks.retry]\nmax-delay = \"50ms\"")
+            .unwrap_err()
+            .to_string();
+        assert!(text.contains("tasks.retry.max-delay"), "{text}");
+        assert!(!text.contains("tasks.retry.initial"), "{text}");
+
+        let text = read("[tasks.retry]\ninitial = \"1h\"")
+            .unwrap_err()
+            .to_string();
+        assert!(text.contains("tasks.retry.initial"), "{text}");
+        assert!(!text.contains("tasks.retry.max-delay"), "{text}");
+    }
 }

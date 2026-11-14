@@ -226,6 +226,38 @@ async fn events_log_each_retry_and_exhaustion() {
     assert!(recorder.events().is_empty(), "{:?}", recorder.events());
 }
 
+/// The events at target `oxbloom::tasks` as (warn count, error count).
+fn counts(recorder: &Recorder) -> (usize, usize) {
+    let events = recorder.events();
+    let at = |level| {
+        events
+            .iter()
+            .filter(|e| e.target == "oxbloom::tasks" && e.level == level)
+            .count()
+    };
+    (at(Level::WARN), at(Level::ERROR))
+}
+
+#[tokio::test(start_paused = true)]
+async fn one_attempt_logs_the_error_and_no_warn() {
+    let recorder = Recorder::capture();
+    let result: Result<(), &str> = policy(1)
+        .run("charge", || async { Err("boom") }, |_| true)
+        .await;
+    assert_eq!(result, Err("boom"));
+    assert_eq!(counts(&recorder), (0, 1), "{:?}", recorder.events());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_rejected_error_logs_nothing() {
+    let recorder = Recorder::capture();
+    let result: Result<(), &str> = policy(3)
+        .run("charge", || async { Err("boom") }, |_| false)
+        .await;
+    assert_eq!(result, Err("boom"));
+    assert!(recorder.events().is_empty(), "{:?}", recorder.events());
+}
+
 #[test]
 fn defaults_round_trip() {
     // The only test in this binary that touches the process-wide defaults.

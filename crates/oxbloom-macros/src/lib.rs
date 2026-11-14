@@ -964,6 +964,12 @@ pub fn scheduled(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// that it needs to own. A `return` inside the body ends that attempt, and `?` works as in any
 /// other method.
 ///
+/// `#[retryable]` must be the topmost attribute on its method. An attribute above it that
+/// rewrites the body, such as `#[tracing::instrument]`, can move the arguments into the retry
+/// closure and give a confusing error. It cannot be used inside an `#[async_trait]` impl:
+/// `async_trait` expands first and turns the method into a plain `fn`, so `#[retryable]` then
+/// reports that the method must be `async`.
+///
 /// `#[retryable]` combines with `#[scheduled]` on a method of a `#[scheduling]` impl, in either
 /// order: one scheduled run then includes all its attempts, and a trigger that fires while the
 /// retries still run is skipped.

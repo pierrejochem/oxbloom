@@ -10,8 +10,8 @@ port = 8081
 max-age = "24h"
 
 # The store access of the cleanup is retried when it fails. These are the defaults of every
-# `#[retryable]` method; the attribute on `purge_at` overrides `max-attempts` (3) and
-# `initial` (50ms). Uncomment to change them.
+# `#[retryable]` method; the attribute on `purge_at` fixes `max_attempts = 3` and
+# `initial = "50ms"` for the cleanup call. Uncomment to change the defaults.
 # [tasks.retry]
 # max-attempts = 3
 # backoff = "exponential"        # exponential or fixed

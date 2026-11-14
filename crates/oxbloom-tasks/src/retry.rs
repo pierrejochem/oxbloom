@@ -269,12 +269,12 @@ impl Default for RetryPolicy {
 
 impl RetryPolicy {
     /// The delay before retry `retry_number` (from 1; zero counts as 1), given a random
-    /// value `unit_random` in `[0, 1)`.
+    /// value `unit_random`, normally in `[0, 1)`.
     ///
     /// The backoff delay is computed in seconds as a float and capped at `max_delay` before
     /// it becomes a [`Duration`], so no input panics or overflows. Full jitter multiplies
     /// it by `unit_random`; equal jitter takes half of it plus `unit_random` times the other
-    /// half. A `unit_random` outside `[0, 1)` is clamped, and NaN counts as zero.
+    /// half. The `unit_random` is clamped to `[0, 1]`, and NaN counts as zero.
     ///
     /// # Examples
     ///
