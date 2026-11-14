@@ -4,7 +4,7 @@ mod common;
 
 use std::path::Path;
 
-use common::{ca, handshake, write, write_pkcs12};
+use common::{ca, handshake, pkcs12_certificates_only, write, write_pkcs12};
 use oxbloom_config::{Config, ConfigError};
 use oxbloom_ssl::{SslBundles, SslError};
 
@@ -94,6 +94,30 @@ fn pkcs12_bundle_loads_identity_and_ca_certificates() {
         "localhost",
     )
     .unwrap();
+}
+
+#[test]
+fn unusable_trust_certificate_in_a_pkcs12_file_is_a_pkcs12_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let ca = ca();
+    // Trailing bytes after the certificate: the PKCS#12 reader keeps it, rustls cannot use it
+    // as a trust anchor.
+    let mut damaged = ca.cert_der.clone();
+    damaged.extend_from_slice(&[0x05, 0x00]);
+    let p12 = write(
+        dir.path(),
+        "trust.p12",
+        pkcs12_certificates_only(&[&damaged], "changeit"),
+    );
+    let err = load(&format!(
+        "[ssl.bundle.pkcs12.trust]\npath = \"{}\"\npassword = \"changeit\"",
+        toml_path(&p12)
+    ))
+    .unwrap_err();
+    assert!(
+        matches!(&err, SslError::Pkcs12 { bundle } if bundle == "trust"),
+        "{err:?}"
+    );
 }
 
 #[test]
@@ -227,6 +251,39 @@ fn encrypted_private_key_is_a_pem_error() {
     let encrypted = format!(
         "-----BEGIN ENCRYPTED PRIVATE KEY-----\n{body}\n-----END ENCRYPTED PRIVATE KEY-----\n"
     );
+    let err = load(&format!(
+        "[ssl.bundle.pem.web]\ncertificate = '''\n{}'''\nprivate-key = '''\n{}'''",
+        leaf.cert_pem, encrypted
+    ))
+    .unwrap_err();
+    assert!(
+        matches!(&err, SslError::Pem { bundle, key } if bundle == "web" && key == "ssl.bundle.pem.web.private-key"),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn certificate_value_that_holds_only_a_private_key_is_a_pem_error() {
+    let leaf = ca().issue(&["localhost"]);
+    let err = load(&format!(
+        "[ssl.bundle.pem.web]\ncertificate = '''\n{0}'''\nprivate-key = '''\n{0}'''",
+        leaf.key_pem
+    ))
+    .unwrap_err();
+    assert!(
+        matches!(&err, SslError::Pem { bundle, key } if bundle == "web" && key == "ssl.bundle.pem.web.certificate"),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn legacy_openssl_encrypted_key_is_a_pem_error() {
+    let leaf = ca().issue(&["localhost"]);
+    // The traditional OpenSSL format with encryption headers; it is never decrypted.
+    let encrypted = "-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\n\
+                     DEK-Info: AES-256-CBC,0123456789ABCDEF0123456789ABCDEF\n\n\
+                     MIIBOgIBAAJBAKj34GkxFhD90vcNLYLInFEX6Ppy1tPf9Cnzj4p4WGeKLs1Pt8Qu\n\
+                     -----END RSA PRIVATE KEY-----\n";
     let err = load(&format!(
         "[ssl.bundle.pem.web]\ncertificate = '''\n{}'''\nprivate-key = '''\n{}'''",
         leaf.cert_pem, encrypted

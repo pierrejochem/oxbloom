@@ -273,10 +273,12 @@ fn pkcs12(bundle: &BundleSource, data: &[u8], password: &str) -> Result<Material
         .filter(|(i, _)| Some(*i) != leaf_index)
         .map(|(_, cert)| cert.clone())
         .collect();
+    // A certificate the PKCS#12 reader accepted but rustls cannot use as a trust anchor is a
+    // problem of the file, not of PEM data.
     let trust = if others.is_empty() {
         None
     } else {
-        Some(root_store(bundle, "path", others.clone())?)
+        Some(root_store(bundle, "path", others.clone()).map_err(|_| pkcs12_error())?)
     };
     Ok(Material::new(identity, trust, &others))
 }
