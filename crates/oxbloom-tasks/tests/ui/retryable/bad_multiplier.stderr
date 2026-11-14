@@ -1,0 +1,17 @@
+error: `multiplier` on the retryable method `fetch` must be a finite number of at least 1
+ --> tests/ui/retryable/bad_multiplier.rs:6:30
+  |
+6 |     #[retryable(multiplier = 0.5)]
+  |                              ^^^
+
+error: `multiplier` on the retryable method `send` must be a finite number of at least 1
+  --> tests/ui/retryable/bad_multiplier.rs:11:30
+   |
+11 |     #[retryable(multiplier = 1e999)]
+   |                              ^^^^^
+
+error: `multiplier` on the retryable method `store` takes a number, e.g. `multiplier = 2.0`
+  --> tests/ui/retryable/bad_multiplier.rs:16:30
+   |
+16 |     #[retryable(multiplier = "2")]
+   |                              ^^^

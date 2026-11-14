@@ -4,7 +4,7 @@
 //! |---|---|
 //! | `todo.rs` | a thread-safe in-memory store: `Mutex<BTreeMap>` plus an atomic id counter, ids from 1, never reused |
 //! | `api.rs` | `#[controller("/api/todos")]` with `#[post("")]`, `#[get]`, `#[put]`, `#[patch]`, `#[delete]`, path parameters, a query filter, `Json<T>` answers, `Request::json` bodies, status codes, a `SecurityCustomizer` |
-//! | `cleanup.rs` | `#[scheduling]` with one `#[scheduled(fixed_delay = "1m")]` method that removes done todos older than `todos.cleanup.max-age`, run by boot's `tasks` feature |
+//! | `cleanup.rs` | `#[scheduling]` with one `#[scheduled(fixed_delay = "1m")]` method that removes done todos older than `todos.cleanup.max-age` through a `#[retryable]` store call, run by boot's `tasks` feature |
 //! | `build.rs` | `oxbloom_actuator::build::emit()`, which feeds the build facts of `/actuator/info` |
 //! | `application.toml` | `server.port`, `todos.cleanup.max-age` and the `logging.level` table (`root`, and `todos` for the handlers' events) |
 //!

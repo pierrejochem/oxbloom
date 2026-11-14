@@ -1,0 +1,17 @@
+error: the retryable method `count` must return `Result<T, E>` where `E: Display`
+ --> tests/ui/retryable/not_result.rs:7:30
+  |
+7 |     async fn count(&self) -> u32 {
+  |                              ^^^
+
+error: the retryable method `ping` must return `Result<T, E>` where `E: Display`
+  --> tests/ui/retryable/not_result.rs:12:14
+   |
+12 |     async fn ping(&self) {}
+   |              ^^^^
+
+error: the retryable method `pair` must return `Result<T, E>` where `E: Display`
+  --> tests/ui/retryable/not_result.rs:15:29
+   |
+15 |     async fn pair(&self) -> (u32, String) {
+   |                             ^^^^^^^^^^^^^

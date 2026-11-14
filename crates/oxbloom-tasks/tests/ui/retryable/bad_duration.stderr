@@ -1,0 +1,17 @@
+error: `initial` on the retryable method `fetch` is not a duration; use a whole number with `ms`, `s`, `m`, `h` or `d`, e.g. "200ms"
+ --> tests/ui/retryable/bad_duration.rs:6:27
+  |
+6 |     #[retryable(initial = "1.5s")]
+  |                           ^^^^^^
+
+error: `max_delay` on the retryable method `send` is not a duration; use a whole number with `ms`, `s`, `m`, `h` or `d`, e.g. "200ms"
+  --> tests/ui/retryable/bad_duration.rs:11:29
+   |
+11 |     #[retryable(max_delay = "soon")]
+   |                             ^^^^^^
+
+error: `initial` on the retryable method `store` is out of range
+  --> tests/ui/retryable/bad_duration.rs:16:27
+   |
+16 |     #[retryable(initial = "99999999999999999999d")]
+   |                           ^^^^^^^^^^^^^^^^^^^^^^^

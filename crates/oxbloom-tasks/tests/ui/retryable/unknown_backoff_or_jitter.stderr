@@ -1,0 +1,11 @@
+error: unknown `backoff` on the retryable method `fetch`; expected "fixed" or "exponential"
+ --> tests/ui/retryable/unknown_backoff_or_jitter.rs:6:27
+  |
+6 |     #[retryable(backoff = "linear")]
+  |                           ^^^^^^^^
+
+error: unknown `jitter` on the retryable method `send`; expected "none", "full" or "equal"
+  --> tests/ui/retryable/unknown_backoff_or_jitter.rs:11:26
+   |
+11 |     #[retryable(jitter = "random")]
+   |                          ^^^^^^^^

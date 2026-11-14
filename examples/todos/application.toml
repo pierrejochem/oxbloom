@@ -9,6 +9,17 @@ port = 8081
 [todos.cleanup]
 max-age = "24h"
 
+# The store access of the cleanup is retried when it fails. These are the defaults of every
+# `#[retryable]` method; the attribute on `purge_at` fixes `max_attempts = 3` and
+# `initial = "50ms"` for the cleanup call. Uncomment to change the defaults.
+# [tasks.retry]
+# max-attempts = 3
+# backoff = "exponential"        # exponential or fixed
+# initial = "100ms"
+# multiplier = 2.0
+# max-delay = "30s"
+# jitter = "full"                # none, full or equal
+
 # Console logging at `info`. The example's own events (target `todos`: create,
 # update, delete) are `info` events, and the target `todos` is set to `debug`, so
 # they are shown along with any `debug` events. On the command line,

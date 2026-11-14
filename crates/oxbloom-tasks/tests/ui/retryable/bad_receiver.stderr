@@ -1,0 +1,11 @@
+error: the retryable method `reset` must take `&self` or no receiver: every attempt runs the body again on the same instance
+ --> tests/ui/retryable/bad_receiver.rs:7:20
+  |
+7 |     async fn reset(&mut self) -> Result<u32, String> {
+  |                    ^^^^^^^^^
+
+error: the retryable method `consume` must take `&self` or no receiver: every attempt runs the body again on the same instance
+  --> tests/ui/retryable/bad_receiver.rs:12:22
+   |
+12 |     async fn consume(self) -> Result<u32, String> {
+   |                      ^^^^

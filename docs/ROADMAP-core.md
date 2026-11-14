@@ -18,7 +18,7 @@ Each item below becomes its own slice with its own spec, plan and review, as in 
 | `availability`, `info`, `admin`, `cloud` | Liveness and readiness state, build and git info, platform detection (Kubernetes) | `oxbloom-actuator` (C8 done): liveness and readiness state flipped by boot at `ready` and `stopping`; `/health`, `/health/liveness`, `/health/readiness`, `/info` and `/loggers` under a base path (default `/actuator`); `HealthIndicator` and `InfoContributor` beans with a timeout per indicator; a built-in SSL certificate indicator; build and git info through the application's `build.rs` and the `build_info!` macro; Kubernetes detection. No separate management port, no roles per endpoint, no metrics |
 | `web` (server properties, error handling, forwarded headers, compression, static resources, JSON) | `server.*` properties, error attributes and problem details, content negotiation, JSON conversion | `oxbloom-web` (C6a, C6b-1 and C6b-2 done): router, Hyper server, ordered `Filter` chain (`order` module), `HttpError` and `ErrorRenderer` with problem+json, `server.*` limits, shutdown timeout and forwarded headers. It also has `Json<T>`, `Request::json` and `Accept` negotiation (feature `json`). It also has a CORS filter, a compression filter (gzip, brotli, zstd) and static resources (disk and embedded). |
 | `ssl` | SSL bundles from PEM or keystores, reloadable | `oxbloom-ssl` (C7 done): named bundles from PEM and PKCS#12, polling reload, validity warnings; HTTPS for the web server (`server.ssl.bundle`), a bundle for the JWKS fetcher (`security.jwt.jwks-ssl-bundle`) and `TestClient::connect_tls`. No mutual TLS, no JKS, no client reload |
-| `task`, `thread`, `retry` | Task executor and scheduler properties, retry policy | `oxbloom-tasks` (C9a done): `#[scheduling]` and `#[scheduled]` with cron (six fields, Spring day-of-week numbers, IANA zones, daylight saving rules), fixed rate and fixed delay; a `Scheduler` with one clock-driven loop per task, skip on overlap, a concurrency bound and a bounded shutdown; the `tasks.scheduling.*` keys; `TasksAutoConfiguration` in `oxbloom-boot` (feature `tasks`). Retry, backoff and jitter (C9b) are open, and so are persistence, distributed locking and run-time changes of the task list |
+| `task`, `thread`, `retry` | Task executor and scheduler properties, retry policy | `oxbloom-tasks` (C9a and C9b done): `#[scheduling]` and `#[scheduled]` with cron (six fields, Spring day-of-week numbers, IANA zones, daylight saving rules), fixed rate and fixed delay; a `Scheduler` with one clock-driven loop per task, skip on overlap, a concurrency bound and a bounded shutdown; the `tasks.scheduling.*` keys; `TasksAutoConfiguration` in `oxbloom-boot` (feature `tasks`). `RetryPolicy`, `#[retryable]` and `RetryAutoConfiguration` with the `tasks.retry.*` keys (C9b done); persistence, distributed locking and run-time changes of the task list are open |
 | `json` | Mapper configuration, JSON parser abstraction | `serde_json` used directly |
 | `diagnostics` (`FailureAnalyzer`) | Human-readable startup failure reports with a suggested action | `oxbloom-boot` (C3b, C4b and C5a done): `FailureAnalyzer`, `FailureAnalysis`, built-in analyzers for a missing config key, bean wiring, port in use, security build errors, invalid `security.jwt` configuration and invalid `logging` configuration (the last two are internal analyzers, not public items) |
 | `spring-boot-test` and `-test-autoconfigure` | `@SpringBootTest`, `ApplicationContextRunner`, output capture, test property sources, sliced tests (web, JSON), mock web client | C10a and C10b done: `oxbloom-test` has `ContextRunner`, captured output, temporary config directories, `Clock`s, `TestClient` and `TestApp` with slice presets |
@@ -504,9 +504,54 @@ Rulings made during C9a:
 - `Scheduler::try_new` rejects duplicate task names, because names identify tasks in `tasks()` and in logs across several `#[scheduling]` impls.
 - The scheduler uses the phase `i32::MAX` of the web server and the DI order `i32::MAX`, because no higher phase exists; this was verified by reading the stable sort by phase, the stable DI order and the reverse stop.
 
-### C9b: Retry (open)
-- `RetryPolicy` and `#[retryable]` with backoff and jitter (the Boot `retry` package), built on the task types of `oxbloom-tasks`.
-- Feeds the `oxbloom-jobs`/`queue`/`worker` crates in `IDEA.md`.
+### C9b: Retry (`oxbloom-tasks`) — done
+Done on 2026-11-14; the design is the C9b spec `2026-11-14-retry-design.md` and the plan is `2026-11-14-retry.md` (both local files under `docs/superpowers`, named here without a link), usage is in the guide chapter `docs/guide/18-tasks.md` (section Retry) and `docs/API.md` (section 4.13, the retry subsection and `RetryAutoConfiguration`), and decisions are in ADR 0085.
+
+Delivered:
+- `RetryPolicy`, `Backoff`, `Jitter`, `RetryDefaults` and `RetryError` in `oxbloom-tasks`: `run(label, op, retry_if)` with fixed or exponential backoff capped at `max_delay`, three jitter modes, a pure `delay(retry_number, unit_random)`, sleeping with `tokio::time::sleep` (paused-time tests work), and events on target `oxbloom::tasks` (`warn` per retry, one `error` when the attempts run out). `fastrand` draws the jitter.
+- The process-wide defaults `set_defaults`, `defaults` and `reset_defaults`, in a `static RwLock`, and `RetryDefaults::from_config` for the `tasks.retry.*` keys (`max-attempts`, `backoff`, `initial`, `multiplier`, `max-delay`, `jitter`) with errors that name the key and never the value.
+- The macro `#[retryable(..)]` in `oxbloom-macros`, re-exported by `oxbloom-tasks`, without a feature flag: `max_attempts`, `backoff`, `initial`, `multiplier`, `max_delay`, `jitter` and `retry_if`; a key that is omitted is read from `defaults()` at call time; compile errors that name the method. It combines with `#[scheduled]` in either order, and one scheduled run then includes all its attempts.
+- Boot feature `tasks`: `RetryAutoConfiguration` with six property metadata entries (eleven `tasks.*` keys with the scheduler's five), without conditions, so the retry keys apply with or without a scheduler.
+- `TodoCleanup::purge_at` in `examples/todos` is `#[retryable(max_attempts = 3, initial = "50ms")]`, with `TodoStore::fail_next`, tests, a README section and a `[tasks.retry]` block in `application.toml`.
+- ADR 0085 and the retry chapter of the guide.
+
+Gate numbers at the end of C9b: `cargo test --workspace --all-features` 2700 passed, 0 failed, 8 ignored (2619 before C9b); `oxbloom-tasks` 178, `oxbloom-macros` 25, `oxbloom-boot` 505 (all features); `make check-examples` 54; clippy `-D warnings` and `cargo fmt --check` clean; the boot stack probes are unchanged at 238 KB (237 overflows) and 239 KB with all features (238 overflows); the five `tasks` feature builds of `oxbloom-boot` and the `--no-default-features --features tasks` doc tests (112) pass.
+
+Limits that users must know (also in the guide):
+- The defaults are process-wide state. Each context's `RetryAutoConfiguration` overwrites them, a context without it keeps what the process set before, they stay after the run ends, and `oxbloom-test` has no reset (call `reset_defaults()` in a test).
+- Only an `async fn` that returns `Result<T, E>` with `E: Display` can be retried. The receiver is `&self` or absent, and `&mut self`, `self` and `mut` arguments are compile errors. The body runs again for every attempt, so it may borrow its arguments but not consume them.
+- The default jitter is `full`; Spring's default is none.
+- The macro keeps its own copy of the duration grammar (a whole number with `ms`, `s`, `m`, `h` or `d`), while the configuration binder accepts more forms.
+- With `max_attempts = 1` the first failure logs the `error` event; an error that `retry_if` rejects logs nothing.
+- `RetryAutoConfiguration` registers `RetryDefaults` without `on_missing_bean`, so a user-registered `RetryDefaults` bean collides, and choosing back-off would skip `set_defaults`.
+- The log label is the bare method name, without the type.
+- A scheduled task that exhausts its attempts logs the retry's `error` event and the scheduler's failed-run event.
+
+Follow-ups from C9b, not yet scheduled:
+- A circuit breaker and rate limiting.
+- Retry of plain `fn` methods, retry on a result value, and `&mut self` receivers.
+- Per-error backoff and named policies in configuration.
+- Metrics and an actuator view of retries.
+- A `recover` fallback method like Spring's `@Recover`.
+- A reset of the process-wide defaults in `oxbloom-test`.
+
+Deferred minors from the C9b reviews:
+- Task 1: the doc says `unit_random` is in `[0, 1)` while the clamp is `[0, 1]`. A NaN multiplier silently becomes `max_delay` (the configuration reader and the macro validate it). The `delay_ms` field truncates sub-millisecond delays. The panic test prints stderr noise. There are no event tests for `max_attempts = 1` and for a `retry_if` that returns `false`.
+- Task 2: no test sets every key of both sections through both readers, as a drift guard for the duplicated key lists in `retry_settings.rs` and `settings.rs`. The `retry_settings.rs` doc says the scheduling section is "ignored" although its keys are validated, and its `# Errors` omits it. There is no test that a wrong-typed value under `tasks.retry` stays hidden, some assertions for `0`, NaN and infinity are weak, and the missing upper bound of `max-attempts` is undocumented.
+- Task 3: lifetime-only generics and `where` clauses are rejected but untested, and only the first bad attribute key is reported. An `impl Trait` return type, a nested `mut` pattern and a trait impl are untested and the docs are silent on an alias without arguments (`fmt::Result`). A body that is a single `return Ok(..);` statement is untested.
+- Task 4: the end-to-end test with `max-attempts = 3` equals the default, so it cannot tell a configured value from the default by behavior. One assertion (`!contains('0')`) is brittle. A failure after `set_defaults` leaves the new defaults, which follows the process-wide ruling.
+- Task 5: the exhaustion test cannot tell three attempts from one. `purge_at` duplicates the cutoff of `cleanup_at`. A second error log, at the target `todos`, is not in the README. The `application.toml` comment "overrides max-attempts (3)" is misleading, and the table row in `lib.rs` omits the retry block.
+
+Rulings made during C9b:
+- The defaults sit in a `static RwLock<RetryDefaults>`, where the spec said a `OnceLock`, so that `set_defaults` can run again; `reset_defaults()` exists, each context's `RetryAutoConfiguration` overwrites the values, and a context without it keeps the previous ones.
+- `oxbloom-test` does not reset the defaults between contexts, where the spec said it does; a test calls `reset_defaults()` itself.
+- `RetryPolicy::run_with_random` is `#[doc(hidden)] pub`, so tests in other crates can replace the random source; the spec kept that function private.
+- Only `async fn` with `Result<T, E>` and `E: Display` is accepted; the receiver is `&self` or absent; a free `async fn` is accepted because an attribute cannot see its context.
+- The default jitter is `full`.
+- A separate `RetryAutoConfiguration` (not folded into `TasksAutoConfiguration`), so the retry settings apply without any scheduler.
+- The macro keeps its own copy of the duration grammar, and a test in `oxbloom-macros` checks it against `parse_duration`.
+- The retry API is documented as a subsection of `docs/API.md` section 4.13, not as a new section 4.14, and `RetryAutoConfiguration` sits beside `TasksAutoConfiguration` in the boot section.
+- Work happens on the branch `c9b-retry`, which started from `c9a-tasks` because C9a was not merged to `main` yet.
 
 ### C10: Test support (`oxbloom-test`)
 
@@ -566,7 +611,7 @@ Deferred minors from the C10b reviews:
 5. **C5 Logging** (C5a and C5b done), then **C6 Web server properties, errors and JSON** (C6a, C6b-1 and C6b-2 done).
 6. **C4 Conditions and auto-configuration** (C4a, the mechanism, and C4b, auto-configuring the existing wiring with property metadata, done).
 7. **C10 Test support** (C10a, the context runner and clock, and C10b, `TestApp`, `TestClient` and slicing, done).
-8. **C7 SSL bundles** (done) and **C8 Availability, info and health** (done), **C9a Tasks and scheduling** (done), then **C9b Retry.**
+8. **C7 SSL bundles** (done) and **C8 Availability, info and health** (done), **C9a Tasks and scheduling** (done) and **C9b Retry** (done).
 9. Security Slices 7 to 9, then `oxbloom-ai`, database, jobs and the rest of `IDEA.md`.
 10. **C11 Service connections** after the database and queue crates exist.
 

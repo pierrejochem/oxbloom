@@ -1,0 +1,5 @@
+error: `initial` on the retryable method `fetch` is greater than its `max_delay`
+ --> tests/ui/retryable/initial_above_max_delay.rs:6:27
+  |
+6 |     #[retryable(initial = "2m", max_delay = "30s")]
+  |                           ^^^^

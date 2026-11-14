@@ -1,7 +1,7 @@
 //! Attribute macros for Oxbloom: controllers (`#[controller]` and the route attributes),
 //! dependency injection (`#[component]`, `#[configuration]`, `#[bean]`, used through
-//! `oxbloom_di`, and `#[auto_configuration]`, used through `oxbloom_boot`) and scheduled tasks
-//! (`#[scheduling]` and `#[scheduled]`, used through `oxbloom_tasks`).
+//! `oxbloom_di`, and `#[auto_configuration]`, used through `oxbloom_boot`), scheduled tasks and
+//! retry (`#[scheduling]`, `#[scheduled]` and `#[retryable]`, used through `oxbloom_tasks`).
 //!
 //! Controllers:
 //! `#[controller("/base")]` goes on an `impl` block. Methods annotated with
@@ -15,6 +15,7 @@ mod auto_configuration;
 mod component;
 mod configuration;
 mod options;
+mod retryable;
 mod scheduling;
 
 use proc_macro::TokenStream;
@@ -928,4 +929,136 @@ pub fn scheduled(_args: TokenStream, input: TokenStream) -> TokenStream {
     .into_compile_error();
     // The item stays, so the misplaced attribute is the only error.
     quote! { #error #input }.into()
+}
+
+/// Runs the body of an `async` method again when it returns `Err`, with fixed or exponential
+/// backoff and jitter between the attempts.
+///
+/// The method keeps its signature. Its body becomes a call to
+/// `oxbloom_tasks::RetryPolicy::run` with the method name as the label, so each retry logs a
+/// `warn` event and running out of attempts logs one `error` event on target `oxbloom::tasks`.
+/// When the attempts run out, the last error is returned; a panic is never retried. Use it
+/// through `oxbloom_tasks::retryable`; the generated code refers to the `oxbloom_tasks` crate by
+/// that name, so the dependency must not be renamed in `Cargo.toml`.
+///
+/// Keys, all optional:
+///
+/// - `max_attempts = 3`: how many times the body runs at most, counting the first call;
+/// - `backoff = "exponential"` or `"fixed"`: retry *n* (from 1) waits
+///   `initial * multiplier^(n-1)`, or always `initial`;
+/// - `initial = "100ms"` and `max_delay = "30s"`: the first delay and the cap on every delay;
+///   durations are a whole number with `ms`, `s`, `m`, `h` or `d`;
+/// - `multiplier = 2.0`: the factor of exponential backoff, a number of at least 1;
+/// - `jitter = "full"`, `"equal"` or `"none"`: full jitter waits a random time up to the
+///   delay, equal jitter half the delay plus a random half;
+/// - `retry_if = "path::to::is_transient"`: a `fn(&E) -> bool`; when it returns `false`, the
+///   error comes back at once.
+///
+/// A key that the attribute omits is read from `oxbloom_tasks::defaults()` every time the
+/// method is called, so the `tasks.retry.*` keys of boot apply to it. A key that is present is
+/// fixed at compile time.
+///
+/// Every attempt runs the original body again. The method must be `async`, return
+/// `Result<T, E>` (or an alias such as `io::Result<T>`) with `E: Display`, and take `&self` or
+/// no receiver. The body may borrow the arguments but not move them out: clone an argument
+/// that it needs to own. A `return` inside the body ends that attempt, and `?` works as in any
+/// other method.
+///
+/// `#[retryable]` must be the topmost attribute on its method. An attribute above it that
+/// rewrites the body, such as `#[tracing::instrument]`, can move the arguments into the retry
+/// closure and give a confusing error. It cannot be used inside an `#[async_trait]` impl:
+/// `async_trait` expands first and turns the method into a plain `fn`, so `#[retryable]` then
+/// reports that the method must be `async`.
+///
+/// `#[retryable]` combines with `#[scheduled]` on a method of a `#[scheduling]` impl, in either
+/// order: one scheduled run then includes all its attempts, and a trigger that fires while the
+/// retries still run is skipped.
+///
+/// A plain `fn`, a return type that is not a `Result`, a receiver other than `&self`, a `mut`
+/// argument, generic parameters, `max_attempts = 0`, an unknown `backoff` or `jitter` name, a
+/// duration that does not parse, `initial` greater than `max_delay`, a `multiplier` below 1 or
+/// not finite, a `retry_if` that is not a path in a string, and unknown or repeated keys are
+/// compile errors that name the method.
+///
+/// # Examples
+///
+/// ```
+/// use std::sync::atomic::{AtomicU32, Ordering};
+/// use oxbloom_tasks::retryable;
+///
+/// #[derive(Debug, PartialEq)]
+/// enum PaymentError {
+///     Unavailable,
+///     Declined,
+/// }
+///
+/// impl std::fmt::Display for PaymentError {
+///     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+///         f.write_str(match self {
+///             PaymentError::Unavailable => "payment service unavailable",
+///             PaymentError::Declined => "card declined",
+///         })
+///     }
+/// }
+///
+/// fn is_transient(error: &PaymentError) -> bool {
+///     *error == PaymentError::Unavailable
+/// }
+///
+/// struct Payments {
+///     calls: AtomicU32,
+/// }
+///
+/// impl Payments {
+///     #[retryable(max_attempts = 5, backoff = "exponential", initial = "200ms", max_delay = "10s", jitter = "full", retry_if = "is_transient")]
+///     async fn charge(&self, id: u64) -> Result<String, PaymentError> {
+///         let attempt = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+///         if attempt < 3 {
+///             return Err(PaymentError::Unavailable);
+///         }
+///         Ok(format!("receipt {id}"))
+///     }
+///
+///     #[retryable(max_attempts = 3, retry_if = "is_transient")]
+///     async fn refund(&self, _id: u64) -> Result<(), PaymentError> {
+///         self.calls.fetch_add(1, Ordering::SeqCst);
+///         Err(PaymentError::Declined)
+///     }
+/// }
+///
+/// # tokio::runtime::Builder::new_current_thread().enable_all().start_paused(true).build()?.block_on(async {
+/// let payments = Payments { calls: AtomicU32::new(0) };
+/// assert_eq!(payments.charge(7).await, Ok("receipt 7".to_owned()));
+/// assert_eq!(payments.calls.load(Ordering::SeqCst), 3);
+///
+/// // A declined card is not transient, so it is not retried.
+/// payments.calls.store(0, Ordering::SeqCst);
+/// assert_eq!(payments.refund(7).await, Err(PaymentError::Declined));
+/// assert_eq!(payments.calls.load(Ordering::SeqCst), 1);
+/// # });
+/// # Ok::<(), std::io::Error>(())
+/// ```
+///
+/// On a scheduled method, the attempts of one run delay the next run:
+///
+/// ```
+/// use std::sync::Arc;
+/// use oxbloom_tasks::{Scheduling, retryable, scheduling};
+///
+/// struct Mirror;
+///
+/// #[scheduling]
+/// impl Mirror {
+///     #[scheduled(fixed_rate = "1m")]
+///     #[retryable(max_attempts = 4, initial = "1s")]
+///     async fn pull(&self) -> Result<(), std::io::Error> {
+///         Ok(())
+///     }
+/// }
+///
+/// assert_eq!(Arc::new(Mirror).scheduled()[0].name(), "Mirror::pull");
+/// ```
+#[proc_macro_attribute]
+pub fn retryable(args: TokenStream, input: TokenStream) -> TokenStream {
+    retryable::expand(args.into(), input.into()).into()
 }

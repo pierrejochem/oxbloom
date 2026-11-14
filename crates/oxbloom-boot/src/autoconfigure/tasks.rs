@@ -1,5 +1,6 @@
 //! `TasksAutoConfiguration`: the `oxbloom-tasks` scheduler of every `dyn Scheduling` bean,
-//! started and stopped as a boot service.
+//! started and stopped as a boot service. `RetryAutoConfiguration`: the `tasks.retry.*` keys as
+//! the process-wide retry defaults.
 
 use std::sync::Arc;
 
@@ -7,7 +8,7 @@ use async_trait::async_trait;
 use oxbloom_config::Config;
 use oxbloom_core::{Clock, SystemClock};
 use oxbloom_di::{Conditions, Configuration, ContainerBuilder, DiError, component};
-use oxbloom_tasks::{Scheduler, Scheduling, TasksSettings};
+use oxbloom_tasks::{RetryDefaults, Scheduler, Scheduling, TasksSettings, set_defaults};
 
 use crate::autoconfig::AutoConfiguration;
 use crate::error::ServiceError;
@@ -133,6 +134,77 @@ fn scheduler(
     let clock = clock.unwrap_or_else(|| Arc::new(SystemClock));
     Scheduler::try_new(tasks, settings.scheduler_config(), clock)
         .map_err(DiError::creation_from::<Scheduler>)
+}
+
+/// Reads the `tasks.retry.*` keys and stores them as the process-wide retry defaults with
+/// [`set_defaults`], so every `#[retryable]` method without its own value for a setting uses
+/// the configured one.
+///
+/// Available with the cargo feature `tasks`. It has no conditions: it runs whether or not a
+/// scheduler exists, so the retry keys apply when `tasks.scheduling.enabled` is `false` or no
+/// `dyn Scheduling` bean is registered. It registers the [`RetryDefaults`] of the
+/// `tasks.retry.*` keys as a bean, read with [`RetryDefaults::from_config`]. An unknown key
+/// directly under `tasks` or `tasks.retry`, or a bad value, fails the build with
+/// `DiError::Creation` for `RetryDefaults` whose source is the `ConfigError` naming the key,
+/// never the value, and the defaults stay as they were.
+///
+/// The defaults are process-wide and stay set after the run ends. A test that changes them
+/// restores the built-in values with `oxbloom_tasks::reset_defaults`.
+///
+/// # Examples
+///
+/// ```
+/// use std::time::Duration;
+/// use oxbloom_boot::{AutoConfiguration, Banner, OxbloomApplication, RetryAutoConfiguration};
+/// use oxbloom_config::Config;
+/// use oxbloom_tasks::{Backoff, defaults, reset_defaults};
+///
+/// # tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(async {
+/// OxbloomApplication::builder()
+///     .with_config(Config::from_str("[tasks.retry]\nmax-attempts = 5\nbackoff = \"fixed\"\ninitial = \"250ms\"")?)
+///     .banner(Banner::off())
+///     .output(std::io::sink())
+///     .auto_configuration::<RetryAutoConfiguration>()
+///     .run()
+///     .await?;
+/// assert_eq!(defaults().max_attempts, 5);
+/// assert_eq!(defaults().backoff, Backoff::Fixed);
+/// assert_eq!(defaults().initial, Duration::from_millis(250));
+/// reset_defaults();
+///
+/// let keys: Vec<_> = RetryAutoConfiguration::properties().iter().map(|p| p.key).collect();
+/// assert!(keys.contains(&"tasks.retry.max-attempts"));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[component]
+pub struct RetryAutoConfiguration;
+
+impl Configuration for RetryAutoConfiguration {
+    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        builder.try_bean(retry_defaults)
+    }
+}
+
+impl AutoConfiguration for RetryAutoConfiguration {
+    /// None: the retry keys apply with or without a scheduler.
+    fn conditions() -> Conditions {
+        Conditions::new()
+    }
+
+    fn properties() -> &'static [PropertyMetadata] {
+        &RETRY
+    }
+}
+
+/// The retry defaults of the `tasks.retry` keys, stored process-wide; the `ConfigError` stays
+/// the typed source.
+fn retry_defaults(config: Arc<Config>) -> Result<RetryDefaults, DiError> {
+    let value =
+        RetryDefaults::from_config(&config).map_err(DiError::creation_from::<RetryDefaults>)?;
+    set_defaults(value);
+    Ok(value)
 }
 
 /// The boot [`Service`] that starts the [`Scheduler`] bean with the run and stops it at
@@ -275,5 +347,46 @@ static SCHEDULING: [PropertyMetadata; 5] = [
         "Duration",
         Some("0s"),
         "The delay before the first run of tasks without an `initial_delay` of their own.",
+    ),
+];
+
+/// Exactly the keys `RetryDefaults::from_config` reads (pinned by a test).
+static RETRY: [PropertyMetadata; 6] = [
+    PropertyMetadata::new(
+        "tasks.retry.max-attempts",
+        "u32",
+        Some("3"),
+        "How many times a `#[retryable]` method runs at most, the first call included; at \
+         least 1.",
+    ),
+    PropertyMetadata::new(
+        "tasks.retry.backoff",
+        "String",
+        Some("exponential"),
+        "How the delay between attempts grows: `fixed` or `exponential`.",
+    ),
+    PropertyMetadata::new(
+        "tasks.retry.initial",
+        "Duration",
+        Some("100ms"),
+        "The delay before the first retry; at most `tasks.retry.max-delay`.",
+    ),
+    PropertyMetadata::new(
+        "tasks.retry.multiplier",
+        "f64",
+        Some("2.0"),
+        "The factor of each next delay with `exponential` backoff; finite and at least 1.0.",
+    ),
+    PropertyMetadata::new(
+        "tasks.retry.max-delay",
+        "Duration",
+        Some("30s"),
+        "The cap on every delay between attempts.",
+    ),
+    PropertyMetadata::new(
+        "tasks.retry.jitter",
+        "String",
+        Some("full"),
+        "The randomness added to each delay: `none`, `full` or `equal`.",
     ),
 ];

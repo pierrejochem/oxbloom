@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
@@ -50,7 +50,22 @@ pub struct TodoStore {
     done_at: Mutex<BTreeMap<u64, SystemTime>>,
     /// The last id handed out.
     last_id: AtomicU64,
+    /// How many of the next [`TodoStore::try_remove_done_before`] calls fail.
+    failures: AtomicU32,
 }
+
+/// The error of a store that cannot be reached. The in-memory store never fails by itself;
+/// [`TodoStore::fail_next`] simulates a backing store that does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StoreError;
+
+impl std::fmt::Display for StoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the todo store is unavailable")
+    }
+}
+
+impl std::error::Error for StoreError {}
 
 impl TodoStore {
     fn items(&self) -> std::sync::MutexGuard<'_, BTreeMap<u64, Todo>> {
@@ -227,6 +242,40 @@ impl TodoStore {
             }
         }
         removed
+    }
+
+    /// Makes the next `count` calls of [`TodoStore::try_remove_done_before`] fail, to simulate
+    /// a backing store that is briefly unavailable.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::time::SystemTime;
+    /// use todos::todo::TodoStore;
+    ///
+    /// let store = TodoStore::default();
+    /// store.fail_next(1);
+    /// assert!(store.try_remove_done_before(SystemTime::now()).is_err());
+    /// assert_eq!(store.try_remove_done_before(SystemTime::now()), Ok(0));
+    /// ```
+    pub fn fail_next(&self, count: u32) {
+        self.failures.store(count, Ordering::SeqCst);
+    }
+
+    /// Like [`TodoStore::remove_done_before`], but fails while [`TodoStore::fail_next`]
+    /// failures are left.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError`] for each injected failure; nothing is removed then.
+    pub fn try_remove_done_before(&self, cutoff: SystemTime) -> Result<usize, StoreError> {
+        let injected = self
+            .failures
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1));
+        if injected.is_ok() {
+            return Err(StoreError);
+        }
+        Ok(self.remove_done_before(cutoff))
     }
 
     /// Removes the todo; `true` if it existed.

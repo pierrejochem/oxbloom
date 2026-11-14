@@ -1,0 +1,5 @@
+error: the argument `id` of the retryable method `fetch` cannot be `mut`: every attempt runs the body again with the same arguments; clone it into a local variable instead
+ --> tests/ui/retryable/mut_argument.rs:7:27
+  |
+7 |     async fn fetch(&self, mut id: u64) -> Result<u64, String> {
+  |                           ^^^

@@ -60,3 +60,18 @@ are the `tasks.scheduling.*` keys: `enabled` (set it to `false` to run no task),
 `max-concurrent`, `shutdown-timeout`, `zone` and `initial-delay`. For example,
 `--tasks.scheduling.enabled=false` switches the cleanup off. The scheduler logs its events at the
 target `oxbloom::tasks`, and the cleanup logs the number of removed todos at the target `todos`.
+
+### Retry
+
+The cleanup reaches the store through `TodoCleanup::purge_at`, which carries
+`#[retryable(max_attempts = 3, initial = "50ms")]`. When the store fails, the call is repeated
+after a delay that doubles each time, up to three attempts in total, and the last error is
+returned if all of them fail. The attribute needs an `async` method that returns a `Result`
+whose error implements `Display`. A call that succeeds at the first attempt logs nothing; each
+retry logs a warning and an exhausted call logs an error, both at the target `oxbloom::tasks`.
+
+Boot applies the `tasks.retry.*` keys as the defaults of every `#[retryable]` method:
+`max-attempts`, `backoff`, `initial`, `multiplier`, `max-delay` and `jitter`. The commented
+`[tasks.retry]` block of `application.toml` lists them with their defaults, and a key written in
+the attribute wins over the configuration. The in-memory store never fails by itself, so the tests
+call `TodoStore::fail_next(2)` to make the next two calls fail.

@@ -81,3 +81,31 @@ async fn the_max_age_comes_from_configuration() {
         Some(Duration::from_millis(250))
     );
 }
+
+#[tokio::test]
+async fn a_store_that_fails_twice_is_purged_on_the_third_attempt() {
+    let store = Arc::new(TodoStore::default());
+    let now = SystemTime::UNIX_EPOCH + Duration::from_secs(100_000);
+    let cleanup = TodoCleanup::new(Arc::clone(&store), Duration::from_secs(3600));
+    let old = store.create("old and done".into()).id;
+    store.patch_at(old, None, Some(true), now - Duration::from_secs(7200));
+
+    store.fail_next(2);
+
+    assert_eq!(cleanup.purge_at(now).await.unwrap(), 1);
+    assert!(store.list(None).is_empty());
+}
+
+#[tokio::test]
+async fn a_store_that_keeps_failing_returns_the_last_error() {
+    let store = Arc::new(TodoStore::default());
+    let cleanup = TodoCleanup::new(Arc::clone(&store), Duration::from_secs(3600));
+    let old = store.create("old and done".into()).id;
+    store.patch_at(old, None, Some(true), SystemTime::UNIX_EPOCH);
+
+    store.fail_next(3);
+
+    let error = cleanup.purge_at(SystemTime::now()).await.unwrap_err();
+    assert_eq!(error.to_string(), "the todo store is unavailable");
+    assert_eq!(store.list(None).len(), 1);
+}
