@@ -1,0 +1,12 @@
+[book]
+title = "Oxbloom developer documentation"
+authors = ["Oxbloom contributors"]
+language = "en"
+src = "docs"
+
+[build]
+build-dir = "book-out"
+
+[output.html]
+git-repository-url = "https://github.com/pierrejochem/oxbloom"
+site-url = "/oxbloom/"
