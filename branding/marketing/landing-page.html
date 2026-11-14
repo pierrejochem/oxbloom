@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Oxbloom — landing page</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,400&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0;background:#fbf7f2}
+a{color:#a23d23}a:hover{color:#5e1a1d}
+.navlink{color:#1c1714;text-decoration:none}.navlink:hover{color:#a23d23;text-decoration:underline}
+.btn-primary:hover{background:#a23d23 !important}
+.btn-secondary:hover{border-color:#1c1714 !important}
+.btn-light:hover{background:#ffffff !important}
+a:focus-visible,button:focus-visible{outline:2px solid #b5462a;outline-offset:2px}
+</style>
+</head>
+<body>
+<div style="font-family: 'IBM Plex Sans', system-ui, sans-serif; color: #1c1714; background: #fbf7f2; min-height: 100vh; overflow-x: hidden">
+
+  <!-- announcement -->
+  <div style="background: #5e1a1d; color: #fbf7f2; text-align: center; padding: 10px 16px; font-size: 14px; line-height: 20px">
+    <span style="font-family: 'JetBrains Mono', monospace; font-size: 12px; background: #f4b39a; color: #1c1714; padding: 2px 8px; border-radius: 999px; margin-right: 8px">new</span>
+    Oxbloom [VERSION] is out — typed profiles and the observability starter. <a href="#" style="color: #f4b39a">Read the release notes →</a>
+  </div>
+
+  <!-- nav -->
+  <header style="max-width: 1200px; margin: 0 auto; padding: 20px 24px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px">
+    <a href="#" aria-label="Oxbloom home" style="display: flex"><img src="../logos/oxbloom-lockup.svg" alt="Oxbloom" style="height: 34px; width: auto; display: block"></a>
+    <nav aria-label="Main" style="display: flex; flex-wrap: wrap; align-items: center; gap: 28px; font-size: 15px; font-weight: 500">
+      <a class="navlink" href="#">Docs</a>
+      <a class="navlink" href="#">Starters</a>
+      <a class="navlink" href="#">Guides</a>
+      <a class="navlink" href="#">Blog</a>
+      <a class="navlink" href="#">GitHub</a>
+      <a class="btn-primary" href="#" style="background: #b5462a; color: #ffffff; text-decoration: none; padding: 10px 18px; border-radius: 10px">Get started</a>
+    </nav>
+  </header>
+
+  <!-- hero -->
+  <section style="position: relative; max-width: 1200px; margin: 0 auto; padding: 56px 24px 96px; display: flex; flex-wrap: wrap; gap: 56px; align-items: center">
+    <svg aria-hidden="true" viewBox="0 0 400 400" style="position: absolute; right: -220px; top: -120px; width: 620px; height: 620px; z-index: 0">
+      <g transform="translate(200 200)" fill="#f3ece3">
+        <path transform="rotate(0) translate(0 -24)" d="M0 0C-50-28-58-116-30-144C-16-158 16-158 30-144C58-116 50-28 0 0Z"/>
+        <path transform="rotate(72) translate(0 -24)" d="M0 0C-50-28-58-116-30-144C-16-158 16-158 30-144C58-116 50-28 0 0Z"/>
+        <path transform="rotate(144) translate(0 -24)" d="M0 0C-50-28-58-116-30-144C-16-158 16-158 30-144C58-116 50-28 0 0Z"/>
+        <path transform="rotate(216) translate(0 -24)" d="M0 0C-50-28-58-116-30-144C-16-158 16-158 30-144C58-116 50-28 0 0Z"/>
+        <path transform="rotate(288) translate(0 -24)" d="M0 0C-50-28-58-116-30-144C-16-158 16-158 30-144C58-116 50-28 0 0Z"/>
+      </g>
+    </svg>
+    <div style="position: relative; z-index: 1; flex: 1 1 440px; min-width: 0; display: flex; flex-direction: column; gap: 24px">
+      <div style="font-size: 12px; line-height: 16px; font-weight: 600; letter-spacing: 0.08em; color: #a23d23">THE APPLICATION FRAMEWORK FOR RUST</div>
+      <h1 style="margin: 0; font-family: Fraunces, Georgia, serif; font-weight: 600; font-size: clamp(44px, 6vw, 76px); line-height: 1.04; letter-spacing: -0.02em">Enterprise Rust, in bloom.</h1>
+      <p style="margin: 0; font-size: 19px; line-height: 30px; color: #66594f; max-width: 520px">Dependency injection, auto-configuration and starters — resolved by the compiler, not at startup. Familiar if you’ve built with Spring Boot; checked like everything else in Rust.</p>
+      <div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 8px">
+        <a class="btn-primary" href="#" style="background: #b5462a; color: #ffffff; text-decoration: none; padding: 14px 24px; border-radius: 10px; font-size: 15px; font-weight: 500">Get started</a>
+        <button style="display: inline-flex; gap: 10px; align-items: center; background: #1c1714; color: #f3ece5; border: 0; padding: 14px 20px; border-radius: 10px; font-family: 'JetBrains Mono', monospace; font-size: 14px; cursor: pointer" aria-label="Copy install command"><span style="color: #b5d48a">$</span>cargo add oxbloom</button>
+      </div>
+      <div style="display: flex; flex-wrap: wrap; gap: 16px; font-size: 13px; line-height: 18px; color: #66594f">
+        <span>Open source · MIT or Apache-2.0</span><span>Stable Rust [MSRV]</span>
+      </div>
+    </div>
+    <div style="position: relative; z-index: 1; flex: 1 1 480px; min-width: 0">
+      <div style="background: #1c1714; color: #f3ece5; border-radius: 14px; box-shadow: 0 1px 2px rgba(28,23,20,0.06), 0 24px 48px rgba(28,23,20,0.14); overflow: hidden; font-family: 'JetBrains Mono', monospace; font-size: 14px; line-height: 23px">
+        <div style="display: flex; align-items: center; gap: 6px; padding: 12px 16px; border-bottom: 1px solid rgba(243,236,229,0.08)">
+          <span style="width: 10px; height: 10px; border-radius: 5px; background: #b5462a"></span>
+          <span style="width: 10px; height: 10px; border-radius: 5px; background: rgba(243,236,229,0.18)"></span>
+          <span style="width: 10px; height: 10px; border-radius: 5px; background: rgba(243,236,229,0.18)"></span>
+          <span style="margin-left: 10px; font-size: 12px; color: #9a8c80">src/orders.rs</span>
+        </div>
+<pre style="margin: 0; padding: 20px; overflow-x: auto"><span style="color: #ec8a6a">#[component]</span>
+<span style="color: #ec8a6a">pub struct</span> OrderService {
+    repo: Inject&lt;<span style="color: #ec8a6a">dyn</span> OrderRepository&gt;,
+    events: Inject&lt;EventBus&gt;,
+}
+
+<span style="color: #ec8a6a">#[rest_controller]</span>
+<span style="color: #ec8a6a">pub struct</span> OrderController { svc: Inject&lt;OrderService&gt; }
+
+<span style="color: #ec8a6a">#[routes]</span>
+<span style="color: #ec8a6a">impl</span> OrderController {
+    <span style="color: #ec8a6a">#[get(</span><span style="color: #b5d48a">"/orders/{id}"</span><span style="color: #ec8a6a">)]</span>
+    <span style="color: #ec8a6a">async fn</span> show(&amp;self, id: Path&lt;Uuid&gt;) -&gt; Json&lt;Order&gt; {
+        Json(self.svc.find(*id).<span style="color: #ec8a6a">await</span>)
+    }
+}
+<span style="color: #9a8c80; font-style: italic">// forget to provide OrderRepository?
+// that's a compile error, not a crash at boot.</span></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- pillars -->
+  <section style="background: #ffffff; border-top: 1px solid #e4d9cd; border-bottom: 1px solid #e4d9cd">
+    <div style="max-width: 1200px; margin: 0 auto; padding: 88px 24px; display: flex; flex-direction: column; gap: 48px">
+      <div style="display: flex; flex-direction: column; gap: 12px; max-width: 640px">
+        <div style="font-size: 12px; line-height: 16px; font-weight: 600; letter-spacing: 0.08em; color: #a23d23">WHY OXBLOOM</div>
+        <h2 style="margin: 0; font-family: Fraunces, Georgia, serif; font-weight: 600; font-size: 44px; line-height: 50px; letter-spacing: -0.015em">The conventions you know. The guarantees you want.</h2>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 24px">
+        <div style="display: flex; flex-direction: column; gap: 12px; padding: 28px; border: 1px solid #e4d9cd; border-radius: 20px; background: #fbf7f2">
+          <div style="width: 44px; height: 44px; border-radius: 12px; background: #f4b39a; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#5e1a1d" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l8.66 5v10L12 22l-8.66-5V7z"/><circle cx="12" cy="12" r="3"/></svg></div>
+          <h3 style="margin: 0; font-family: Fraunces, Georgia, serif; font-size: 24px; line-height: 32px; font-weight: 600">Wired at compile time</h3>
+          <p style="margin: 0; font-size: 16px; line-height: 26px; color: #66594f">Components and their dependencies are resolved by macros during the build. No reflection, no classpath scanning, no startup surprises.</p>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 12px; padding: 28px; border: 1px solid #e4d9cd; border-radius: 20px; background: #fbf7f2">
+          <div style="width: 44px; height: 44px; border-radius: 12px; background: #f4b39a; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#5e1a1d" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M17.5 14v7M14 17.5h7"/></svg></div>
+          <h3 style="margin: 0; font-family: Fraunces, Georgia, serif; font-size: 24px; line-height: 32px; font-weight: 600">Starters, not boilerplate</h3>
+          <p style="margin: 0; font-size: 16px; line-height: 26px; color: #66594f">Add <code style="font-family: 'JetBrains Mono', monospace; font-size: 14px; background: #f3ece3; padding: 1px 5px; border-radius: 4px">oxbloom-starter-web</code> or <code style="font-family: 'JetBrains Mono', monospace; font-size: 14px; background: #f3ece3; padding: 1px 5px; border-radius: 4px">-data</code> and get sensible defaults you can override one by one.</p>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 12px; padding: 28px; border: 1px solid #e4d9cd; border-radius: 20px; background: #fbf7f2">
+          <div style="width: 44px; height: 44px; border-radius: 12px; background: #f4b39a; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#5e1a1d" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 14l2 2 4-4"/></svg></div>
+          <h3 style="margin: 0; font-family: Fraunces, Georgia, serif; font-size: 24px; line-height: 32px; font-weight: 600">Configuration that type-checks</h3>
+          <p style="margin: 0; font-size: 16px; line-height: 26px; color: #66594f">Profiles and properties map onto typed structs. A typo in <code style="font-family: 'JetBrains Mono', monospace; font-size: 14px; background: #f3ece3; padding: 1px 5px; border-radius: 4px">application.toml</code> fails the build, not production.</p>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 12px; padding: 28px; border: 1px solid #e4d9cd; border-radius: 20px; background: #fbf7f2">
+          <div style="width: 44px; height: 44px; border-radius: 12px; background: #f4b39a; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#5e1a1d" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg></div>
+          <h3 style="margin: 0; font-family: Fraunces, Georgia, serif; font-size: 24px; line-height: 32px; font-weight: 600">Production from day one</h3>
+          <p style="margin: 0; font-size: 16px; line-height: 26px; color: #66594f">Health checks, metrics and graceful shutdown come built in, so day two looks like day one.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- familiar -->
+  <section style="background: #5e1a1d; color: #fbf7f2">
+    <div style="max-width: 1200px; margin: 0 auto; padding: 88px 24px; display: flex; flex-wrap: wrap; gap: 56px; align-items: center">
+      <div style="flex: 1 1 360px; min-width: 0; display: flex; flex-direction: column; gap: 16px">
+        <div style="font-size: 12px; line-height: 16px; font-weight: 600; letter-spacing: 0.08em; color: #f4b39a">COMING FROM THE JVM?</div>
+        <h2 style="margin: 0; font-family: Fraunces, Georgia, serif; font-weight: 600; font-size: 44px; line-height: 50px; letter-spacing: -0.015em">You already know how this works.</h2>
+        <p style="margin: 0; font-size: 18px; line-height: 28px; color: #e6c9bb">Oxbloom borrows the ideas that made Spring Boot productive and moves them to where Rust is strongest: the compiler.</p>
+      </div>
+      <div style="flex: 1 1 520px; min-width: 0; overflow-x: auto">
+        <table style="width: 100%; border-collapse: collapse; font-size: 15px; line-height: 22px">
+          <thead>
+            <tr style="text-align: left; color: #f4b39a; font-size: 12px; letter-spacing: 0.08em">
+              <th style="padding: 0 16px 12px 0; font-weight: 600">IN SPRING BOOT</th>
+              <th style="padding: 0 0 12px 16px; font-weight: 600">IN OXBLOOM</th>
+            </tr>
+          </thead>
+          <tbody style="font-family: 'JetBrains Mono', monospace; font-size: 14px">
+            <tr style="border-top: 1px solid rgba(251,247,242,0.16)"><td style="padding: 14px 16px 14px 0; color: #e6c9bb">@Component</td><td style="padding: 14px 0 14px 16px">#[component]</td></tr>
+            <tr style="border-top: 1px solid rgba(251,247,242,0.16)"><td style="padding: 14px 16px 14px 0; color: #e6c9bb">@Autowired</td><td style="padding: 14px 0 14px 16px">Inject&lt;T&gt;</td></tr>
+            <tr style="border-top: 1px solid rgba(251,247,242,0.16)"><td style="padding: 14px 16px 14px 0; color: #e6c9bb">application.yml</td><td style="padding: 14px 0 14px 16px">application.toml → typed struct</td></tr>
+            <tr style="border-top: 1px solid rgba(251,247,242,0.16)"><td style="padding: 14px 16px 14px 0; color: #e6c9bb">spring-boot-starter-web</td><td style="padding: 14px 0 14px 16px">oxbloom-starter-web</td></tr>
+            <tr style="border-top: 1px solid rgba(251,247,242,0.16)"><td style="padding: 14px 16px 14px 0; color: #e6c9bb">@Profile("prod")</td><td style="padding: 14px 0 14px 16px">#[profile("prod")]</td></tr>
+            <tr style="border-top: 1px solid rgba(251,247,242,0.16); border-bottom: 1px solid rgba(251,247,242,0.16)"><td style="padding: 14px 16px 14px 0; color: #e6c9bb">Actuator</td><td style="padding: 14px 0 14px 16px">oxbloom-starter-observability</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- starters -->
+  <section style="max-width: 1200px; margin: 0 auto; padding: 88px 24px; display: flex; flex-direction: column; gap: 28px">
+    <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: end; gap: 16px">
+      <h2 style="margin: 0; font-family: Fraunces, Georgia, serif; font-weight: 600; font-size: 36px; line-height: 44px; letter-spacing: -0.01em">Pick your starters.</h2>
+      <a href="#" style="font-weight: 500">Browse all starters →</a>
+    </div>
+    <div style="display: flex; flex-wrap: wrap; gap: 12px; font-family: 'JetBrains Mono', monospace; font-size: 14px">
+      <span style="padding: 10px 16px; border: 1px solid #e4d9cd; border-radius: 999px; background: #ffffff">oxbloom-starter-web</span>
+      <span style="padding: 10px 16px; border: 1px solid #e4d9cd; border-radius: 999px; background: #ffffff">oxbloom-starter-data</span>
+      <span style="padding: 10px 16px; border: 1px solid #e4d9cd; border-radius: 999px; background: #ffffff">oxbloom-starter-security</span>
+      <span style="padding: 10px 16px; border: 1px solid #e4d9cd; border-radius: 999px; background: #ffffff">oxbloom-starter-observability</span>
+      <span style="padding: 10px 16px; border: 1px solid #e4d9cd; border-radius: 999px; background: #ffffff">oxbloom-starter-messaging</span>
+      <span style="padding: 10px 16px; border: 1px solid #e4d9cd; border-radius: 999px; background: #ffffff">oxbloom-starter-test</span>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section style="max-width: 1200px; margin: 0 auto; padding: 0 24px 88px">
+    <div style="position: relative; overflow: hidden; background: #b5462a; color: #ffffff; border-radius: 24px; padding: 64px 48px; display: flex; flex-wrap: wrap; gap: 32px; align-items: center; justify-content: space-between">
+      <svg aria-hidden="true" viewBox="0 0 200 200" style="position: absolute; left: -60px; bottom: -90px; width: 260px; height: 260px">
+        <g transform="translate(100 100)" fill="#a23d23">
+          <path transform="rotate(0) translate(0 -12)" d="M0 0C-25-14-29-58-15-72C-8-79 8-79 15-72C29-58 25-14 0 0Z"/>
+          <path transform="rotate(72) translate(0 -12)" d="M0 0C-25-14-29-58-15-72C-8-79 8-79 15-72C29-58 25-14 0 0Z"/>
+          <path transform="rotate(144) translate(0 -12)" d="M0 0C-25-14-29-58-15-72C-8-79 8-79 15-72C29-58 25-14 0 0Z"/>
+          <path transform="rotate(216) translate(0 -12)" d="M0 0C-25-14-29-58-15-72C-8-79 8-79 15-72C29-58 25-14 0 0Z"/>
+          <path transform="rotate(288) translate(0 -12)" d="M0 0C-25-14-29-58-15-72C-8-79 8-79 15-72C29-58 25-14 0 0Z"/>
+        </g>
+      </svg>
+      <div style="position: relative; display: flex; flex-direction: column; gap: 12px; max-width: 560px">
+        <h2 style="margin: 0; font-family: Fraunces, Georgia, serif; font-weight: 600; font-size: 44px; line-height: 50px; letter-spacing: -0.015em">Grow your first service.</h2>
+        <p style="margin: 0; font-size: 18px; line-height: 28px">A working REST service with health checks in about the time it takes to read the quickstart.</p>
+      </div>
+      <div style="position: relative; display: flex; flex-wrap: wrap; gap: 12px">
+        <a class="btn-light" href="#" style="background: #fbf7f2; color: #1c1714; text-decoration: none; padding: 14px 24px; border-radius: 10px; font-size: 15px; font-weight: 500">Read the quickstart</a>
+        <a href="#" style="background: #1c1714; color: #f3ece5; text-decoration: none; padding: 14px 24px; border-radius: 10px; font-size: 15px; font-weight: 500">Star on GitHub</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- footer -->
+  <footer style="border-top: 1px solid #e4d9cd">
+    <div style="max-width: 1200px; margin: 0 auto; padding: 32px 24px; display: flex; flex-wrap: wrap; gap: 16px; justify-content: space-between; align-items: center; font-size: 13px; line-height: 18px; color: #66594f">
+      <div style="display: flex; align-items: center; gap: 10px"><img src="../logos/oxbloom-mark.svg" alt="" style="width: 24px; height: 24px"><span>Oxbloom · MIT or Apache-2.0 · Grown from iron.</span></div>
+      <div style="display: flex; gap: 20px"><a class="navlink" href="#" style="color: #66594f">Docs</a><a class="navlink" href="#" style="color: #66594f">Brand</a><a class="navlink" href="#" style="color: #66594f">Code of conduct</a></div>
+    </div>
+  </footer>
+</div>
+</body>
+</html>

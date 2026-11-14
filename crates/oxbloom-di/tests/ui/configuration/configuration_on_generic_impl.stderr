@@ -1,0 +1,5 @@
+error: #[configuration] does not support generic impls
+ --> tests/ui/configuration/configuration_on_generic_impl.rs:8:5
+  |
+8 | impl<T> G<T> {
+  |     ^^^

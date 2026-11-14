@@ -1,0 +1,5 @@
+error: a #[bean] method cannot be `async`; beans are created synchronously
+ --> tests/ui/configuration/bean_async.rs:9:5
+  |
+9 |     async fn pool(&self) -> Pool { Pool }
+  |     ^^^^^

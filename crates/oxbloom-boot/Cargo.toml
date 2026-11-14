@@ -1,0 +1,42 @@
+[package]
+name = "oxbloom-boot"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+web = ["dep:oxbloom-web", "dep:serde", "dep:tracing", "tokio/net"]
+security = ["dep:oxbloom-security", "oxbloom-security/di"]
+logging = ["dep:oxbloom-logging", "dep:tracing"]
+
+[dependencies]
+oxbloom-config = { version = "0.1.0", path = "../oxbloom-config", features = ["di"] }
+oxbloom-core = { version = "0.1.0", path = "../oxbloom-core" }
+oxbloom-di = { version = "0.1.0", path = "../oxbloom-di" }
+oxbloom-logging = { version = "0.1.0", path = "../oxbloom-logging", optional = true }
+oxbloom-macros = { version = "0.1.0", path = "../oxbloom-macros" }
+oxbloom-security = { version = "0.1.0", path = "../oxbloom-security", optional = true }
+# Default features on purpose: they include the `gzip`, `brotli` and `zstd` codecs that
+# `server.compression.enabled` needs. Boot forwards no codec features of its own.
+oxbloom-web = { version = "0.1.0", path = "../oxbloom-web", optional = true }
+serde = { version = "1.0.229", features = ["derive"], optional = true }
+tracing = { version = "0.1.44", optional = true }
+async-trait = "0.1.92"
+tokio = { version = "1.54.1", features = ["rt", "sync", "time", "macros", "signal"] }
+
+[dev-dependencies]
+http = "1.5.0"
+jsonwebtoken = { version = "11.1.0", features = ["rust_crypto"] }
+# These features turn boot's `web` and `security` on for every `cargo test -p oxbloom-boot`
+# build, so no boot test run builds `web` without `security`. Feature-off coverage is the
+# compile-only `cargo build -p oxbloom-boot --no-default-features` (also with `--features
+# logging`, `web` or `security`) and `cargo test -p oxbloom-test --features web`, which runs
+# `TestApp` against boot built with `web` and without `security`.
+oxbloom-test = { path = "../oxbloom-test", features = ["web", "security"] }
+oxbloom-web = { version = "0.1.0", path = "../oxbloom-web" }
+serde_json = "1.0.154"
+tempfile = "3.27.0"
+tokio = { version = "1.54.1", features = ["rt", "macros", "time", "signal", "net", "io-util"] }
+trybuild = "1.0.122"

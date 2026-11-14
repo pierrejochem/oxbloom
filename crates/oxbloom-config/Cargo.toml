@@ -1,0 +1,17 @@
+[package]
+name = "oxbloom-config"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+di = ["dep:oxbloom-di"]
+
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.1.8"
+oxbloom-di = { path = "../oxbloom-di", optional = true }
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,5 @@
+error: unknown #[component] option; expected `provides(dyn Trait, ..)`, `primary`, `order = n`, `lazy`, `lifecycle` or `profile = "name"`
+ --> tests/ui/fallible_on_component.rs:3:13
+  |
+3 | #[component(fallible)]
+  |             ^^^^^^^^

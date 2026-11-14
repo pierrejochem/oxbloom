@@ -1,0 +1,5 @@
+error: `on_bean` needs a type, e.g. `on_bean(Pool)`
+ --> tests/ui/configuration/on_bean_without_argument.rs:7:12
+  |
+7 |     #[bean(on_bean)]
+  |            ^^^^^^^

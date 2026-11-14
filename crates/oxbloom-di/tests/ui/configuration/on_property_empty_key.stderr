@@ -1,0 +1,5 @@
+error: an `on_property` key must not be empty
+ --> tests/ui/configuration/on_property_empty_key.rs:7:24
+  |
+7 |     #[bean(on_property(""))]
+  |                        ^^

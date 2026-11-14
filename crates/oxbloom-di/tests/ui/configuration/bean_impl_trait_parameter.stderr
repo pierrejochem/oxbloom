@@ -1,0 +1,5 @@
+error: #[bean] parameters cannot be `impl Trait`; take `Arc<dyn Trait>`
+  --> tests/ui/configuration/bean_impl_trait_parameter.rs:10:24
+   |
+10 |     fn pool(&self, _s: impl Store) -> Pool { Pool }
+   |                        ^^^^^^^^^^

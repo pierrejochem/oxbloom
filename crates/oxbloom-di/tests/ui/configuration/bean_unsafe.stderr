@@ -1,0 +1,5 @@
+error: a #[bean] method cannot be `unsafe`
+ --> tests/ui/configuration/bean_unsafe.rs:9:5
+  |
+9 |     unsafe fn pool(&self) -> Pool { Pool }
+  |     ^^^^^^

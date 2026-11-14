@@ -1,0 +1,5 @@
+error: a #[bean] method must name its return type: the type is the bean's key, so `impl Trait` cannot be one; return the concrete type and add `provides(dyn Trait)`
+  --> tests/ui/configuration/bean_impl_trait_return.rs:11:23
+   |
+11 |     fn pool(&self) -> impl Store { Pool }
+   |                       ^^^^^^^^^^

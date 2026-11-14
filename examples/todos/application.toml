@@ -1,0 +1,101 @@
+# The configuration of the todos example. `cargo run -p todos` reads it from
+# this directory.
+
+[server]
+port = 8081
+
+# Console logging at `info`. The example's own events (target `todos`: create,
+# update, delete) are `info` events, and the target `todos` is set to `debug`, so
+# they are shown along with any `debug` events. On the command line,
+# `--logging.level.todos=warn` hides them, and `--oxbloom.logging.enabled=false`
+# switches logging off.
+[logging.level]
+root = "info"
+todos = "debug"
+
+# More logging options, all off by default. Uncomment to try them.
+#
+# A rotating log file in addition to the console. Use a dedicated directory and a
+# distinctive file name prefix, because `max-history` deletes every file in the
+# directory whose name starts with the prefix. The file writer drops events when
+# its buffer is full.
+# [logging.file]
+# enabled = true
+# path = "logs/todos"
+# name = "todos"
+# rotation = "daily"       # hourly, daily or never
+# max-history = 7
+# format = "json"          # full, compact or json
+#
+# JSON lines on the console, without the thread and with shorter names.
+# [logging.console]
+# format = "json"
+# [logging.json.fields]
+# thread = false
+# [logging.json.names]
+# timestamp = "ts"
+# message = "msg"
+#
+# One event per HTTP request at the target `oxbloom::web::request`. The query
+# string is never logged, and credential headers (authorization, cookie, x-api-key
+# and the like) print as <redacted> even when listed. The request log runs first
+# and also records the 401, 403, 404, 405, 413 and 500 answers. A level
+# below the root level needs `"oxbloom::web::request" = "debug"` in
+# [logging.level].
+# [logging.request]
+# enabled = true
+# level = "info"
+# headers = ["user-agent", "x-request-id"]
+
+# Web server options, all unset here so the defaults apply. Uncomment to try them.
+# Errors (404, 405, 413, 401, 403, 500 and the 404/422 of this example) are
+# `application/problem+json`. The request log, error rendering, body limit and
+# security run in a fixed order, so the request log records 401, 403 and 413 too.
+# [server]
+# shutdown-timeout = "30s"       # wait this long for open connections, then drop them
+# max-body-bytes = "1MiB"        # larger request bodies get 413
+# header-read-timeout = "10s"    # above 0 and at most 1 day
+#
+# [server.error]
+# include-message = "never"      # "always" shows a panic message as `detail`
+#
+# Forwarded headers are ignored unless the strategy is `framework`. Enable it only
+# behind a proxy that overwrites Forwarded and X-Forwarded-* (see the README).
+# [server.forward-headers]
+# strategy = "none"              # none or framework
+# trusted-proxies = ["127.0.0.1", "10.0.0.0/8"]   # default: loopback only
+
+# CORS, compression and static files, all off by default. Uncomment to try them.
+# CORS is off until `allowed-origins` is set. List origins as the browser sends them
+# (scheme, host and a non-default port, no trailing slash); `*` must be the only
+# entry of its list and cannot be combined with `allow-credentials`. Methods are
+# case-sensitive, so write them in upper case. A preflight from an allowed origin
+# is answered before the security chain runs.
+# [server.cors]
+# allowed-origins = ["http://localhost:3000"]
+# allowed-methods = ["GET", "POST", "PUT", "PATCH", "DELETE"]
+# allowed-headers = ["Content-Type"]
+# exposed-headers = ["Location"]
+# allow-credentials = false
+# max-age = "30m"
+#
+# Compression with gzip, brotli or zstd, as the client's Accept-Encoding allows. Do
+# not compress responses that mix secrets with input an attacker controls (BREACH).
+# [server.compression]
+# enabled = true
+# min-size = "1KiB"
+# mime-types = ["application/json", "application/problem+json", "text/*"]
+# level = "default"              # fast, default or best
+# max-body-bytes = "8MiB"
+#
+# Static files from a directory that must exist. Paths must be in canonical form
+# (no `//`, no dotfiles, no escapes of ordinary characters), and a name that starts
+# with `.` is never served. The example's security rules open `/api/todos/**` only,
+# so serve files below a prefix that your rules allow.
+# [server.static]
+# enabled = true
+# directory = "static"
+# path = "/assets"
+# index = "index.html"
+# cache-max-age = "1h"           # 0s sends `no-cache`
+# max-file-bytes = "10MiB"

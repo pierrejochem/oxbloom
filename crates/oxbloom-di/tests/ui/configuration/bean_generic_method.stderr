@@ -1,0 +1,5 @@
+error: a #[bean] method cannot be generic; the bean's type must be known
+ --> tests/ui/configuration/bean_generic_method.rs:9:12
+  |
+9 |     fn pool<T>(&self) -> Pool { Pool }
+  |            ^^^

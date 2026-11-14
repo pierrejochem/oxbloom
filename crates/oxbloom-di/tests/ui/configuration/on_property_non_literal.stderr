@@ -1,0 +1,5 @@
+error: `on_property` takes a key, `on_property("key")`, or a key and a value, `on_property("key", "value")`
+ --> tests/ui/configuration/on_property_non_literal.rs:8:24
+  |
+8 |     #[bean(on_property(KEY))]
+  |                        ^^^

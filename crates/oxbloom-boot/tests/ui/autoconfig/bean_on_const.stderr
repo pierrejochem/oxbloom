@@ -1,0 +1,5 @@
+error: #[bean] can only be used on methods of an #[auto_configuration] impl
+ --> tests/ui/autoconfig/bean_on_const.rs:8:5
+  |
+8 |     #[bean]
+  |     ^^^^^^^

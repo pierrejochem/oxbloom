@@ -1,0 +1,91 @@
+error[E0277]: `Cell<u8>` cannot be shared between threads safely
+  --> tests/ui/service_not_sync.rs:10:18
+   |
+10 | impl Service for S {
+   |                  ^ `Cell<u8>` cannot be shared between threads safely
+   |
+   = help: within `S`, the trait `Sync` is not implemented for `Cell<u8>`
+   = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` or `std::sync::atomic::AtomicU8` instead
+note: required because it appears within the type `S`
+  --> tests/ui/service_not_sync.rs:7:8
+   |
+ 7 | struct S(Cell<u8>);
+   |        ^
+note: required by a bound in `oxbloom_boot::Service`
+  --> src/service.rs
+   |
+   | pub trait Service: Send + Sync + 'static {
+   |                           ^^^^ required by this bound in `Service`
+
+error[E0277]: `Cell<u8>` cannot be shared between threads safely
+  --> tests/ui/service_not_sync.rs:20:20
+   |
+20 |         b.instance(S(Cell::new(0)))
+   |           -------- ^^^^^^^^^^^^^^^ `Cell<u8>` cannot be shared between threads safely
+   |           |
+   |           required by a bound introduced by this call
+   |
+   = help: within `S`, the trait `Sync` is not implemented for `Cell<u8>`
+   = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` or `std::sync::atomic::AtomicU8` instead
+note: required because it appears within the type `S`
+  --> tests/ui/service_not_sync.rs:7:8
+   |
+ 7 | struct S(Cell<u8>);
+   |        ^
+note: required by a bound in `oxbloom_di::container::ContainerBuilder::instance`
+  --> $WORKSPACE/crates/oxbloom-di/src/container.rs
+   |
+   |     pub fn instance<T: Send + Sync + 'static>(self, value: T) -> Self {
+   |                               ^^^^ required by this bound in `ContainerBuilder::instance`
+
+error[E0277]: `Cell<u8>` cannot be shared between threads safely
+  --> tests/ui/service_not_sync.rs:21:14
+   |
+21 |             .provides(|a: Arc<S>| -> Arc<dyn Service> { a })
+   |              ^^^^^^^^ `Cell<u8>` cannot be shared between threads safely
+   |
+   = help: within `S`, the trait `Sync` is not implemented for `Cell<u8>`
+   = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` or `std::sync::atomic::AtomicU8` instead
+note: required because it appears within the type `S`
+  --> tests/ui/service_not_sync.rs:7:8
+   |
+ 7 | struct S(Cell<u8>);
+   |        ^
+note: required by a bound in `oxbloom_di::container::ContainerBuilder::provides`
+  --> $WORKSPACE/crates/oxbloom-di/src/container.rs
+   |
+   |     pub fn provides<T, D, F>(mut self, coerce: F) -> Self
+   |            -------- required by a bound in this associated function
+   |     where
+   |         T: Send + Sync + 'static,
+   |                   ^^^^ required by this bound in `ContainerBuilder::provides`
+
+error: future cannot be sent between threads safely
+  --> tests/ui/service_not_sync.rs:11:5
+   |
+11 |     async fn start(&self) -> Result<(), ServiceError> {
+   |     ^^^^^ future created by async block is not `Send`
+   |
+   = help: within `S`, the trait `Sync` is not implemented for `Cell<u8>`
+   = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` or `std::sync::atomic::AtomicU8` instead
+note: captured value is not `Send` because `&` references cannot be sent unless their referent is `Sync`
+  --> tests/ui/service_not_sync.rs:11:21
+   |
+11 |     async fn start(&self) -> Result<(), ServiceError> {
+   |                     ^^^^ has type `&S` which is not `Send`, because `S` is not `Sync`
+   = note: required for the cast from `Pin<Box<{async block@$DIR/tests/ui/service_not_sync.rs:11:5: 11:10}>>` to `Pin<Box<dyn Future<Output = Result<(), ServiceError>> + Send>>`
+
+error: future cannot be sent between threads safely
+  --> tests/ui/service_not_sync.rs:15:5
+   |
+15 |     async fn stop(&self) {}
+   |     ^^^^^ future created by async block is not `Send`
+   |
+   = help: within `S`, the trait `Sync` is not implemented for `Cell<u8>`
+   = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` or `std::sync::atomic::AtomicU8` instead
+note: captured value is not `Send` because `&` references cannot be sent unless their referent is `Sync`
+  --> tests/ui/service_not_sync.rs:15:20
+   |
+15 |     async fn stop(&self) {}
+   |                    ^^^^ has type `&S` which is not `Send`, because `S` is not `Sync`
+   = note: required for the cast from `Pin<Box<{async block@$DIR/tests/ui/service_not_sync.rs:15:5: 15:10}>>` to `Pin<Box<dyn Future<Output = ()> + Send>>`

@@ -1,0 +1,17 @@
+error[E0277]: the trait bound `T: Tr` is not satisfied
+ --> tests/ui/provides_unimplemented.rs:6:22
+  |
+6 | #[component(provides(dyn Tr))]
+  |                      ^^^ unsatisfied trait bound
+  |
+help: the trait `Tr` is not implemented for `T`
+ --> tests/ui/provides_unimplemented.rs:7:1
+  |
+7 | struct T;
+  | ^^^^^^^^
+help: this trait has no implementations, consider adding one
+ --> tests/ui/provides_unimplemented.rs:5:1
+  |
+5 | trait Tr: Send + Sync {}
+  | ^^^^^^^^^^^^^^^^^^^^^
+  = note: required for the cast from `Arc<T>` to `Arc<dyn Tr>`

@@ -1,0 +1,5 @@
+error: #[bean] `profile` takes a name such as `"dev"`, `"!prod"` or a list `["dev", "test"]`
+ --> tests/ui/configuration/bean_profile_not_a_string.rs:8:22
+  |
+8 |     #[bean(profile = dev)]
+  |                      ^^^

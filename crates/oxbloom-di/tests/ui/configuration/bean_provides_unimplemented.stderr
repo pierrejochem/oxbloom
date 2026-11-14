@@ -1,0 +1,17 @@
+error[E0277]: the trait bound `Pool: Store` is not satisfied
+ --> tests/ui/configuration/bean_provides_unimplemented.rs:9:21
+  |
+9 |     #[bean(provides(dyn Store))]
+  |                     ^^^ unsatisfied trait bound
+  |
+help: the trait `Store` is not implemented for `Pool`
+ --> tests/ui/configuration/bean_provides_unimplemented.rs:4:1
+  |
+4 | struct Pool;
+  | ^^^^^^^^^^^
+help: this trait has no implementations, consider adding one
+ --> tests/ui/configuration/bean_provides_unimplemented.rs:6:1
+  |
+6 | trait Store: Send + Sync {}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^
+  = note: required for the cast from `Arc<Pool>` to `Arc<dyn Store>`

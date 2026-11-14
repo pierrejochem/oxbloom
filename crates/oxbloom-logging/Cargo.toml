@@ -1,0 +1,21 @@
+[package]
+name = "oxbloom-logging"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+oxbloom-config = { version = "0.1.0", path = "../oxbloom-config" }
+oxbloom-core = { version = "0.1.0", path = "../oxbloom-core" }
+serde = { version = "1.0.229", features = ["derive"] }
+tracing = "0.1.44"
+# The reload module needs no feature of its own: it comes with `std`.
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["std", "fmt", "ansi", "env-filter", "tracing-log", "smallvec"] }
+tracing-log = "0.2.0"
+tracing-appender = "0.2.5"
+serde_json = "1.0.154"
+
+[dev-dependencies]
+log = "0.4.34"
+tempfile = "3.27.0"

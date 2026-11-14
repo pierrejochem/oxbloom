@@ -1,0 +1,103 @@
+/* Oxbloom — generated from tokens.json */
+@font-face{font-family:'Fraunces';src:url('fonts/fraunces-latin-400-normal.woff2') format('woff2');font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:'Fraunces';src:url('fonts/fraunces-latin-400-italic.woff2') format('woff2');font-weight:400;font-style:italic;font-display:swap}
+@font-face{font-family:'Fraunces';src:url('fonts/fraunces-latin-600-normal.woff2') format('woff2');font-weight:600;font-style:normal;font-display:swap}
+@font-face{font-family:'IBM Plex Sans';src:url('fonts/ibm-plex-sans-latin-400-normal.woff2') format('woff2');font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:'IBM Plex Sans';src:url('fonts/ibm-plex-sans-latin-500-normal.woff2') format('woff2');font-weight:500;font-style:normal;font-display:swap}
+@font-face{font-family:'IBM Plex Sans';src:url('fonts/ibm-plex-sans-latin-600-normal.woff2') format('woff2');font-weight:600;font-style:normal;font-display:swap}
+@font-face{font-family:'JetBrains Mono';src:url('fonts/jetbrains-mono-latin-400-normal.woff2') format('woff2');font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:'JetBrains Mono';src:url('fonts/jetbrains-mono-latin-500-normal.woff2') format('woff2');font-weight:500;font-style:normal;font-display:swap}
+:root,[data-theme="light"]{
+  --oxide:#b5462a;
+  --oxide-text:#a23d23;
+  --on-oxide:#ffffff;
+  --oxblood:#5e1a1d;
+  --bloom:#f4b39a;
+  --sprout:#56722b;
+  --ink:#1c1714;
+  --ink-muted:#66594f;
+  --surface-100:#fbf7f2;
+  --surface-200:#ffffff;
+  --surface-000:#f3ece3;
+  --hairline:#e4d9cd;
+  --control-border:#8c7d71;
+  --code-bg:#1c1714;
+  --code-ink:#f3ece5;
+  --code-keyword:#ec8a6a;
+  --code-string:#b5d48a;
+  --code-comment:#9a8c80;
+  --shadow-card:0 1px 2px rgba(28,23,20,0.06), 0 8px 24px rgba(28,23,20,0.06);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --oxide:#e0714f;
+    --oxide-text:#ec8a6a;
+    --on-oxide:#1c1714;
+    --oxblood:#5e1a1d;
+    --bloom:#7a3626;
+    --sprout:#9cbf66;
+    --ink:#f3ece5;
+    --ink-muted:#b2a498;
+    --surface-100:#15110f;
+    --surface-200:#201a17;
+    --surface-000:#0f0c0a;
+    --hairline:#3a302b;
+    --control-border:#7d6e63;
+    --code-bg:#0f0c0a;
+    --code-ink:#f3ece5;
+    --code-keyword:#ec8a6a;
+    --code-string:#b5d48a;
+    --code-comment:#9a8c80;
+    --shadow-card:0 1px 2px rgba(0,0,0,0.4), 0 8px 24px rgba(0,0,0,0.35);
+  }
+}
+[data-theme="dark"]{
+  --oxide:#e0714f;
+  --oxide-text:#ec8a6a;
+  --on-oxide:#1c1714;
+  --oxblood:#5e1a1d;
+  --bloom:#7a3626;
+  --sprout:#9cbf66;
+  --ink:#f3ece5;
+  --ink-muted:#b2a498;
+  --surface-100:#15110f;
+  --surface-200:#201a17;
+  --surface-000:#0f0c0a;
+  --hairline:#3a302b;
+  --control-border:#7d6e63;
+  --code-bg:#0f0c0a;
+  --code-ink:#f3ece5;
+  --code-keyword:#ec8a6a;
+  --code-string:#b5d48a;
+  --code-comment:#9a8c80;
+  --shadow-card:0 1px 2px rgba(0,0,0,0.4), 0 8px 24px rgba(0,0,0,0.35);
+}
+:root{
+  --space-1:4px;
+  --space-2:8px;
+  --space-3:12px;
+  --space-4:16px;
+  --space-6:24px;
+  --space-8:32px;
+  --space-12:48px;
+  --space-16:64px;
+  --radius-sm:4px;
+  --radius-md:10px;
+  --radius-lg:20px;
+  --radius-pill:999px;
+  --font-display:Fraunces, Georgia, serif;
+  --font-sans:"IBM Plex Sans", system-ui, sans-serif;
+  --font-mono:"JetBrains Mono", ui-monospace, Menlo, monospace;
+}
+.display-xl{font-family:var(--font-display);font-size:72px;line-height:76px;font-weight:600;letter-spacing:-0.02em}
+.display-l{font-family:var(--font-display);font-size:48px;line-height:54px;font-weight:600;letter-spacing:-0.015em}
+.heading-1{font-family:var(--font-display);font-size:32px;line-height:40px;font-weight:600;letter-spacing:-0.01em}
+.heading-2{font-family:var(--font-display);font-size:24px;line-height:32px;font-weight:600}
+.pull-quote{font-family:var(--font-display);font-size:28px;line-height:38px;font-weight:400;font-style:italic}
+.eyebrow{font-family:var(--font-sans);font-size:12px;line-height:16px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase}
+.body-l{font-family:var(--font-sans);font-size:19px;line-height:30px;font-weight:400}
+.body{font-family:var(--font-sans);font-size:16px;line-height:26px;font-weight:400}
+.label{font-family:var(--font-sans);font-size:15px;line-height:20px;font-weight:500}
+.caption{font-family:var(--font-sans);font-size:13px;line-height:18px;font-weight:400}
+.code{font-family:var(--font-mono);font-size:14px;line-height:22px;font-weight:400}
+.code-label{font-family:var(--font-mono);font-size:12px;line-height:16px;font-weight:500}

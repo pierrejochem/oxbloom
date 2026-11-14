@@ -1,0 +1,51 @@
+[package]
+name = "oxbloom-test"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+web = [
+    "oxbloom-boot/web",
+    "dep:oxbloom-web",
+    "dep:bytes",
+    "dep:http",
+    "dep:hyper",
+    "dep:hyper-util",
+    "dep:http-body-util",
+    "tokio/net",
+    "tokio/sync",
+]
+json = ["web", "oxbloom-web/json", "dep:serde", "dep:serde_json"]
+security = ["oxbloom-boot/security"]
+logging = ["oxbloom-boot/logging"]
+
+[dependencies]
+bytes = { version = "1.12.1", optional = true }
+http = { version = "1.5.0", optional = true }
+http-body-util = { version = "0.1.5", optional = true }
+hyper = { version = "1.12.0", features = ["client", "http1"], optional = true }
+hyper-util = { version = "0.1.21", features = ["tokio"], optional = true }
+oxbloom-boot = { version = "0.1.0", path = "../oxbloom-boot" }
+oxbloom-config = { version = "0.1.0", path = "../oxbloom-config" }
+oxbloom-core = { version = "0.1.0", path = "../oxbloom-core" }
+oxbloom-di = { version = "0.1.0", path = "../oxbloom-di" }
+# `default-features = false` has no effect while boot's `web` feature, which `web` forwards,
+# turns the defaults of `oxbloom-web` on.
+oxbloom-web = { version = "0.1.0", path = "../oxbloom-web", default-features = false, optional = true }
+serde = { version = "1.0.229", optional = true }
+serde_json = { version = "1.0.154", optional = true }
+tempfile = "3.27.0"
+tokio = { version = "1.54.1", features = ["rt", "time", "macros"] }
+
+[dev-dependencies]
+bytes = "1.12.1"
+http = "1.5.0"
+jsonwebtoken = { version = "11.1.0", features = ["rust_crypto"] }
+oxbloom-security = { version = "0.1.0", path = "../oxbloom-security" }
+oxbloom-web = { version = "0.1.0", path = "../oxbloom-web" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tokio = { version = "1.54.1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "net", "io-util"] }

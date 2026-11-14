@@ -1,0 +1,5 @@
+error: the #[bean] option `lazy` takes no value
+ --> tests/ui/configuration/bean_flag_with_value.rs:8:12
+  |
+8 |     #[bean(lazy = true)]
+  |            ^^^^

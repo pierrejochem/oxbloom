@@ -1,0 +1,805 @@
+//! Attribute macros for Oxbloom: controllers (`#[controller]` and the route attributes) and
+//! dependency injection (`#[component]`, `#[configuration]`, `#[bean]`, used through
+//! `oxbloom_di`, and `#[auto_configuration]`, used through `oxbloom_boot`).
+//!
+//! Controllers:
+//! `#[controller("/base")]` goes on an `impl` block. Methods annotated with
+//! `#[get]`, `#[post]`, `#[put]`, `#[patch]`, `#[delete]`, `#[head]` or
+//! `#[options]` become routes. The macro adds
+//! `fn routes(self: Arc<Self>) -> Vec<oxbloom_web::Route>`.
+//!
+//! Handler signature: `async fn name(&self, req: Request) -> impl IntoResponse`.
+
+mod auto_configuration;
+mod component;
+mod configuration;
+mod options;
+
+use proc_macro::TokenStream;
+use proc_macro2::TokenStream as TokenStream2;
+use quote::quote;
+use syn::spanned::Spanned;
+use syn::{Error, FnArg, ImplItem, ItemImpl, LitStr, parse_macro_input};
+
+const METHODS: [(&str, &str); 7] = [
+    ("get", "Get"),
+    ("post", "Post"),
+    ("put", "Put"),
+    ("patch", "Patch"),
+    ("delete", "Delete"),
+    ("head", "Head"),
+    ("options", "Options"),
+];
+
+/// Marks an `impl` block as a controller with a base path.
+///
+/// Adds `fn routes(self: Arc<Self>) -> Vec<Route>` and implements `Controller`. A method path of
+/// `""` means the base path itself; other method paths must start with `/`. Routes that share a
+/// path position must use the same parameter name.
+///
+/// # Examples
+///
+/// ```
+/// use std::sync::Arc;
+/// use oxbloom_web::{App, HttpMethod, IntoResponse, Request, controller};
+///
+/// struct Hello;
+///
+/// #[controller("/api/hello")]
+/// impl Hello {
+///     #[get("")]
+///     async fn index(&self, _req: Request) -> impl IntoResponse { "hello" }
+///
+///     #[get("/{name}")]
+///     async fn greet(&self, req: Request) -> impl IntoResponse {
+///         format!("Hello, {}!", req.param("name").unwrap_or("stranger"))
+///     }
+/// }
+///
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let app = App::new().routes(Arc::new(Hello).routes())?;
+/// let res = app.handle(Request::new(HttpMethod::Get, "/api/hello/Ada")).await;
+/// assert_eq!(res.body(), "Hello, Ada!");
+/// # Ok(())
+/// # }
+/// ```
+#[proc_macro_attribute]
+pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
+    let base = parse_macro_input!(args as LitStr);
+    let item = parse_macro_input!(input as ItemImpl);
+    expand_controller(base, item)
+        .unwrap_or_else(Error::into_compile_error)
+        .into()
+}
+
+macro_rules! route_attr {
+    ($($name:ident => $doc:expr;)*) => {$(
+        #[doc = $doc]
+        #[proc_macro_attribute]
+        pub fn $name(args: TokenStream, _input: TokenStream) -> TokenStream {
+            let args = TokenStream2::from(args);
+            Error::new(
+                args.span(),
+                concat!("#[", stringify!($name), "] is only valid on methods inside a #[controller] impl block"),
+            )
+            .into_compile_error()
+            .into()
+        }
+    )*};
+}
+route_attr! {
+        get => concat!(
+"Route attribute; only valid on methods inside a `#[controller]` impl.\n\n# Examples\n\n```\n",
+"use std::sync::Arc;\nuse oxbloom_web::{App, HttpMethod, IntoResponse, Request, controller};\n\n",
+"struct Items;\n\n#[controller(\"/items\")]\nimpl Items {\n    #[get(\"\")]\n    async fn list(&self, _req: Request) -> impl IntoResponse { \"all items\" }\n}\n\n",
+"# #[tokio::main(flavor = \"current_thread\")]\n# async fn main() -> Result<(), Box<dyn std::error::Error>> {\n",
+"let app = App::new().routes(Arc::new(Items).routes())?;\n",
+"let res = app.handle(Request::new(HttpMethod::Get, \"/items\")).await;\n",
+"assert_eq!(res.status(), 200);\n# Ok(())\n# }\n```"
+);
+        post => concat!(
+"Route attribute; only valid on methods inside a `#[controller]` impl.\n\n# Examples\n\n```\n",
+"use std::sync::Arc;\nuse oxbloom_web::{App, HttpMethod, IntoResponse, Request, controller};\n\n",
+"struct Items;\n\n#[controller(\"/items\")]\nimpl Items {\n    #[post(\"\")]\n    async fn create(&self, _req: Request) -> impl IntoResponse { (http::StatusCode::CREATED, \"made\") }\n}\n\n",
+"# #[tokio::main(flavor = \"current_thread\")]\n# async fn main() -> Result<(), Box<dyn std::error::Error>> {\n",
+"let app = App::new().routes(Arc::new(Items).routes())?;\n",
+"let res = app.handle(Request::new(HttpMethod::Post, \"/items\")).await;\n",
+"assert_eq!(res.status(), 201);\n# Ok(())\n# }\n```"
+);
+        put => concat!(
+"Route attribute; only valid on methods inside a `#[controller]` impl.\n\n# Examples\n\n```\n",
+"use std::sync::Arc;\nuse oxbloom_web::{App, HttpMethod, IntoResponse, Request, controller};\n\n",
+"struct Items;\n\n#[controller(\"/items\")]\nimpl Items {\n    #[put(\"/{id}\")]\n    async fn replace(&self, _req: Request) -> impl IntoResponse { http::StatusCode::NO_CONTENT }\n}\n\n",
+"# #[tokio::main(flavor = \"current_thread\")]\n# async fn main() -> Result<(), Box<dyn std::error::Error>> {\n",
+"let app = App::new().routes(Arc::new(Items).routes())?;\n",
+"let res = app.handle(Request::new(HttpMethod::Put, \"/items/1\")).await;\n",
+"assert_eq!(res.status(), 204);\n# Ok(())\n# }\n```"
+);
+        patch => concat!(
+"Route attribute; only valid on methods inside a `#[controller]` impl.\n\n# Examples\n\n```\n",
+"use std::sync::Arc;\nuse oxbloom_web::{App, HttpMethod, IntoResponse, Request, controller};\n\n",
+"struct Items;\n\n#[controller(\"/items\")]\nimpl Items {\n    #[patch(\"/{id}\")]\n    async fn update(&self, _req: Request) -> impl IntoResponse { \"patched\" }\n}\n\n",
+"# #[tokio::main(flavor = \"current_thread\")]\n# async fn main() -> Result<(), Box<dyn std::error::Error>> {\n",
+"let app = App::new().routes(Arc::new(Items).routes())?;\n",
+"let res = app.handle(Request::new(HttpMethod::Patch, \"/items/1\")).await;\n",
+"assert_eq!(res.status(), 200);\n# Ok(())\n# }\n```"
+);
+        delete => concat!(
+"Route attribute; only valid on methods inside a `#[controller]` impl.\n\n# Examples\n\n```\n",
+"use std::sync::Arc;\nuse oxbloom_web::{App, HttpMethod, IntoResponse, Request, controller};\n\n",
+"struct Items;\n\n#[controller(\"/items\")]\nimpl Items {\n    #[delete(\"/{id}\")]\n    async fn remove(&self, _req: Request) -> impl IntoResponse { http::StatusCode::NO_CONTENT }\n}\n\n",
+"# #[tokio::main(flavor = \"current_thread\")]\n# async fn main() -> Result<(), Box<dyn std::error::Error>> {\n",
+"let app = App::new().routes(Arc::new(Items).routes())?;\n",
+"let res = app.handle(Request::new(HttpMethod::Delete, \"/items/1\")).await;\n",
+"assert_eq!(res.status(), 204);\n# Ok(())\n# }\n```"
+);
+        head => concat!(
+"Route attribute; only valid on methods inside a `#[controller]` impl.\n\n# Examples\n\n```\n",
+"use std::sync::Arc;\nuse oxbloom_web::{App, HttpMethod, IntoResponse, Request, controller};\n\n",
+"struct Items;\n\n#[controller(\"/items\")]\nimpl Items {\n    #[head(\"/{id}\")]\n    async fn exists(&self, _req: Request) -> impl IntoResponse { http::StatusCode::OK }\n}\n\n",
+"# #[tokio::main(flavor = \"current_thread\")]\n# async fn main() -> Result<(), Box<dyn std::error::Error>> {\n",
+"let app = App::new().routes(Arc::new(Items).routes())?;\n",
+"let res = app.handle(Request::new(HttpMethod::Head, \"/items/1\")).await;\n",
+"assert_eq!(res.status(), 200);\n# Ok(())\n# }\n```"
+);
+        options => concat!(
+"Route attribute; only valid on methods inside a `#[controller]` impl.\n\n# Examples\n\n```\n",
+"use std::sync::Arc;\nuse oxbloom_web::{App, HttpMethod, IntoResponse, Request, controller};\n\n",
+"struct Items;\n\n#[controller(\"/items\")]\nimpl Items {\n    #[options(\"/{id}\")]\n    async fn opts(&self, _req: Request) -> impl IntoResponse { http::StatusCode::NO_CONTENT }\n}\n\n",
+"# #[tokio::main(flavor = \"current_thread\")]\n# async fn main() -> Result<(), Box<dyn std::error::Error>> {\n",
+"let app = App::new().routes(Arc::new(Items).routes())?;\n",
+"let res = app.handle(Request::new(HttpMethod::Options, \"/items/1\")).await;\n",
+"assert_eq!(res.status(), 204);\n# Ok(())\n# }\n```"
+);
+}
+
+/// `allow_empty`: a method path of `""` means "the controller base path".
+fn validate_path(lit: &LitStr, allow_empty: bool) -> syn::Result<String> {
+    let p = lit.value();
+    if !p.starts_with('/') && !(allow_empty && p.is_empty()) {
+        return Err(Error::new(lit.span(), "route path must start with '/'"));
+    }
+    Ok(p)
+}
+
+fn join(base: &str, sub: &str) -> String {
+    let base = base.trim_end_matches('/');
+    let sub = if sub == "/" { "" } else { sub };
+    let joined = format!("{base}{sub}");
+    if joined.is_empty() {
+        "/".into()
+    } else {
+        joined
+    }
+}
+
+fn expand_controller(base: LitStr, mut item: ItemImpl) -> syn::Result<TokenStream2> {
+    if item.trait_.is_some() {
+        return Err(Error::new(
+            item.span(),
+            "#[controller] requires an inherent impl",
+        ));
+    }
+    let base_path = validate_path(&base, false)?;
+    let mut routes: Vec<(String, String, syn::Ident, TokenStream2)> = Vec::new();
+
+    for it in &mut item.items {
+        let ImplItem::Fn(f) = it else { continue };
+        let mut found: Option<(&str, LitStr)> = None;
+        let mut kept = Vec::new();
+        for attr in std::mem::take(&mut f.attrs) {
+            let hit = METHODS
+                .iter()
+                .find(|(n, _)| attr.path().is_ident(n))
+                .map(|(_, variant)| *variant);
+            match hit {
+                Some(variant) => {
+                    if found.is_some() {
+                        return Err(Error::new(
+                            attr.span(),
+                            "only one route attribute per method",
+                        ));
+                    }
+                    found = Some((variant, attr.parse_args::<LitStr>()?));
+                }
+                None => kept.push(attr),
+            }
+        }
+        f.attrs = kept;
+        let Some((variant, lit)) = found else {
+            continue;
+        };
+
+        let sig = &f.sig;
+        let ok_self = matches!(sig.inputs.first(), Some(FnArg::Receiver(r))
+            if matches!(r.kind, syn::ReceiverKind::Reference(_, _, None)));
+        if sig.asyncness.is_none() || !ok_self || sig.inputs.len() != 2 {
+            return Err(Error::new(
+                sig.span(),
+                "route handler must be `async fn name(&self, req: Request) -> impl IntoResponse`",
+            ));
+        }
+        let path = join(&base_path, &validate_path(&lit, true)?);
+        if routes.iter().any(|(v, p, ..)| v == variant && *p == path) {
+            return Err(Error::new(
+                lit.span(),
+                format!("duplicate route {variant} {path}"),
+            ));
+        }
+        let ident = sig.ident.clone();
+        let variant_id = syn::Ident::new(variant, lit.span());
+        routes.push((
+            variant.to_owned(),
+            path.clone(),
+            ident.clone(),
+            quote! {{
+                let this = ::std::sync::Arc::clone(&self);
+                ::oxbloom_web::Route::new(
+                    ::oxbloom_web::HttpMethod::#variant_id,
+                    #path,
+                    move |req| {
+                        let this = ::std::sync::Arc::clone(&this);
+                        async move {
+                            ::oxbloom_web::IntoResponse::into_response(this.#ident(req).await)
+                        }
+                    },
+                )
+            }},
+        ));
+    }
+
+    let self_ty = &item.self_ty;
+    let (impl_generics, _, where_clause) = item.generics.split_for_impl();
+    let route_exprs = routes.iter().map(|r| &r.3);
+    Ok(quote! {
+        #item
+
+        impl #impl_generics #self_ty #where_clause {
+            /// Routes generated by `#[controller]`.
+            pub fn routes(self: ::std::sync::Arc<Self>) -> ::std::vec::Vec<::oxbloom_web::Route> {
+                ::std::vec![#(#route_exprs),*]
+            }
+        }
+
+        impl #impl_generics ::oxbloom_web::Controller for #self_ty #where_clause {
+            fn routes(self: ::std::sync::Arc<Self>) -> ::std::vec::Vec<::oxbloom_web::Route> {
+                // Path call resolves to the inherent `routes` above, not this trait method.
+                <#self_ty>::routes(self)
+            }
+        }
+    })
+}
+
+/// Generates `impl ::oxbloom_di::Component` for a struct whose fields are all injected.
+///
+/// Each field is resolved from the container by its shape:
+///
+/// | Field type | Resolved with | Meaning |
+/// |---|---|---|
+/// | `Arc<T>`, `Arc<dyn Trait>` | `Resolver::get` | exactly one provider (or one `primary`) |
+/// | `Option<Arc<..>>` | `Resolver::get_opt` | `None` when nothing provides it |
+/// | `Vec<Arc<..>>` | `Resolver::get_all` | every provider, by `order` then registration |
+///
+/// Unit structs (`struct S;`) and structs without fields are accepted. Options:
+///
+/// - `provides(dyn A, dyn B)`: also register the component as each listed trait object.
+/// - `primary`: prefer this component when a single value of one of its keys has several
+///   providers.
+/// - `order = n`: its position (an `i32`, default `0`) in `Vec` / `get_all` requests.
+/// - `lazy`: create it on first request instead of during `build()`.
+/// - `lifecycle`: run the hooks of its `impl Lifecycle` (`post_construct` after creation,
+///   `pre_destroy` on `Container::shutdown`).
+/// - `profile = "dev"`, `profile = "!prod"` or `profile = ["dev", "test"]`: keep it only when
+///   the profile is active (`!`: inactive; a list: any of them), as `ContainerBuilder::profile`.
+///
+/// The options become `Component::configure`, which `ContainerBuilder::component` applies right
+/// after registering the component. Shapes are recognised by the last path segment (`Arc`,
+/// `Option`, `Vec`), so type aliases of them are not. The generated code refers to the
+/// `oxbloom_di` crate by that name, so the dependency must not be renamed in `Cargo.toml`.
+/// Enums, tuple structs, generic structs, unknown or repeated options, `provides` with a type that is not `dyn Trait`, empty profile
+/// names, fields of another shape and `#[cfg]` on fields are compile errors; so are
+/// `provides(dyn Trait)` on a struct that does not implement `Trait` and `lifecycle` on one
+/// without `impl Lifecycle`.
+///
+/// # Examples
+///
+/// ```
+/// use std::sync::Arc;
+/// use oxbloom_di::{ContainerBuilder, component};
+///
+/// #[component]
+/// struct UserRepo {}
+///
+/// #[component]
+/// struct UserService { repo: Arc<UserRepo> }
+///
+/// let container = ContainerBuilder::new()
+///     .component::<UserService>()   // order does not matter
+///     .component::<UserRepo>()
+///     .build()?;
+/// let service = container.get::<UserService>()?;
+/// assert!(Arc::ptr_eq(&service.repo, &container.get::<UserRepo>()?));
+/// # Ok::<(), oxbloom_di::DiError>(())
+/// ```
+///
+/// Trait objects, collections and optional dependencies:
+///
+/// ```
+/// use std::sync::Arc;
+/// use oxbloom_di::{ContainerBuilder, DiError, component};
+///
+/// trait Notifier: Send + Sync { fn send(&self) -> &'static str; }
+///
+/// #[component(provides(dyn Notifier), primary)]
+/// struct Mail;
+/// impl Notifier for Mail { fn send(&self) -> &'static str { "mail" } }
+///
+/// #[component(provides(dyn Notifier), order = -1)]
+/// struct Sms;
+/// impl Notifier for Sms { fn send(&self) -> &'static str { "sms" } }
+///
+/// struct Metrics;
+///
+/// #[component]
+/// struct Alerts {
+///     main: Arc<dyn Notifier>,             // the primary provider
+///     all: Vec<Arc<dyn Notifier>>,         // every provider, `order` first
+///     metrics: Option<Arc<Metrics>>,       // not registered: None
+/// }
+///
+/// let c = ContainerBuilder::new()
+///     .component::<Alerts>()
+///     .component::<Mail>()
+///     .component::<Sms>()
+///     .build()?;
+/// let alerts = c.get::<Alerts>()?;
+/// assert_eq!(alerts.main.send(), "mail");
+/// let all: Vec<_> = alerts.all.iter().map(|n| n.send()).collect();
+/// assert_eq!(all, ["sms", "mail"]);
+/// assert!(alerts.metrics.is_none());
+/// # Ok::<(), DiError>(())
+/// ```
+///
+/// Lifecycle hooks, lazy creation and profiles:
+///
+/// ```
+/// use std::sync::atomic::{AtomicBool, Ordering};
+/// use oxbloom_di::{ContainerBuilder, DiError, Lifecycle, component};
+///
+/// #[component(lifecycle, lazy)]
+/// struct Scheduler;
+/// static STARTED: AtomicBool = AtomicBool::new(false);
+/// impl Lifecycle for Scheduler {
+///     fn post_construct(&self) -> Result<(), DiError> {
+///         STARTED.store(true, Ordering::SeqCst);
+///         Ok(())
+///     }
+/// }
+///
+/// #[component(profile = "dev")]
+/// struct DemoData;
+///
+/// let c = ContainerBuilder::new()
+///     .active_profiles(["prod"])
+///     .component::<Scheduler>()
+///     .component::<DemoData>()
+///     .build()?;
+/// assert!(!STARTED.load(Ordering::SeqCst)); // lazy: not created yet
+/// c.get::<Scheduler>()?;
+/// assert!(STARTED.load(Ordering::SeqCst));  // created, then `post_construct` ran
+/// assert!(matches!(c.get::<DemoData>(), Err(DiError::Missing { .. }))); // "dev" is inactive
+/// # Ok::<(), DiError>(())
+/// ```
+#[proc_macro_attribute]
+pub fn component(args: TokenStream, input: TokenStream) -> TokenStream {
+    let mut options = options::Options::new(options::Kind::Component);
+    let parser = syn::meta::parser(|meta| options.parse(meta));
+    parse_macro_input!(args with parser);
+    let item = parse_macro_input!(input as syn::Item);
+    component::expand(options, item)
+        .unwrap_or_else(Error::into_compile_error)
+        .into()
+}
+
+/// Generates `impl ::oxbloom_di::Configuration` for an inherent `impl` block whose `#[bean]`
+/// methods create beans, for third-party types and values that need code to build.
+///
+/// Each `#[bean]` method becomes one registration, in declaration order. Its bean is the
+/// method's return type; creating it resolves the configuration itself (`Arc<Self>`, so the
+/// configuration type must be registered too, e.g. as a `#[component]` or `.instance(..)`),
+/// then each further parameter by its shape (`Arc<T>`, `Arc<dyn Trait>`, `Option<Arc<..>>`,
+/// `Vec<Arc<..>>`), then calls the method. Its source label in `Duplicate` and `Ambiguous`
+/// errors is `Type::method`. Methods without `#[bean]` are left alone.
+///
+/// `#[bean]` options:
+///
+/// - `fallible`: the method returns `Result<T, DiError>` and the bean is `T`; an `Err` fails
+///   the bean's creation like `ContainerBuilder::try_bean`. There is no guessing from the
+///   return type: without `fallible`, a `Result` is the bean.
+/// - `provides(dyn A, ..)`, `primary`, `order = n`, `lazy`, `profile = ..`: as on
+///   `#[component]`.
+/// - `on_bean(T)`, `on_missing_bean`, `on_missing_bean(T)`, `on_property("key")`,
+///   `on_property("key", "value")`: conditions on the registration; see [`macro@bean`].
+///
+/// A `#[bean]` method takes `&self` (also written `self: &Self`). A `#[cfg(..)]` on it, or a
+/// `#[cfg_attr(pred, cfg(..))]`, also applies to its registration: a method compiled out
+/// registers no bean. A `cfg` nested more deeply (`#[cfg_attr(a, cfg_attr(b, cfg(..)))]`) is
+/// not copied and fails to compile (E0599) when the method is compiled out; write it as
+/// `#[cfg_attr(all(a, b), cfg(..))]`.
+///
+/// `#[bean]` methods cannot take lifecycle hooks: the `lifecycle` option is rejected. Register
+/// the resource as an `instance` or `factory` followed by `.lifecycle::<T>()`, or add
+/// `.pre_destroy(..)` right after `.bean(..)`.
+///
+/// Use one `#[configuration]` impl per type: each generates `impl Configuration` for it, so a
+/// second one is a conflicting-implementations error; put all bean methods of a type in one
+/// block. The generated code refers to the `oxbloom_di` crate by that name, so the dependency
+/// must not be renamed in `Cargo.toml` (the same holds for `#[component]`).
+///
+/// Generic impls, trait impls, `#[bean]` outside a `#[configuration]` impl, methods that do
+/// not take `&self` (or are `async`, `unsafe` or generic), parameters that are not injectable
+/// shapes, `impl Trait` parameters or return types, a missing return type, `#[cfg]` on
+/// parameters, and unknown or repeated options are compile errors.
+///
+/// # Examples
+///
+/// ```
+/// use std::sync::Arc;
+/// use oxbloom_di::{ContainerBuilder, DiError, component, configuration};
+///
+/// // Third-party types: no `#[component]` possible.
+/// struct Pool { url: String }
+/// trait Store: Send + Sync { fn name(&self) -> String; }
+/// struct PgStore { pool: Arc<Pool> }
+/// impl Store for PgStore { fn name(&self) -> String { format!("pg at {}", self.pool.url) } }
+///
+/// #[component]
+/// struct Persistence;
+///
+/// #[configuration]
+/// impl Persistence {
+///     #[bean]
+///     fn pool(&self) -> Pool {
+///         Pool { url: "postgres://db/app".into() }
+///     }
+///
+///     #[bean(fallible, provides(dyn Store))]
+///     fn store(&self, pool: Arc<Pool>) -> Result<PgStore, DiError> {
+///         if pool.url.is_empty() {
+///             return Err(DiError::creation::<PgStore>("no database url"));
+///         }
+///         Ok(PgStore { pool })
+///     }
+/// }
+///
+/// let c = ContainerBuilder::new()
+///     .component::<Persistence>()
+///     .configuration::<Persistence>()
+///     .build()?;
+/// assert_eq!(c.get::<dyn Store>()?.name(), "pg at postgres://db/app");
+///
+/// // The configuration itself must be registered: its beans need it.
+/// let err = ContainerBuilder::new().configuration::<Persistence>().build();
+/// assert!(matches!(err, Err(DiError::Missing { .. })));
+/// # Ok::<(), DiError>(())
+/// ```
+///
+/// Bean options, with settings held by the configuration:
+///
+/// ```
+/// use std::sync::Arc;
+/// use oxbloom_di::{ContainerBuilder, DiError, configuration};
+///
+/// trait Mailer: Send + Sync { fn kind(&self) -> &'static str; }
+/// struct Smtp { host: String }
+/// impl Mailer for Smtp { fn kind(&self) -> &'static str { "smtp" } }
+/// struct Console;
+/// impl Mailer for Console { fn kind(&self) -> &'static str { "console" } }
+///
+/// struct MailConfig { host: &'static str }
+///
+/// #[configuration]
+/// impl MailConfig {
+///     #[bean(provides(dyn Mailer), profile = "prod", lazy)]
+///     fn smtp(&self) -> Smtp { Smtp { host: self.host.to_owned() } }
+///
+///     #[bean(provides(dyn Mailer), profile = "!prod")]
+///     fn console(&self) -> Console { Console }
+/// }
+///
+/// let c = ContainerBuilder::new()
+///     .instance(MailConfig { host: "mail.example.org" })
+///     .configuration::<MailConfig>()
+///     .build()?;
+/// assert_eq!(c.get::<dyn Mailer>()?.kind(), "console"); // no profile active
+///
+/// let c = ContainerBuilder::new()
+///     .active_profiles(["prod"])
+///     .instance(MailConfig { host: "mail.example.org" })
+///     .configuration::<MailConfig>()
+///     .build()?;
+/// assert_eq!(c.get::<dyn Mailer>()?.kind(), "smtp");
+/// assert_eq!(c.get::<Smtp>()?.host, "mail.example.org");
+/// # Ok::<(), DiError>(())
+/// ```
+#[proc_macro_attribute]
+pub fn configuration(args: TokenStream, input: TokenStream) -> TokenStream {
+    let item = parse_macro_input!(input as ItemImpl);
+    configuration::expand(args.into(), item)
+        .unwrap_or_else(Error::into_compile_error)
+        .into()
+}
+
+/// Generates `impl ::oxbloom_di::Configuration` (exactly as [`macro@configuration`]) and
+/// `impl ::oxbloom_boot::AutoConfiguration` for an inherent `impl` block: a configuration that
+/// an application adds as a whole, with conditions decided once for all of its beans and a place
+/// in the order of the auto-configurations. Use it through `oxbloom_boot::auto_configuration`.
+///
+/// The `#[bean]` methods and their options work as in [`macro@configuration`], including
+/// `fallible`, `lazy`, `#[cfg]` and the method-level conditions. Options of the attribute:
+///
+/// - `after(A, B, ..)`: `A` and `B` are processed before this configuration
+///   (`AutoConfiguration::after`).
+/// - `before(C, ..)`: this configuration is processed before `C` (`AutoConfiguration::before`).
+/// - `on_bean(T)`, `on_missing_bean(T)` (also `dyn Trait`), `on_property("key")`,
+///   `on_property("key", "value")`: the class-level conditions (`AutoConfiguration::conditions`,
+///   built with `Conditions`). `on_property("key")` matches whenever the key is present, also
+///   with the value `false`; for a switch, write `on_property("key", "true")`, which compares
+///   exactly and case-sensitively. They are ANDed in source order and decided once, before the first
+///   bean of the configuration, against the registrations kept before it; when they fail, every
+///   bean of the configuration is skipped. Its own beans therefore never hide each other.
+///
+/// `after` and `before` take at least one type each and may appear once; conditions may repeat.
+/// Without options only the default `AutoConfiguration` methods are used. `on_missing_bean`
+/// needs a type here: unlike a `#[bean]` method, the configuration has no return type to stand
+/// for. Generic impls, trait impls, unknown or repeated options, an empty `after()` or
+/// `before()`, a non-type argument and an empty `on_property` key are compile errors.
+///
+/// The type must also implement `oxbloom_di::Component`, usually through `#[component]` on the
+/// struct (a unit struct works; fields are injected as usual); without it the generated
+/// `AutoConfiguration` impl fails with rustc's unsatisfied `Component` bound. The application
+/// registers the instance with `component::<Self>()` as the first registration of the
+/// configuration's group, so each `#[bean]` method gets its `Arc<Self>`, and the instance is
+/// skipped together with the group when the class-level conditions fail.
+///
+/// The generated code names `::oxbloom_boot` and `::oxbloom_di` by absolute path, so the crate
+/// using the macro must depend on both under those names (not renamed in `Cargo.toml`).
+///
+/// # Examples
+///
+/// ```
+/// use std::any::type_name;
+/// use oxbloom_boot::{AutoConfiguration, ConfigRef, Configuration, auto_configuration};
+/// use oxbloom_di::{ContainerBuilder, DiError, component};
+///
+/// struct Pool { size: usize }
+/// struct Cache { size: usize }
+///
+/// #[component]
+/// pub struct DataSourceAutoConfig;
+///
+/// #[auto_configuration]
+/// impl DataSourceAutoConfig {
+///     #[bean]
+///     fn pool(&self) -> Pool { Pool { size: 4 } }
+/// }
+///
+/// #[component]
+/// pub struct CacheAutoConfig;
+///
+/// // After the data source, only with `cache.enabled` set and no user `Cache`.
+/// #[auto_configuration(
+///     after(DataSourceAutoConfig),
+///     on_property("cache.enabled"),
+///     on_missing_bean(Cache)
+/// )]
+/// impl CacheAutoConfig {
+///     #[bean]
+///     fn cache(&self) -> Cache { Cache { size: 64 } }
+/// }
+///
+/// assert_eq!(CacheAutoConfig::after(), [ConfigRef::of::<DataSourceAutoConfig>()]);
+///
+/// // Each one as a group with its class-level conditions, holding the instance and then the
+/// // beans, as `oxbloom-boot` registers it. No environment: `cache.enabled` is absent, so the
+/// // whole cache configuration is skipped, its instance included.
+/// let c = ContainerBuilder::new()
+///     .group(type_name::<DataSourceAutoConfig>(), DataSourceAutoConfig::conditions(), |b| {
+///         DataSourceAutoConfig::register(b.component::<DataSourceAutoConfig>())
+///     })
+///     .group(type_name::<CacheAutoConfig>(), CacheAutoConfig::conditions(), |b| {
+///         CacheAutoConfig::register(b.component::<CacheAutoConfig>())
+///     })
+///     .build()?;
+/// assert_eq!(c.get::<Pool>()?.size, 4);
+/// assert!(c.get_opt::<Cache>()?.is_none());
+/// assert!(c.get_opt::<CacheAutoConfig>()?.is_none());
+/// # Ok::<(), DiError>(())
+/// ```
+///
+/// A class-level `on_missing_bean` needs its type:
+///
+/// ```compile_fail
+/// use oxbloom_boot::auto_configuration;
+/// use oxbloom_di::component;
+///
+/// #[component]
+/// struct Defaults;
+///
+/// #[auto_configuration(on_missing_bean)]
+/// impl Defaults {}
+/// ```
+#[proc_macro_attribute]
+pub fn auto_configuration(args: TokenStream, input: TokenStream) -> TokenStream {
+    let mut options = auto_configuration::ClassOptions::default();
+    let parser = syn::meta::parser(|meta| options.parse(meta));
+    parse_macro_input!(args with parser);
+    let item = parse_macro_input!(input as ItemImpl);
+    auto_configuration::expand(options, item)
+        .unwrap_or_else(Error::into_compile_error)
+        .into()
+}
+
+/// Marks a method of a `#[configuration]` impl as a bean factory; see
+/// [`macro@configuration`] for the options. `#[configuration]` consumes it, so used anywhere
+/// else it is a compile error.
+///
+/// # Conditions
+///
+/// These options keep the bean only when a condition holds. Each becomes the builder modifier
+/// of the same name on the method's registration, and `build()` evaluates them once, before any
+/// bean is created:
+///
+/// - `on_bean(T)`: a registration kept before this one provides `T` (`.on_bean::<T>()`).
+/// - `on_missing_bean`: no registration kept before this one provides the bean's own type, the
+///   return type (for a `fallible` bean, the `T` of `Result<T, DiError>`). This is the back-off
+///   rule for defaults: the application registers its own bean first and the default skips
+///   itself.
+/// - `on_missing_bean(T)`: the same for an explicit type, also `dyn Trait`
+///   (`.on_missing_bean::<T>()`).
+/// - `on_property("key")`: the container's `Environment` has the property (`.on_property(..)`),
+///   whatever its value. It also matches when the value is `false`, unlike Spring's
+///   `@ConditionalOnProperty`; for a switch, write `on_property("key", "true")`.
+/// - `on_property("key", "value")`: the property equals `"value"` exactly and case-sensitively
+///   (`.on_property_value(..)`), so `TRUE` does not match `"true"`, unlike Spring's
+///   `havingValue`. The expected value is part of the source code: never put a secret there.
+///
+/// Bare `on_missing_bean` guards the method's concrete return type only, also next to
+/// `provides(dyn Trait)`. If the application provides `dyn Trait` through a bean of another
+/// type, the default does not back off: both beans stay and a single `Arc<dyn Trait>` request is
+/// `Ambiguous`. To back off for the trait, write `on_missing_bean(dyn Trait)`:
+///
+/// ```
+/// use std::sync::Arc;
+/// use oxbloom_di::{ContainerBuilder, DiError, configuration};
+///
+/// trait Clock: Send + Sync { fn now(&self) -> u64; }
+/// struct SystemClock;
+/// impl Clock for SystemClock { fn now(&self) -> u64 { 1 } }
+/// struct FixedClock;
+/// impl Clock for FixedClock { fn now(&self) -> u64 { 42 } }
+///
+/// struct Wrong;
+/// #[configuration]
+/// impl Wrong {
+///     // Guards `SystemClock`, not `dyn Clock`.
+///     #[bean(provides(dyn Clock), on_missing_bean)]
+///     fn clock(&self) -> SystemClock { SystemClock }
+/// }
+///
+/// struct Right;
+/// #[configuration]
+/// impl Right {
+///     #[bean(provides(dyn Clock), on_missing_bean(dyn Clock))]
+///     fn clock(&self) -> SystemClock { SystemClock }
+/// }
+///
+/// let user = || {
+///     ContainerBuilder::new()
+///         .instance(FixedClock)
+///         .provides(|c: Arc<FixedClock>| -> Arc<dyn Clock> { c })
+/// };
+/// let c = user().instance(Wrong).configuration::<Wrong>().build()?;
+/// assert!(matches!(c.get::<dyn Clock>(), Err(DiError::Ambiguous { .. })));
+///
+/// let c = user().instance(Right).configuration::<Right>().build()?;
+/// assert_eq!(c.get::<dyn Clock>()?.now(), 42);
+/// # Ok::<(), DiError>(())
+/// ```
+///
+/// The options may repeat and are combined with AND, evaluated in source order. A skipped bean
+/// is invisible: it is not a candidate, its method never runs, and a dependency on it is
+/// `Missing`. A bean only sees registrations made before it, including the earlier beans of its
+/// own `#[configuration]`. A `#[cfg]` that removes the method removes its conditions too. An
+/// empty key, a third `on_property` argument, `on_bean` without a type and a non-type argument
+/// are compile errors.
+///
+/// ```
+/// use std::collections::HashMap;
+/// use oxbloom_di::{ContainerBuilder, DiError, Environment, configuration};
+///
+/// struct Props(HashMap<&'static str, &'static str>);
+/// impl Environment for Props {
+///     fn property(&self, key: &str) -> Option<String> {
+///         self.0.get(key).map(|v| v.to_string())
+///     }
+/// }
+///
+/// struct Cache { size: usize }
+/// struct Metrics;
+///
+/// struct Defaults;
+///
+/// #[configuration]
+/// impl Defaults {
+///     // Backs off when the application registered its own `Cache`.
+///     #[bean(on_missing_bean)]
+///     fn cache(&self) -> Cache { Cache { size: 16 } }
+///
+///     // Only with `metrics.export = "on"` and a `Cache` kept before it.
+///     #[bean(on_bean(Cache), on_property("metrics.export", "on"))]
+///     fn metrics(&self) -> Metrics { Metrics }
+/// }
+///
+/// let props = || Props(HashMap::from([("metrics.export", "on")]));
+/// let c = ContainerBuilder::new()
+///     .environment(props())
+///     .instance(Defaults)
+///     .configuration::<Defaults>()
+///     .build()?;
+/// assert_eq!(c.get::<Cache>()?.size, 16);
+/// assert!(c.get_opt::<Metrics>()?.is_some());
+///
+/// // The application's own `Cache` wins, and no property means no `Metrics`.
+/// let c = ContainerBuilder::new()
+///     .instance(Cache { size: 1024 })
+///     .instance(Defaults)
+///     .configuration::<Defaults>()
+///     .build()?;
+/// assert_eq!(c.get::<Cache>()?.size, 1024);
+/// assert!(c.get_opt::<Metrics>()?.is_none());
+/// let skipped: Vec<_> = c
+///     .condition_report()
+///     .records()
+///     .iter()
+///     .filter(|r| !r.matched())
+///     .map(|r| r.condition())
+///     .collect();
+/// assert_eq!(skipped, ["on_missing_bean", "on_property_value"]);
+/// # Ok::<(), DiError>(())
+/// ```
+///
+/// # Examples
+///
+/// ```
+/// use oxbloom_di::{ContainerBuilder, DiError, configuration};
+///
+/// struct Limits { max: u32 }
+/// struct Defaults;
+///
+/// #[configuration]
+/// impl Defaults {
+///     #[bean(order = 1)]
+///     fn limits(&self) -> Limits { Limits { max: 10 } }
+/// }
+///
+/// let c = ContainerBuilder::new()
+///     .instance(Defaults)
+///     .configuration::<Defaults>()
+///     .build()?;
+/// assert_eq!(c.get::<Limits>()?.max, 10);
+/// # Ok::<(), DiError>(())
+/// ```
+#[proc_macro_attribute]
+pub fn bean(_args: TokenStream, input: TokenStream) -> TokenStream {
+    let input = TokenStream2::from(input);
+    // The call site of an attribute macro is the attribute itself.
+    let error = Error::new(
+        proc_macro2::Span::call_site(),
+        "#[bean] is only valid on methods inside a #[configuration] impl block",
+    )
+    .into_compile_error();
+    // The item stays, so the misplaced attribute is the only error.
+    quote! { #error #input }.into()
+}

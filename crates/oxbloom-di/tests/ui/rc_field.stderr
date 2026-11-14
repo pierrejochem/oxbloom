@@ -1,0 +1,5 @@
+error: #[component] fields must be `Arc<T>`, `Arc<dyn Trait>`, `Option<Arc<..>>` or `Vec<Arc<..>>` (injected dependencies)
+ --> tests/ui/rc_field.rs:7:15
+  |
+7 | struct T { r: Rc<X> }
+  |               ^^

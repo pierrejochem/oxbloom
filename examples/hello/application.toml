@@ -1,0 +1,35 @@
+# The configuration of the hello example. `cargo run -p hello` reads it from
+# this directory; `--oxbloom.profiles.active=dev` adds `application-dev.toml`
+# on top of it.
+
+[hello]
+# The text of the primary greeter. An empty text fails startup with the
+# example's own failure report (see `src/failure.rs`).
+greeting = "Hello"
+# The process exit code after a clean shutdown (see `src/lifecycle.rs`).
+exit-code = 0
+# `true` registers the application's own guest greeter, and the
+# auto-configured default backs off (see `src/auto.rs`).
+# custom-greeter = true
+
+# `console` prints the conditions evaluation report after the container is
+# built; the default is `off`. Also on the command line:
+# `--oxbloom.main.conditions-report=console`.
+# [oxbloom.main]
+# conditions-report = "console"
+
+[server]
+port = 8080
+
+# Log levels. Boot installs the logging subscriber, because the `logging`
+# feature is on. A level can also be set on the command line, for example
+# `--logging.level.oxbloom_web=debug`, and a table key with `::` needs quotes.
+[logging.level]
+root = "info"
+"oxbloom::boot" = "info"
+
+# Bearer tokens for `/api/admin/**` are accepted only when a JWT key is
+# configured. Set it in the environment, never in a file in version control:
+#
+#   APP_SECURITY__JWT__ALGORITHMS=HS256
+#   APP_SECURITY__JWT__SECRET=<at least 32 bytes>

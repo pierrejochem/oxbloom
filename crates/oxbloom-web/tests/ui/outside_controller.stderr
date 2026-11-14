@@ -1,0 +1,5 @@
+error: #[get] is only valid on methods inside a #[controller] impl block
+ --> tests/ui/outside_controller.rs:2:7
+  |
+2 | #[get("/a")]
+  |       ^^^^

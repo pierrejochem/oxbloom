@@ -1,0 +1,16 @@
+error[E0277]: the trait bound `Auto: oxbloom_di::Component` is not satisfied
+ --> tests/ui/autoconfig_no_impls/not_a_component.rs:8:6
+  |
+8 | impl Auto {
+  |      ^^^^ unsatisfied trait bound
+  |
+help: the trait `oxbloom_di::Component` is not implemented for `Auto`
+ --> tests/ui/autoconfig_no_impls/not_a_component.rs:6:1
+  |
+6 | struct Auto;
+  | ^^^^^^^^^^^
+note: required by a bound in `AutoConfiguration`
+ --> src/autoconfig.rs
+  |
+  | pub trait AutoConfiguration: Configuration + Component {
+  |                                              ^^^^^^^^^ required by this bound in `AutoConfiguration`

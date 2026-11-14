@@ -1,0 +1,18 @@
+error[E0277]: the trait bound `Metrics: AutoConfiguration` is not satisfied
+ --> tests/ui/autoconfig_no_impls/exclude_not_auto_configuration.rs:7:53
+  |
+7 |     let _ = OxbloomApplication::builder().exclude::<Metrics>();
+  |                                           -------   ^^^^^^^ unsatisfied trait bound
+  |                                           |
+  |                                           required by a bound introduced by this call
+  |
+help: the trait `AutoConfiguration` is not implemented for `Metrics`
+ --> tests/ui/autoconfig_no_impls/exclude_not_auto_configuration.rs:4:1
+  |
+4 | struct Metrics;
+  | ^^^^^^^^^^^^^^
+note: required by a bound in `OxbloomApplicationBuilder::exclude`
+ --> src/app.rs
+  |
+  |     pub fn exclude<A: AutoConfiguration>(mut self) -> Self {
+  |                       ^^^^^^^^^^^^^^^^^ required by this bound in `OxbloomApplicationBuilder::exclude`

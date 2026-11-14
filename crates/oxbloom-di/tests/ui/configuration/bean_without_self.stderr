@@ -1,0 +1,5 @@
+error: a #[bean] method must take `&self`: the configuration component is resolved and the method called on it
+ --> tests/ui/configuration/bean_without_self.rs:9:8
+  |
+9 |     fn pool() -> Pool { Pool }
+  |        ^^^^

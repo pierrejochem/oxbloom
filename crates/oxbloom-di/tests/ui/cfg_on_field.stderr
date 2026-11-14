@@ -1,0 +1,5 @@
+error: #[component] does not support `#[cfg]` on fields; make the dependency an `Option<Arc<..>>` or write `impl Component` by hand
+ --> tests/ui/cfg_on_field.rs:7:5
+  |
+7 |     #[cfg(test)]
+  |     ^^^^^^^^^^^^

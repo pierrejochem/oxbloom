@@ -1,0 +1,5 @@
+error: #[auto_configuration] does not support generic impls
+ --> tests/ui/autoconfig/generic_impl_rejected.rs:5:5
+  |
+5 | impl<T> Auto<T> {}
+  |     ^^^
