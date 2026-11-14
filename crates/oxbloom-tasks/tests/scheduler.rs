@@ -510,3 +510,111 @@ fn the_default_config_matches_the_spec() {
     assert_eq!(config.zone, Zone::Utc);
     assert_eq!(config.initial_delay, Duration::ZERO);
 }
+
+#[tokio::test(start_paused = true)]
+async fn dropping_stop_aborts_the_runs() {
+    /// Sets the flag when the run's future is dropped.
+    struct SetOnDrop(Arc<AtomicBool>);
+    impl Drop for SetOnDrop {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    let clock = ManualClock::new();
+    let dropped = Arc::new(AtomicBool::new(false));
+    let task = {
+        let dropped = dropped.clone();
+        Task::new("stuck", Trigger::fixed_rate(secs(60)).unwrap(), move || {
+            let guard = SetOnDrop(dropped.clone());
+            Box::pin(async move {
+                let _guard = guard;
+                std::future::pending::<()>().await;
+                Ok(())
+            })
+        })
+    };
+    let config = SchedulerConfig {
+        shutdown_timeout: secs(3_600),
+        ..SchedulerConfig::default()
+    };
+    let scheduler = scheduler(vec![task], config, &clock);
+    scheduler.start().await;
+    settle().await;
+    assert!(!dropped.load(Ordering::SeqCst), "the run is in flight");
+    // Boot abandons a service's `stop` at its own deadline by dropping the future.
+    let abandoned = tokio::time::timeout(SECOND, scheduler.stop()).await;
+    assert!(abandoned.is_err(), "stop still waits for the run");
+    settle().await;
+    assert!(
+        dropped.load(Ordering::SeqCst),
+        "the run is aborted with the dropped stop"
+    );
+}
+
+#[test]
+fn duplicate_task_names_are_rejected() {
+    let count = Arc::new(AtomicUsize::new(0));
+    let tasks = vec![
+        counting("same", Trigger::fixed_rate(SECOND).unwrap(), count.clone()),
+        counting("other", Trigger::fixed_rate(SECOND).unwrap(), count.clone()),
+        counting("same", Trigger::fixed_delay(SECOND).unwrap(), count),
+    ];
+    let clock: Arc<dyn Clock> = Arc::new(oxbloom_core::SystemClock);
+    let Err(err) = Scheduler::try_new(tasks, SchedulerConfig::default(), clock) else {
+        panic!("duplicate names must fail construction");
+    };
+    assert_eq!(err.task(), "same");
+    assert_eq!(err.key(), "name");
+    assert!(err.to_string().contains("`same`"), "{err}");
+}
+
+#[test]
+fn the_configured_zone_applies_to_cron_triggers_without_one() {
+    let count = Arc::new(AtomicUsize::new(0));
+    let tasks = || {
+        vec![
+            counting(
+                "unzoned",
+                Trigger::cron_in_default_zone("0 0 3 * * *").unwrap(),
+                count.clone(),
+            ),
+            counting(
+                "zoned",
+                Trigger::cron("0 0 3 * * *", Zone::Utc).unwrap(),
+                count.clone(),
+            ),
+        ]
+    };
+    let clock: Arc<dyn Clock> = Arc::new(oxbloom_core::SystemClock);
+    let config = SchedulerConfig {
+        zone: Zone::parse("Europe/Amsterdam").unwrap(),
+        ..SchedulerConfig::default()
+    };
+    let amsterdam = Scheduler::try_new(tasks(), config, clock.clone()).unwrap();
+    let triggers: Vec<String> = amsterdam.tasks().into_iter().map(|t| t.trigger).collect();
+    assert_eq!(
+        triggers,
+        [
+            "cron 0 0 3 * * * (Europe/Amsterdam)",
+            "cron 0 0 3 * * * (UTC)"
+        ]
+    );
+    let utc = Scheduler::try_new(tasks(), SchedulerConfig::default(), clock).unwrap();
+    assert_eq!(utc.tasks()[0].trigger, "cron 0 0 3 * * * (UTC)");
+}
+
+#[tokio::test(start_paused = true)]
+async fn is_running_between_start_and_stop() {
+    let clock = ManualClock::new();
+    let count = Arc::new(AtomicUsize::new(0));
+    let task = counting("tick", Trigger::fixed_rate(secs(60)).unwrap(), count);
+    let scheduler = scheduler(vec![task], SchedulerConfig::default(), &clock);
+    assert!(!scheduler.is_running());
+    scheduler.start().await;
+    assert!(scheduler.is_running());
+    scheduler.stop().await;
+    assert!(!scheduler.is_running());
+    scheduler.start().await;
+    assert!(!scheduler.is_running(), "a stopped scheduler stays stopped");
+}

@@ -36,9 +36,8 @@ pub struct SchedulerConfig {
     pub max_concurrent: usize,
     /// How long [`Scheduler::stop`] waits for runs in flight before it aborts them.
     pub shutdown_timeout: Duration,
-    /// The default zone for cron triggers that name none. The scheduler itself evaluates each
-    /// trigger in the zone the trigger was built with; this value is for the code that builds
-    /// the triggers (the `#[scheduled]` integration).
+    /// The zone of cron triggers built with [`Trigger::cron_in_default_zone`], such as a
+    /// `#[scheduled(cron = "..")]` method without `zone`. A trigger built with a zone keeps it.
     pub zone: Zone,
     /// The initial delay of a task that sets none with [`Task::initial_delay`].
     pub initial_delay: Duration,
@@ -203,7 +202,11 @@ impl Scheduler {
     ///
     /// # Errors
     ///
-    /// Returns a [`TaskError`] naming the first task made with [`Task::invalid`] and its key.
+    /// Returns a [`TaskError`] naming the first task made with [`Task::invalid`] and its key,
+    /// or naming a task whose name another task already has (key `name`).
+    ///
+    /// Cron triggers built with [`Trigger::cron_in_default_zone`] (a `#[scheduled]` method
+    /// without `zone`) are evaluated in `config.zone`.
     ///
     /// # Examples
     ///
@@ -234,7 +237,7 @@ impl Scheduler {
                 let (name, trigger, initial_delay, run) = task.into_parts()?;
                 Ok(Arc::new(Slot {
                     name,
-                    trigger,
+                    trigger: trigger.or_zone(config.zone),
                     initial_delay: initial_delay.unwrap_or(config.initial_delay),
                     run,
                     active: AtomicBool::new(false),
@@ -244,6 +247,11 @@ impl Scheduler {
                 }))
             })
             .collect::<Result<Vec<_>, TaskError>>()?;
+        // Names identify tasks in logs and in `tasks()`, also across several sources.
+        let mut names = std::collections::HashSet::with_capacity(slots.len());
+        if let Some(slot) = slots.iter().find(|slot| !names.insert(slot.name.as_str())) {
+            return Err(TaskError::duplicate(slot.name.clone()));
+        }
         let permits = config.max_concurrent.clamp(1, Semaphore::MAX_PERMITS);
         Ok(Scheduler {
             slots,
@@ -348,17 +356,20 @@ impl Scheduler {
         for handle in &loops {
             handle.abort();
         }
-        let in_flight: Vec<(String, JoinHandle<()>)> = self
-            .slots
-            .iter()
-            .filter_map(|slot| {
-                let handle = lock(&slot.current).take()?;
-                Some((slot.name.clone(), handle))
-            })
-            .collect();
+        // Taken out of the slots, the runs are only reachable from here: the guard aborts
+        // them when this future is dropped (boot abandons a `stop` at its own deadline).
+        let mut in_flight = AbortRunsOnDrop(
+            self.slots
+                .iter()
+                .filter_map(|slot| {
+                    let handle = lock(&slot.current).take()?;
+                    Some((slot.name.clone(), handle))
+                })
+                .collect(),
+        );
         let deadline = tokio::time::Instant::now() + self.shutdown_timeout;
-        for (name, mut handle) in in_flight {
-            if tokio::time::timeout_at(deadline, &mut handle)
+        for (name, handle) in &mut in_flight.0 {
+            if tokio::time::timeout_at(deadline, &mut *handle)
                 .await
                 .is_err()
             {
@@ -372,6 +383,33 @@ impl Scheduler {
             }
         }
         tracing::info!(target: TARGET, "task scheduler stopped");
+    }
+
+    /// Whether the scheduler runs: [`Scheduler::start`] was called and [`Scheduler::stop`]
+    /// was not.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use oxbloom_core::{Clock, SystemClock};
+    /// use oxbloom_tasks::{Scheduler, SchedulerConfig};
+    ///
+    /// let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+    /// let scheduler = Scheduler::try_new(Vec::new(), SchedulerConfig::default(), clock)?;
+    /// assert!(!scheduler.is_running());
+    /// let rt = tokio::runtime::Builder::new_current_thread().enable_time().build()?;
+    /// rt.block_on(async {
+    ///     scheduler.start().await;
+    ///     assert!(scheduler.is_running());
+    ///     scheduler.stop().await;
+    /// });
+    /// assert!(!scheduler.is_running());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn is_running(&self) -> bool {
+        let lifecycle = lock(&self.lifecycle);
+        lifecycle.started && !lifecycle.stopped
     }
 
     /// A snapshot of every task, in the order the tasks were given.
@@ -583,6 +621,18 @@ struct ActiveGuard<'a>(&'a AtomicBool);
 impl Drop for ActiveGuard<'_> {
     fn drop(&mut self) {
         self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+/// Aborts the runs [`Scheduler::stop`] took out of the slots when its future is dropped
+/// before they ended; aborting a finished run does nothing.
+struct AbortRunsOnDrop(Vec<(String, JoinHandle<()>)>);
+
+impl Drop for AbortRunsOnDrop {
+    fn drop(&mut self) {
+        for (_, handle) in &self.0 {
+            handle.abort();
+        }
     }
 }
 

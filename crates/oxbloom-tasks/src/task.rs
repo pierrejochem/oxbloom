@@ -263,7 +263,8 @@ pub trait Scheduling: Send + Sync + 'static {
 /// A task that cannot be scheduled because its trigger is invalid.
 ///
 /// The message names the task, the key whose value was invalid (such as `cron` or
-/// `initial_delay`) and what was wrong with it, never the offending value.
+/// `initial_delay`, or `name` for a name two tasks share) and what was wrong with it, never
+/// the offending value.
 ///
 /// # Examples
 ///
@@ -289,6 +290,15 @@ pub struct TaskError {
 }
 
 impl TaskError {
+    /// A task whose name another task already has.
+    pub(crate) fn duplicate(task: String) -> TaskError {
+        TaskError {
+            task,
+            key: "name",
+            error: TriggerError::new("another scheduled task has the same name"),
+        }
+    }
+
     /// The name of the task that could not be scheduled.
     ///
     /// # Examples
@@ -310,7 +320,7 @@ impl TaskError {
     }
 
     /// The key whose value was invalid, such as `cron`, `zone`, `fixed_rate`, `fixed_delay` or
-    /// `initial_delay`.
+    /// `initial_delay`, or `name` when another task has the same name.
     ///
     /// # Examples
     ///

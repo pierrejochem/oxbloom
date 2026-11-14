@@ -20,12 +20,14 @@
 
 mod macro_support;
 mod scheduler;
+mod settings;
 mod task;
 mod trigger;
 
 pub use oxbloom_macros::{scheduled, scheduling};
 
 pub use scheduler::{Scheduler, SchedulerConfig, TaskStatus};
+pub use settings::TasksSettings;
 pub use task::{BoxFuture, Outcome, RunFn, Scheduling, Task, TaskError};
 pub use trigger::{CronExpr, Trigger, TriggerError, Zone, parse_duration};
 

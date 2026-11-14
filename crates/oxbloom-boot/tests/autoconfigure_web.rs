@@ -526,10 +526,11 @@ async fn metadata_keys_match_server() {
 #[tokio::test]
 async fn auto_configurations_order_by_feature() {
     // `ssl` adds `SslAutoConfiguration`, which the web server also runs after; `actuator` adds
-    // `ActuatorAutoConfiguration`, which runs before it.
+    // `ActuatorAutoConfiguration`, which runs before it; `tasks` adds `TasksAutoConfiguration`.
     let ssl = usize::from(cfg!(feature = "ssl"));
     let actuator = usize::from(cfg!(feature = "actuator"));
-    assert_eq!(auto_configurations().len(), 4 + ssl + actuator);
+    let tasks = usize::from(cfg!(feature = "tasks"));
+    assert_eq!(auto_configurations().len(), 4 + ssl + actuator + tasks);
     #[allow(unused_mut)]
     let mut after = vec![ConfigRef::of::<SecurityAutoConfiguration>()];
     #[cfg(feature = "ssl")]

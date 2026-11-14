@@ -29,7 +29,7 @@ pub struct TriggerError {
 }
 
 impl TriggerError {
-    const fn new(message: &'static str) -> Self {
+    pub(crate) const fn new(message: &'static str) -> Self {
         Self { message }
     }
 }
@@ -282,8 +282,11 @@ pub enum Trigger {
     FixedRate(Duration),
     /// Runs after a delay, measured from the end of the last run.
     FixedDelay(Duration),
-    /// Runs at the instants matching a cron expression in a zone.
-    Cron(CronExpr, Zone),
+    /// Runs at the instants matching a cron expression in a zone. `None` is the default
+    /// zone: the [`Scheduler`](crate::Scheduler) fills in its
+    /// [`SchedulerConfig::zone`](crate::SchedulerConfig) (`tasks.scheduling.zone` in boot), and
+    /// [`Trigger::next`] evaluates it in UTC.
+    Cron(CronExpr, Option<Zone>),
 }
 
 impl Trigger {
@@ -347,7 +350,41 @@ impl Trigger {
     /// # Ok::<(), oxbloom_tasks::TriggerError>(())
     /// ```
     pub fn cron(expression: &str, zone: Zone) -> Result<Trigger, TriggerError> {
-        Ok(Trigger::Cron(CronExpr::parse(expression)?, zone))
+        Ok(Trigger::Cron(CronExpr::parse(expression)?, Some(zone)))
+    }
+
+    /// A cron trigger from a six-field expression evaluated in the default zone: the
+    /// [`Scheduler`](crate::Scheduler) that runs it uses its
+    /// [`SchedulerConfig::zone`](crate::SchedulerConfig) (UTC unless configured otherwise).
+    /// This is the trigger of a `#[scheduled(cron = "..")]` method without `zone`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`TriggerError`] when the expression is invalid (see [`CronExpr::parse`]).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::time::{Duration, UNIX_EPOCH};
+    /// use oxbloom_tasks::Trigger;
+    ///
+    /// let nightly = Trigger::cron_in_default_zone("0 0 3 * * *")?;
+    /// assert_eq!(nightly.describe(), "cron 0 0 3 * * * (default zone)");
+    /// // Outside a scheduler the default zone is UTC.
+    /// let next = nightly.next(None, None, UNIX_EPOCH);
+    /// assert_eq!(next, Some(UNIX_EPOCH + Duration::from_secs(3 * 3600)));
+    /// # Ok::<(), oxbloom_tasks::TriggerError>(())
+    /// ```
+    pub fn cron_in_default_zone(expression: &str) -> Result<Trigger, TriggerError> {
+        Ok(Trigger::Cron(CronExpr::parse(expression)?, None))
+    }
+
+    /// This trigger with `zone` filled in when it is a cron trigger in the default zone.
+    pub(crate) fn or_zone(self, zone: Zone) -> Trigger {
+        match self {
+            Trigger::Cron(expr, None) => Trigger::Cron(expr, Some(zone)),
+            other => other,
+        }
     }
 
     /// A short description for logs and endpoints, such as `fixed rate 5s`.
@@ -366,7 +403,8 @@ impl Trigger {
         match self {
             Trigger::FixedRate(period) => format!("fixed rate {period:?}"),
             Trigger::FixedDelay(delay) => format!("fixed delay {delay:?}"),
-            Trigger::Cron(expr, zone) => format!("cron {expr} ({zone})"),
+            Trigger::Cron(expr, Some(zone)) => format!("cron {expr} ({zone})"),
+            Trigger::Cron(expr, None) => format!("cron {expr} (default zone)"),
         }
     }
 
@@ -407,7 +445,7 @@ impl Trigger {
         match self {
             Trigger::FixedRate(period) => after(last_start, period),
             Trigger::FixedDelay(delay) => after(last_end, delay),
-            Trigger::Cron(expr, zone) => expr.next_after(now, *zone),
+            Trigger::Cron(expr, zone) => expr.next_after(now, zone.unwrap_or_default()),
         }
     }
 }

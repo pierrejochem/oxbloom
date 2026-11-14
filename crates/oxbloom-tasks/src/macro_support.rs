@@ -9,7 +9,7 @@ use crate::trigger::{Trigger, TriggerError, Zone, parse_duration};
 /// The trigger of one `#[scheduled]` method, as the string literals of its attribute.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Spec {
-    /// `cron = ".."`, with `zone = ".."` when given.
+    /// `cron = ".."`, with `zone = ".."` when given (`None`: the scheduler's zone).
     Cron(&'static str, Option<&'static str>),
     /// `fixed_rate = ".."`.
     FixedRate(&'static str),
@@ -22,11 +22,13 @@ impl Spec {
     fn trigger(self) -> Result<Trigger, (&'static str, TriggerError)> {
         let duration = |key, text| parse_duration(text).map_err(|error| (key, error));
         match self {
-            Spec::Cron(expression, zone) => {
-                let zone = match zone {
-                    Some(name) => Zone::parse(name).map_err(|error| ("zone", error))?,
-                    None => Zone::Utc,
-                };
+            // Without `zone` the trigger keeps the default zone, which the scheduler fills
+            // with `SchedulerConfig::zone` (`tasks.scheduling.zone`).
+            Spec::Cron(expression, None) => {
+                Trigger::cron_in_default_zone(expression).map_err(|error| ("cron", error))
+            }
+            Spec::Cron(expression, Some(name)) => {
+                let zone = Zone::parse(name).map_err(|error| ("zone", error))?;
                 Trigger::cron(expression, zone).map_err(|error| ("cron", error))
             }
             Spec::FixedRate(text) => Trigger::fixed_rate(duration("fixed_rate", text)?)

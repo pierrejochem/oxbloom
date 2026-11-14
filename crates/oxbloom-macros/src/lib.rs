@@ -821,7 +821,9 @@ pub fn bean(_args: TokenStream, input: TokenStream) -> TokenStream {
 ///   `fixed_rate = "30s"` (measured from the start of the last run) or `fixed_delay = "30s"`
 ///   (measured from its end); durations are a whole number with `ms`, `s`, `m`, `h` or `d`;
 /// - `initial_delay = "5s"`: postpones the first run;
-/// - `zone = "Europe/Amsterdam"`: the IANA zone of a `cron` trigger (UTC without it);
+/// - `zone = "Europe/Amsterdam"`: the IANA zone of a `cron` trigger; without it the trigger
+///   uses the scheduler's zone (`SchedulerConfig::zone`, `tasks.scheduling.zone` in boot, UTC by
+///   default);
 /// - `name = ".."`: the task name in logs and in `Scheduler::tasks` (default `Type::method`).
 ///
 /// A method takes only `&self` and returns `()` or `Result<(), E>` where `E: Display`; an

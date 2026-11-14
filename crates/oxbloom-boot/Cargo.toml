@@ -15,6 +15,8 @@ logging = ["dep:oxbloom-logging", "dep:tracing", "oxbloom-actuator?/logging"]
 ssl = ["web", "dep:oxbloom-ssl", "oxbloom-ssl/di", "oxbloom-web/tls", "dep:tokio-rustls", "oxbloom-security?/jwks", "oxbloom-actuator?/ssl"]
 # `ActuatorAutoConfiguration`: the health, info and (with `logging`) loggers endpoints.
 actuator = ["web", "dep:oxbloom-actuator", "oxbloom-actuator/web"]
+# `TasksAutoConfiguration`: the `oxbloom-tasks` scheduler of the `dyn Scheduling` beans.
+tasks = ["dep:oxbloom-tasks"]
 
 [dependencies]
 oxbloom-actuator = { version = "0.1.0", path = "../oxbloom-actuator", optional = true }
@@ -25,6 +27,7 @@ oxbloom-logging = { version = "0.1.0", path = "../oxbloom-logging", optional = t
 oxbloom-macros = { version = "0.1.0", path = "../oxbloom-macros" }
 oxbloom-security = { version = "0.1.0", path = "../oxbloom-security", optional = true }
 oxbloom-ssl = { version = "0.1.0", path = "../oxbloom-ssl", optional = true }
+oxbloom-tasks = { version = "0.1.0", path = "../oxbloom-tasks", optional = true }
 # Default features on purpose: they include the `gzip`, `brotli` and `zstd` codecs that
 # `server.compression.enabled` needs. Boot forwards no codec features of its own.
 oxbloom-web = { version = "0.1.0", path = "../oxbloom-web", optional = true }

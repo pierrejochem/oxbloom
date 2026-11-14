@@ -78,7 +78,7 @@ fn generates_one_task_per_method() {
 }
 
 #[test]
-fn a_cron_trigger_without_a_zone_is_utc() {
+fn a_cron_trigger_without_a_zone_takes_the_scheduler_zone() {
     struct Nightly;
 
     #[scheduling]
@@ -90,8 +90,38 @@ fn a_cron_trigger_without_a_zone_is_utc() {
     let tasks = Arc::new(Nightly).scheduled();
     assert_eq!(
         tasks[0].trigger(),
-        Some(&Trigger::cron("0 0 3 * * *", Zone::Utc).unwrap())
+        Some(&Trigger::cron_in_default_zone("0 0 3 * * *").unwrap())
     );
+    // UTC unless the scheduler is configured with another zone.
+    let utc = try_scheduler(Arc::new(Nightly).scheduled()).unwrap();
+    assert_eq!(utc.tasks()[0].trigger, "cron 0 0 3 * * * (UTC)");
+    let config = SchedulerConfig {
+        zone: Zone::parse("Europe/Amsterdam").unwrap(),
+        ..SchedulerConfig::default()
+    };
+    let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+    let amsterdam = Scheduler::try_new(tasks, config, clock).unwrap();
+    assert_eq!(
+        amsterdam.tasks()[0].trigger,
+        "cron 0 0 3 * * * (Europe/Amsterdam)"
+    );
+}
+
+#[test]
+fn a_repeated_name_fails_the_scheduler() {
+    struct Twice;
+
+    #[scheduling]
+    impl Twice {
+        #[scheduled(fixed_rate = "1s", name = "twice")]
+        async fn one(&self) {}
+
+        #[scheduled(fixed_rate = "2s", name = "twice")]
+        async fn two(&self) {}
+    }
+
+    let err = try_scheduler(Arc::new(Twice).scheduled()).expect_err("duplicate name");
+    assert_eq!((err.task(), err.key()), ("twice", "name"));
 }
 
 /// Records where each method ran.
