@@ -5,10 +5,10 @@ use std::time::{Duration, SystemTime};
 
 use oxbloom_config::Config;
 use oxbloom_di::DiError;
-use oxbloom_tasks::scheduling;
+use oxbloom_tasks::{retryable, scheduling};
 use serde::Deserialize;
 
-use crate::todo::TodoStore;
+use crate::todo::{StoreError, TodoStore};
 
 /// The `todos.cleanup.*` keys.
 #[derive(Debug, Deserialize)]
@@ -31,7 +31,8 @@ impl Default for CleanupSettings {
 /// The task runs when the scheduler starts (later with `tasks.scheduling.initial-delay`), and
 /// then one minute after the end of each run (`fixed_delay`). Boot's `tasks` feature collects it because
 /// `lib.rs` registers the bean `provides` as a `dyn Scheduling`. The period is a literal of
-/// the attribute; the age is configuration. The task is named `TodoCleanup::cleanup`.
+/// the attribute; the age is configuration. The task is named `TodoCleanup::cleanup`. The store
+/// access, [`TodoCleanup::purge_at`], is `#[retryable]`.
 ///
 /// # Examples
 ///
@@ -73,13 +74,31 @@ impl TodoCleanup {
     }
 }
 
+impl TodoCleanup {
+    /// Removes the todos done more than the age before `now` and returns how many. A failing
+    /// store is called again up to three times, 50 ms apart at first (`#[retryable]`); the
+    /// last error is returned when all attempts fail.
+    ///
+    /// # Errors
+    ///
+    /// The [`StoreError`] of the last attempt.
+    #[retryable(max_attempts = 3, initial = "50ms")]
+    pub async fn purge_at(&self, now: SystemTime) -> Result<usize, StoreError> {
+        let cutoff = now
+            .checked_sub(self.max_age)
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+        self.store.try_remove_done_before(cutoff)
+    }
+}
+
 #[scheduling]
 impl TodoCleanup {
     #[scheduled(fixed_delay = "1m")]
     async fn cleanup(&self) {
-        let removed = self.cleanup_at(SystemTime::now());
-        if removed > 0 {
-            tracing::info!(target: "todos", removed, "removed done todos");
+        match self.purge_at(SystemTime::now()).await {
+            Ok(0) => {}
+            Ok(removed) => tracing::info!(target: "todos", removed, "removed done todos"),
+            Err(error) => tracing::error!(target: "todos", %error, "cleanup of done todos failed"),
         }
     }
 }
