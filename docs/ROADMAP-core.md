@@ -457,9 +457,9 @@ Delivered:
 - ADR 0084 and the guide chapter 18 (the roadmap chapter is now 19).
 
 Gate numbers at the end of C9a (re-measured at the final gate on the final tree):
-- `cargo test --workspace --all-features`: 2612 passed, 0 failed, 8 ignored (2481 before C9a).
+- `cargo test --workspace --all-features`: 2619 passed, 0 failed, 8 ignored (2481 before C9a).
 - Boot feature matrix (`cargo test -p oxbloom-boot`): `--no-default-features` 447, `--features web` 447, `--features logging` 467, `--features security` 447, `--features ssl` 447, `--features actuator` 460, `--features tasks` 462, `--all-features` 496; each with 0 failed and 1 ignored (the probe).
-- `cargo test -p oxbloom-tasks --all-features` 106, `cargo test -p oxbloom-macros` 21, `make check-examples` 50 (44 before).
+- `cargo test -p oxbloom-tasks --all-features` 113, `cargo test -p oxbloom-macros` 21, `make check-examples` 50 (44 before).
 - Stack probes: boot needs 238 KB without the feature `logging` and 239 KB with it (237 and 238 overflow), unchanged from C8.
 
 Limits that users must know (also in the guide):
@@ -490,13 +490,13 @@ Deferred minors from the C9a reviews:
 - Task 2: the log recorder helper in the tests captures events only on the test thread, so there is no multi-thread capture. A cancelled run is recorded as `Failed` without a log line. The skip event has no field with the count of skipped triggers. There is no test of `stop` called twice, of `start` after `stop`, or of a `spawn_blocking` call inside a user future, where the runtime shutdown waits for the blocking thread. `SchedulerConfig::zone` is read by `Scheduler::try_new` only to fill cron triggers without a zone.
 - Task 3: the error for a repeated trigger key reads "two triggers `cron` and `cron`". There is no custom message for an error type that is not `Display`.
 - Task 4: a `fixed_delay` of `0s` is untested at the boot level.
-- Task 5: the jump of the workspace test count from 2481 to 2611 is not attributed in the implementer's report (Task 4 added 15 under `--all-features` and Task 5 about 6), so the controller re-verifies it at the final gate. The test `the_max_age_comes_from_configuration` stores its result in a field called `removed_with`, which is misleading. The wording of the `done_at` doc is cosmetic. There is no scheduler-level run test of the example, because the attribute period is the literal `1m`. Some lines in the example's README, `cleanup.rs` and `application.toml` are long. The new `delete` test is sequential, so it is a regression guard and not a race test.
+- Task 5: the jump of the workspace test count from 2481 to 2611 at that point is not attributed in the implementer's report (Task 4 added 15 under `--all-features` and Task 5 about 6), so the final gate re-verified it (2619 passed). The test `the_max_age_comes_from_configuration` stores its result in a field called `removed_with`, which is misleading. The wording of the `done_at` doc is cosmetic. There is no scheduler-level run test of the example, because the attribute period is the literal `1m`. Some lines in the example's README, `cleanup.rs` and `application.toml` are long. The new `delete` test is sequential, so it is a regression guard and not a race test.
 
 Rulings made during C9a:
 - The macro generates `impl Scheduling` and the application registers the bean as a `dyn Scheduling`, where the spec said the macro registers a `dyn ScheduledTask` bean per method, because an impl macro cannot register beans (`#[controller]` works the same way); the user-visible behavior is the same.
 - Work happens on the branch `c9a-tasks`, with commits by the implementers; the specs and plans under `docs/superpowers` and the `.superpowers` directory stay local and git-ignored.
 - The Task 2 tests use a small local test clock instead of the `ManualClock` of `oxbloom-test`, because `oxbloom-test` depends on `oxbloom-boot`, which optionally depends on `oxbloom-tasks`, so a dev-dependency would make a cycle.
-- Spring day-of-week numbering (`0` and `7` are Sunday, `1` is Monday) is translated in the cron parser instead of rejecting numeric days; names stay untouched.
+- Spring day-of-week numbering (`0` and `7` are Sunday, `1` is Monday) is translated in the cron parser instead of rejecting numeric days; names are translated to numbers too, so `SUN-TUE` means Sunday to Tuesday.
 - `Task::invalid` takes the key (`name`, `key: &'static str`, `error`) and `TaskError` names it, because startup errors must name the task and the key.
 - `Scheduler::stop` has an abort-on-drop guard around the runs in flight, because boot abandons a service's `stop` at its own deadline and a dropped future would otherwise leave the runs detached.
 - `tasks.scheduling.zone` applies to cron tasks without a `zone`: the cron trigger keeps an optional zone and `Scheduler::try_new` fills the configured one.
