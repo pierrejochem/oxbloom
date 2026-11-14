@@ -1791,6 +1791,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "cron",
+ "fastrand",
  "oxbloom-config",
  "oxbloom-core",
  "oxbloom-macros",
