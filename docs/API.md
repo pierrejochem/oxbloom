@@ -14,10 +14,11 @@ Only what is implemented and tested is documented as available. Anything else is
 | `oxbloom-di` | Singleton dependency injection: traits, collections, lifecycle, lazy beans, bean factories, profiles, conditions and groups | `ContainerBuilder`, `Container`, `Resolver`, `Component`, `Configuration`, `Lifecycle`, `ShutdownReport`, `DestroyFailure`, `Inject`, `BeanFn`, `TryBeanFn`, `DiError`, `ErrorSource`, `Environment`, `ConditionContext`, `ConditionOutcome`, `Conditions`, `ConditionReport`, `ConditionRecord` |
 | `oxbloom-config` | Typed config: TOML + imports, profiles, env and CLI sources, placeholders, origins | `Config`, `ConfigBuilder`, `Secret`, `ConfigError`, `Origin`, `DataSize`, `ConfigWarning` |
 | `oxbloom-security` | Filter-chain security, JWT resource server | `HttpSecurity`, `SecurityFilterChain`, `JwtDecoderBuilder`, `JwksSource`, `Authentication`, `jwt_decoder_from_config`, `jwks_ssl_bundle`, `ReqwestJwksFetcher` with `with_tls` (feature `jwks`) |
-| `oxbloom-boot` | Application entry point: lifecycle events, runners, services, signals, exit codes, banner, failure analysis, auto-configuration and the conditions report | `OxbloomApplication`, `OxbloomApplicationBuilder`, `ApplicationArguments`, `RunListener`, `ApplicationRunner`, `CommandLineRunner`, `Service`, `ExitCodeGenerator`, `ShutdownHandle`, `StartupError`, `StartupPhase`, `ServiceError`, `RunnerError`, `ExitStatus`, `Banner`, `FailureAnalysis`, `FailureAnalyzer`, `AutoConfiguration`, `AutoConfigurations`, `ConfigRef`, `auto_configuration`, `Conditions`, `Configuration`, `PropertyMetadata`, `boot_properties`, `WebServer`, `BindError`, `WebServerAutoConfiguration` and `RequestLogAutoConfiguration` (feature `web`), `auto_configurations` (feature `security` or `web`), `JwtDecoderAutoConfiguration`, `SecurityAutoConfiguration` and `SecurityCustomizer` (feature `security`), `WebServer::with_ssl` and `SslAutoConfiguration` (feature `ssl`), `OxbloomApplicationBuilder::logging` (feature `logging`), `async_trait` |
+| `oxbloom-boot` | Application entry point: lifecycle events, runners, services, signals, exit codes, banner, failure analysis, auto-configuration and the conditions report | `OxbloomApplication`, `OxbloomApplicationBuilder`, `ApplicationArguments`, `RunListener`, `ApplicationRunner`, `CommandLineRunner`, `Service`, `ExitCodeGenerator`, `ShutdownHandle`, `StartupError`, `StartupPhase`, `ServiceError`, `RunnerError`, `ExitStatus`, `Banner`, `FailureAnalysis`, `FailureAnalyzer`, `AutoConfiguration`, `AutoConfigurations`, `ConfigRef`, `auto_configuration`, `Conditions`, `Configuration`, `PropertyMetadata`, `boot_properties`, `WebServer`, `BindError`, `WebServerAutoConfiguration` and `RequestLogAutoConfiguration` (feature `web`), `auto_configurations` (feature `security` or `web`), `JwtDecoderAutoConfiguration`, `SecurityAutoConfiguration` and `SecurityCustomizer` (feature `security`), `WebServer::with_ssl` and `SslAutoConfiguration` (feature `ssl`), `ActuatorAutoConfiguration` (feature `actuator`), `OxbloomApplicationBuilder::logging` (feature `logging`), `async_trait` |
 | `oxbloom-logging` | `tracing` subscriber from the `logging.*` keys: levels, groups, console format and color, rotating file output, JSON lines, runtime change | `Level`, `ParseLevelError`, `ConsoleFormat`, `ConsoleColor`, `FileRotation`, `FileFormat`, `JsonField`, `LoggingError`, `LoggingSystem`, `PROPERTIES` |
 | `oxbloom-test` | Test support (dev-dependency): run an application context through the real boot lifecycle, captured output, temporary config directories, controllable clocks, a test client and whole applications on port 0 | `ContextRunner`, `ContextView`, `FailureView`, `Captured`, `Log`, `TempConfigDir`, `FixedClock`, `ManualClock`, `TestClient`, `TestResponse`, `TestApp` and `RunningApp` (feature `web`), `TestClient::connect_tls` and `RunningApp::client_tls` (feature `tls`) |
 | `oxbloom-ssl` | Named SSL bundles from the `ssl.*` keys (PEM and PKCS#12), reloaded when their files change, with certificate validity warnings | `SslBundles`, `SslBundle`, `SslError`, `CertValidity`, `ReloadTask`, `PROPERTIES` |
+| `oxbloom-actuator` | Operational endpoints: availability state, health indicators, build and platform info, runtime log levels, a certificate validity indicator | `Availability`, `Liveness`, `Readiness`, `Status`, `Health`, `HealthIndicator`, `HealthRunner`, `BuildInfo`, `build_info!`, `build::emit`, `Platform`, `Info`, `InfoContributor`, `ActuatorSettings`, `ActuatorController` (feature `web`), `SslHealthIndicator` (feature `ssl`) |
 | `oxbloom-cli` | `oxbloom` binary: project generator | `new`, `list` |
 | `examples/todos` | A CRUD REST API on the web, security and logging stack (controller with `#[post]`, `#[get]`, `#[put]`, `#[patch]`, `#[delete]`, a thread-safe in-memory store, `Json<T>` and `Request::json`, `tracing` events at the target `todos`) | `cargo run -p todos -- --server.port=0` or `make run-todos` |
 | `examples/hello` | A small application that uses the current features (configuration and beans, trait injection, lifecycle, runners, listeners, exit codes, security and `WebServer` auto-configured through a `SecurityCustomizer` and a `dyn Controller`, a custom failure analyzer, an auto-configuration with a user override) | `cargo run -p hello -- --server.port=0` |
@@ -34,7 +35,9 @@ startup events, the `LoggingSystem` bean and a built-in analyzer for invalid `lo
 `oxbloom-boot/ssl` (it turns `web` on) enables `oxbloom-ssl/di` and `oxbloom-web/tls` and adds
 `SslAutoConfiguration`, `WebServer::with_ssl`, the `server.ssl.bundle` key and a built-in analyzer for
 SSL bundle errors. `oxbloom-web/tls` adds `App::serve_tls`. `oxbloom-ssl/di` implements
-`oxbloom_di::Lifecycle` for `SslBundles`. `oxbloom-test/tls` adds `TestClient::connect_tls` and
+`oxbloom_di::Lifecycle` for `SslBundles`. `oxbloom-boot/actuator` (it turns `web` on) enables `oxbloom-actuator/web` and adds
+`ActuatorAutoConfiguration`; with `logging` or `ssl` it also enables `oxbloom-actuator/logging` or
+`oxbloom-actuator/ssl`. `oxbloom-test/tls` adds `TestClient::connect_tls` and
 `RunningApp::client_tls`. With either
 feature, `oxbloom_boot::auto_configurations()` lists the auto-configurations of the enabled
 features. `oxbloom-boot` always enables `oxbloom-config/di`.
@@ -3611,7 +3614,8 @@ assert!(PropertyMetadata::to_json(&list).starts_with("[{\"key\":"));
 
 `pub fn auto_configurations() -> AutoConfigurations`. The list of the built-in auto-configurations
 for the enabled features, in dependency order: `JwtDecoderAutoConfiguration` and
-`SecurityAutoConfiguration` with `security`, `SslAutoConfiguration` with `ssl`, then
+`SecurityAutoConfiguration` with `security`, `SslAutoConfiguration` with `ssl`,
+`ActuatorAutoConfiguration` with `actuator`, then
 `RequestLogAutoConfiguration` and `WebServerAutoConfiguration` with `web`. Without
 either feature the function does not exist. Remove one entry with `exclude::<A>()`.
 
@@ -3790,6 +3794,40 @@ assert_eq!(err.phase(), StartupPhase::Container);
 assert!(matches!(err.find_cause::<SslError>(), Some(SslError::Io { .. })));
 assert!(err.analysis().unwrap().to_string().contains("ssl.bundle.pem.web.trust"));
 assert!(SslAutoConfiguration::properties().iter().any(|p| p.key == "ssl.reload-interval"));
+```
+
+#### `ActuatorAutoConfiguration` (feature `actuator`)
+
+Registers the actuator endpoints of [`oxbloom-actuator`](#412-oxbloom-actuator) as a `dyn Controller`, with
+the beans they read. The group runs only when the application registers a `dyn Controller` of its own (the
+condition `on_bean`, like `WebServerAutoConfiguration`), so it never turns a run without a web application
+into a server, and only when `management.endpoints.enabled` is missing or the text `true`
+(`on_property_value_or_missing`); any other value skips the group silently, and the conditions report names
+the reason. It registers the `ActuatorSettings` of the `management.*` keys (an unknown key or a bad value
+fails the build with `DiError::Creation` whose source is the `ConfigError`); an `Availability` unless you
+registered one; a `RunListener` that sets readiness to `AcceptingTraffic` at `ready` and to `RefusingTraffic`
+at `stopping`, with the lowest `order`; a `HealthRunner` over every `dyn HealthIndicator` bean (an entry of
+`management.health.readiness.include` that names no registered indicator fails the build with a
+`ConfigError` on that key); an `Info` with your `BuildInfo` bean (all fields absent without one), the
+detected `Platform` and every `dyn InfoContributor` bean; the `ActuatorController`, which also serves
+`/loggers` with the feature `logging` and a `LoggingSystem` bean; with the feature `ssl` and an `SslBundles`
+bean, the `ssl` indicator; and, with the feature `security` and `management.endpoints.health.public = true`,
+a `SecurityCustomizer` that permits `GET <base-path>/health/**` and authenticates every other request. That
+customizer adds its own `authorize` section, so an application customizer that also calls `authorize` fails
+with `DuplicateAuthorizeSection`: open the health path in your own customizer instead. It runs after
+`SslAutoConfiguration` and before `WebServerAutoConfiguration`. Its property metadata lists the nine
+`management.*` keys, which are in the table under [`oxbloom-actuator`](#412-oxbloom-actuator).
+
+```rust
+use oxbloom_boot::{ActuatorAutoConfiguration, OxbloomApplication};
+
+let keys: Vec<_> = OxbloomApplication::builder()
+    .auto_configuration::<ActuatorAutoConfiguration>()
+    .property_metadata()
+    .iter()
+    .map(|p| p.key)
+    .collect();
+assert!(keys.contains(&"management.endpoints.base-path") && keys.contains(&"management.health.timeout"));
 ```
 
 #### `OxbloomApplicationBuilder::listener(listener)`
@@ -5403,6 +5441,222 @@ assert_eq!((key, default), ("ssl.reload-interval", Some("30s")));
 assert!(PROPERTIES.iter().any(|p| p.0 == "ssl.bundle.pem.<name>.private-key"));
 ```
 
+### 4.12 `oxbloom-actuator`
+
+Operational endpoints for a web application: the liveness and readiness state, health indicators, build and
+platform information and runtime log levels. In an application, `ActuatorAutoConfiguration` (feature
+`actuator` of `oxbloom-boot`) wires everything; use the crate directly to build the controller yourself. The
+guide chapter is [Actuator](guide/17-actuator.md#actuator). The crate has the features `web` (the
+`ActuatorController`), `logging` (the `/loggers` endpoint, implies `web`) and `ssl` (the
+`SslHealthIndicator`); the other types are always available. Rules to remember:
+
+- The endpoints are under the base path, `/actuator` by default. `/health*` answers 200 only for `UP` and
+  503 otherwise; an endpoint that is switched off answers 404.
+- `/health` shows the components only with `management.health.show-details = "always"`.
+- Liveness never runs an indicator. Readiness runs only the indicators named in
+  `management.health.readiness.include`.
+- An indicator that exceeds `management.health.timeout` or panics is `DOWN` with an `error` detail, never a
+  500. Indicators must not block the thread, because the timeout cannot interrupt them.
+- Log targets use `::`; a dotted target is a 400, and `configuredLevel: null` is a 400.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `management.endpoints.enabled` | `true` | Only `true` (or a missing key) switches the group on; any other value skips it silently. |
+| `management.endpoints.base-path` | `/actuator` | The path the endpoints are served under; `/` is refused. |
+| `management.endpoints.health.public` | `false` | With security, permits `GET <base-path>/health/**` without authentication. |
+| `management.endpoint.health.enabled` | `true` | `false` removes the three health routes. |
+| `management.endpoint.info.enabled` | `true` | `false` removes `/info`. |
+| `management.endpoint.loggers.enabled` | `true` | `false` removes `/loggers`. |
+| `management.health.show-details` | `never` | `never` or `always`. |
+| `management.health.timeout` | `5s` | The time limit of each health indicator. |
+| `management.health.readiness.include` | empty | The indicators that also decide readiness; each must be registered. |
+
+Imports for the examples below:
+
+```rust
+use std::sync::Arc;
+use std::time::Duration;
+use async_trait::async_trait;
+use oxbloom_actuator::{
+    ActuatorController, ActuatorSettings, Availability, BuildInfo, Health, HealthIndicator, HealthRunner,
+    Info, InfoContributor, Liveness, Platform, Readiness, Status,
+};
+use oxbloom_config::Config;
+```
+
+#### `Availability`, `Liveness` and `Readiness`
+
+`Availability::new()` starts as `Liveness::Correct` and `Readiness::RefusingTraffic` and holds both in
+atomics, so it is shared as `Arc<Availability>` without locks. `liveness()` and `readiness()` read the
+states, `set_readiness(r)` changes readiness and `break_liveness()` marks the application broken, with no
+way back. `ActuatorAutoConfiguration` registers one (unless you did) and a `RunListener` that sets
+`AcceptingTraffic` at `ready` and `RefusingTraffic` at `stopping`.
+
+```rust
+let availability = Availability::new();
+assert_eq!(availability.readiness(), Readiness::RefusingTraffic);
+availability.set_readiness(Readiness::AcceptingTraffic);
+availability.break_liveness();
+assert_eq!(availability.liveness(), Liveness::Broken);
+```
+
+#### `Status`, `Health` and `HealthIndicator`
+
+`Status` is `Up`, `Down`, `OutOfService` or `Unknown` (the enum is `#[non_exhaustive]`). `Status::worst`
+returns the worst of several (order `Down`, `OutOfService`, `Unknown`, `Up`; `Up` for none), `as_str()`
+gives `UP`, `DOWN`, `OUT_OF_SERVICE` or `UNKNOWN`, and `is_up()` tests for `Up`. `Health` has a `status` and
+`details` (a `BTreeMap<String, serde_json::Value>`); build it with `Health::up()`, `Health::down()` or
+`Health::new(status)` and add details with `detail(key, value)`. A `HealthIndicator` has
+`fn name(&self) -> &str` and `async fn health(&self) -> Health` (declared with `async_trait`). Register it
+as a `dyn HealthIndicator` bean.
+
+```rust
+struct Database;
+
+#[async_trait]
+impl HealthIndicator for Database {
+    fn name(&self) -> &str {
+        "db"
+    }
+
+    async fn health(&self) -> Health {
+        Health::up().detail("database", "postgres")
+    }
+}
+
+assert_eq!(Status::worst([Status::Up, Status::OutOfService]), Status::OutOfService);
+assert_eq!(Health::down().detail("error", "refused").details["error"], "refused");
+```
+
+#### `HealthRunner::new(indicators, timeout)` and `run(only)`
+
+`run(None).await` runs every indicator at the same time, each in its own task and under the timeout, and
+returns the worst status and each indicator's `Health` by name (`(Status, BTreeMap<String, Health>)`).
+`run(Some(&names))` runs only the indicators with those names. An indicator that times out or panics is
+`DOWN` with the `error` detail `timed out` or `panicked`. Two indicators with one name get the keys `name`,
+`name#2`, `name#3` and so on, and all count towards the status.
+
+```rust
+# async fn demo() {
+let runner = HealthRunner::new(vec![Arc::new(Database)], Duration::from_secs(1));
+let (status, parts) = runner.run(None).await;
+assert_eq!(status, Status::Up);
+assert_eq!(parts["db"].status, Status::Up);
+let (status, parts) = runner.run(Some(&["other".to_string()])).await;
+assert_eq!((status, parts.len()), (Status::Up, 0));
+# }
+```
+
+#### `BuildInfo`, `build_info!()` and `build::emit()`
+
+The application's `build.rs` calls `oxbloom_actuator::build::emit()` (with `oxbloom-actuator` as a build
+dependency). It prints the package name and version, the short git sha, the git branch and the build time (in
+seconds since the Unix epoch), leaves the git facts out when `git` fails and never fails the build. It tracks
+`build.rs` and `.git/HEAD` only, so the sha of an incremental build can be stale. The macro `build_info!()`
+expands in the application's crate and reads those variables with `option_env!`, which a library function
+could not do; it returns a `BuildInfo`. `BuildInfo` has the `Option<String>` fields `name`, `version`,
+`git_sha`, `git_branch` and `build_time`, derives `Default`, and leaves absent fields out of the JSON.
+Register it as a bean.
+
+```rust
+let info = BuildInfo::new(Some("app"), Some("1.2.3"), None, None, None);
+assert_eq!(info.version.as_deref(), Some("1.2.3"));
+assert_eq!(serde_json::to_value(&info).unwrap()["name"], "app");
+let from_macro = oxbloom_actuator::build_info!(); // without a build script every fact is absent
+assert!(from_macro.git_sha.is_none());
+```
+
+#### `Platform`, `Info` and `InfoContributor`
+
+`Platform::detect()` is `Kubernetes` when `KUBERNETES_SERVICE_HOST` is set and `None` otherwise
+(`detect_from(get)` takes the lookup as a closure and `as_str()` gives `kubernetes` or `none`; the enum is
+`#[non_exhaustive]`). `Info` has the public fields `build`, `platform` and `contributors`, and `render()`
+returns the `/info` JSON: `build`, `platform`, then every contributor's entries (a contributor can overwrite
+`build` and `platform`). An `InfoContributor` has
+`fn contribute(&self, out: &mut serde_json::Map<String, serde_json::Value>)`.
+
+```rust
+struct Owner;
+
+impl InfoContributor for Owner {
+    fn contribute(&self, out: &mut serde_json::Map<String, serde_json::Value>) {
+        out.insert("owner".into(), "platform-team".into());
+    }
+}
+
+let info = Info {
+    build: BuildInfo::default(),
+    platform: Platform::None,
+    contributors: vec![Arc::new(Owner)],
+};
+assert_eq!(info.render()["owner"], "platform-team");
+assert_eq!(info.render()["platform"], "none");
+```
+
+#### `ActuatorSettings`
+
+`ActuatorSettings::from_config(&config)` reads the `management.*` keys, and `ActuatorSettings::default()`
+is the table above. The public fields are `enabled`, `base_path` (normalized: a leading `/` and no trailing
+`/`), `health_public`, `show_details`, `timeout`, `readiness_include`, `health_enabled`, `info_enabled` and
+`loggers_enabled`. An unknown key under `management`, `management.endpoints`, `management.endpoint` or
+`management.health`, a `base-path` of `/` or an empty one, and a `show-details` other than `never` or
+`always` are `ConfigError::Invalid`, which never shows a configured value.
+
+```rust
+let config = Config::from_str("[management.endpoints]\nbase-path = \"ops/\"")?;
+let settings = ActuatorSettings::from_config(&config)?;
+assert_eq!(settings.base_path, "/ops");
+assert!(!settings.show_details);
+let root = Config::from_str("[management.endpoints]\nbase-path = \"/\"")?;
+assert!(ActuatorSettings::from_config(&root).is_err());
+```
+
+#### `ActuatorController` (feature `web`)
+
+`ActuatorController::new(settings, availability, runner, info)` takes the settings, an `Arc<Availability>`,
+an `Arc<HealthRunner>` and an `Arc<Info>`. It implements `oxbloom_web::Controller`, and `routes()` serves
+`GET {base}/health`, `{base}/health/liveness`, `{base}/health/readiness` and `{base}/info`. With the feature
+`logging`, `with_loggers(Arc<LoggingSystem>)` adds `GET {base}/loggers`, `GET {base}/loggers/{target}` and
+`POST {base}/loggers/{target}` with the body `{"configuredLevel":"DEBUG"}` (204; 400 for a bad body, a body
+over 1 KiB, an unknown level, an empty or dotted target or `null`).
+
+```rust
+use oxbloom_web::{App, Controller, HttpMethod, Request};
+
+# async fn demo() -> Result<(), Box<dyn std::error::Error>> {
+let controller = Arc::new(ActuatorController::new(
+    ActuatorSettings::default(),
+    Arc::new(Availability::new()),
+    Arc::new(HealthRunner::new(vec![], Duration::from_secs(1))),
+    Arc::new(Info { build: BuildInfo::default(), platform: Platform::None, contributors: vec![] }),
+));
+let app = App::new().routes(controller.routes())?;
+let res = app.handle(Request::new(HttpMethod::Get, "/actuator/health")).await;
+assert_eq!(res.status(), 200);
+assert_eq!(res.body(), r#"{"status":"UP"}"#);
+# Ok(()) }
+```
+
+#### `SslHealthIndicator` (feature `ssl`)
+
+`SslHealthIndicator::new(Arc<SslBundles>, Arc<dyn Clock>)` is the indicator named `ssl`. It is `Down` when a
+certificate of any bundle has expired and `Up` otherwise. Its details list `bundles`, `expired` and
+`warning` by bundle name only (`warning` covers a certificate that is not valid yet or expires within
+`SslBundles::expiry_warning`). Boot registers it for you with the feature `ssl` and an `SslBundles` bean.
+
+```rust
+use oxbloom_core::SystemClock;
+use oxbloom_actuator::SslHealthIndicator;
+use oxbloom_ssl::SslBundles;
+
+# async fn demo() {
+let bundles = SslBundles::from_config(&Config::from_str("").unwrap()).unwrap();
+let indicator = SslHealthIndicator::new(Arc::new(bundles), Arc::new(SystemClock));
+assert_eq!(indicator.name(), "ssl");
+assert_eq!(indicator.health().await.status, Status::Up);
+# }
+```
+
 ## 5. Recipe: a complete small service
 
 A configured greeting, a controller with an injected bean, and a web server started through
@@ -5495,8 +5749,8 @@ Compile-fail tests use `trybuild` (`tests/ui/*.rs` with `.stderr` snapshots). Re
 
 ## Not implemented
 
-Sessions, password login, CSRF, method security, OAuth2 login, database, jobs/queue/scheduler, an HTTP endpoint for log
-levels, observability, health and info endpoints, React integration, `oxbloom-ai`, `oxbloom add`, MVC web style. In
+Sessions, password login, CSRF, method security, OAuth2 login, database, jobs/queue/scheduler, metrics and
+other observability beyond the actuator, React integration, `oxbloom-ai`, `oxbloom add`, MVC web style. In
 boot: analysis of failures after startup, a report format other than text. In DI: transient and request scopes,
 injection of single configuration properties, qualifiers by name, async lifecycle hooks and
 automatic shutdown on drop. For conditions and auto-configuration: condition options on
@@ -5506,5 +5760,7 @@ and naming condition-skipped registrations in the missing-bean failure report. F
 TLS and `client-auth`, an HTTP to HTTPS redirect, ALPN `h2` (HTTP/2), hot reload of the JWKS client (it is built
 once at startup), OCSP stapling, revocation checks, JKS keystores, encrypted PEM private keys, a file-system
 watcher (reload polls), SSL bundles for database or HTTP clients, and a limit on concurrent TLS handshakes.
+For the actuator: a separate management port, roles per endpoint, `/metrics`, `/env`, `/beans` and
+`/threaddump` endpoints, a `diskSpace` indicator, and resetting a log level through `configuredLevel: null`.
 Do not document these as available.
 When you build one, start with a spec in `docs/superpowers/specs`.

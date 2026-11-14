@@ -15,7 +15,7 @@ Each item below becomes its own slice with its own spec, plan and review, as in 
 | `autoconfigure.condition`, `autoconfigure` (all areas), `autoconfigure-processor` | `@ConditionalOnProperty/Bean/MissingBean/Class`, ordered auto-configurations, metadata generation | C4a done: conditions on registrations and groups (`on_bean`, `on_missing_bean`, `on_property*`, custom), `Environment`, the conditions report, `#[auto_configuration]` with `after`/`before`, explicit `AutoConfigurations` lists and `exclude` in `oxbloom-boot`. The web server, security chain and JWT decoder are auto-configured (C4b) and auto-configurations describe their keys as `PropertyMetadata` (hand-written, no generation from structs) |
 | Bean container features used by Boot (lazy init, lifecycle, `ApplicationContextFactory`) | Lazy beans, init and destroy callbacks, primary/qualifier, collection injection, factory methods, profiles on beans | `oxbloom-di` (C1 done): lazy beans, `post_construct`/`pre_destroy` and ordered shutdown, `primary`/`order`, trait, `Option` and `Vec` injection, `bean` factories and `#[configuration]`/`#[bean]`, profile conditions, and (C4a) conditions on registrations and groups; no name qualifiers |
 | `logging` | Logging system abstraction, levels and groups from properties, file and structured (JSON) output | `oxbloom-logging` (C5a and C5b done): `tracing` subscriber from `logging.*` keys, levels, groups, console format and color, rotating file output, JSON lines with configurable fields, runtime level change through `LoggingSystem`, startup events in `oxbloom-boot` (feature `logging`); `RequestLogFilter` in `oxbloom-web` and `RequestLogAutoConfiguration` in `oxbloom-boot` (feature `web`). Size-based rotation and runtime changes of the output layers are open |
-| `availability`, `info`, `admin`, `cloud` | Liveness and readiness state, build and git info, platform detection (Kubernetes) | None |
+| `availability`, `info`, `admin`, `cloud` | Liveness and readiness state, build and git info, platform detection (Kubernetes) | `oxbloom-actuator` (C8 done): liveness and readiness state flipped by boot at `ready` and `stopping`; `/health`, `/health/liveness`, `/health/readiness`, `/info` and `/loggers` under a base path (default `/actuator`); `HealthIndicator` and `InfoContributor` beans with a timeout per indicator; a built-in SSL certificate indicator; build and git info through the application's `build.rs` and the `build_info!` macro; Kubernetes detection. No separate management port, no roles per endpoint, no metrics |
 | `web` (server properties, error handling, forwarded headers, compression, static resources, JSON) | `server.*` properties, error attributes and problem details, content negotiation, JSON conversion | `oxbloom-web` (C6a, C6b-1 and C6b-2 done): router, Hyper server, ordered `Filter` chain (`order` module), `HttpError` and `ErrorRenderer` with problem+json, `server.*` limits, shutdown timeout and forwarded headers. It also has `Json<T>`, `Request::json` and `Accept` negotiation (feature `json`). It also has a CORS filter, a compression filter (gzip, brotli, zstd) and static resources (disk and embedded). |
 | `ssl` | SSL bundles from PEM or keystores, reloadable | `oxbloom-ssl` (C7 done): named bundles from PEM and PKCS#12, polling reload, validity warnings; HTTPS for the web server (`server.ssl.bundle`), a bundle for the JWKS fetcher (`security.jwt.jwks-ssl-bundle`) and `TestClient::connect_tls`. No mutual TLS, no JKS, no client reload |
 | `task`, `thread`, `retry` | Task executor and scheduler properties, retry policy | None (jobs, queue, worker, scheduler are planned in `IDEA.md`) |
@@ -99,7 +99,7 @@ Follow-ups from C3a, owned by later slices or not yet scheduled:
 - Automatic registration of `WebServer` and other services: C4b (done).
 - Logging and log-based startup information: C5a (done). Boot still writes its banner and the reports to a `Write` target that defaults to stderr; the startup events go to `tracing`.
 - The full `server.*` property set (limits, compression, forwarded headers): C6.
-- Readiness and liveness state: C8.
+- Readiness and liveness state: C8 (done).
 - `WebServer` minor issues: a panic or IO error of the serving task is dropped silently in `stop`; a failed bind consumes the `App`, so the same `WebServer` cannot retry; a `stop` that is abandoned at the deadline leaves the serving task detached instead of aborting it.
 - `WebServer`: if the serve task ends by itself (IO error) nothing triggers shutdown, so `run()` keeps waiting with no server.
 
@@ -199,7 +199,7 @@ Deferred minors from the C5b reviews:
 
 Follow-ups from C5a, not yet scheduled:
 - A configuration watcher or a SIGHUP handler that calls `LoggingSystem::reload`; today the call is explicit.
-- An HTTP endpoint to read and change levels at runtime (C8).
+- An HTTP endpoint to read and change levels at runtime (C8, done: `/loggers` in `oxbloom-actuator`).
 - MDC-style context fields on every event.
 - A macro option for property metadata, shared with the C4b follow-up.
 - `reload` validates `logging.console.*` but cannot apply it, because the output layer is fixed at install time (still open after C5b, now also for `logging.file.*` and `logging.json.*`).
@@ -344,7 +344,7 @@ Follow-ups from C7, not yet scheduled:
 - Bundles for database and HTTP clients.
 - Mutual TLS on the server, an HTTP to HTTPS redirect, HTTP/2.
 - A reloading JWKS client.
-- Expose `SslBundle::validity()` through a health or info endpoint (C8).
+- Expose `SslBundle::validity()` through a health or info endpoint (C8, done: the `ssl` health indicator).
 
 Deferred minors from the C7 reviews:
 - Task 1: `p12-keystore` 0.4.1 pulls in the pre-release crates `cms 0.3.0-rc.2` and `pkcs12 0.2.0-rc.0` through caret ranges on pre-releases (recorded in ADR 0082 in the final fix wave). The `pbes1` feature is enabled but no test reads a PBES1 file; the docs now say so, and a test or dropping the feature is still open.
@@ -384,11 +384,61 @@ Deferred minors from the C7 reviews:
 - Task 7: the client-certificate path (an identity in `client_config`) is not tested end to end.
 - Task 7: the trust replacement of a bundle with a trust store (rejecting a public-CA certificate) is documented but untested.
 
-### C8: Availability, info and health (`oxbloom-actuator`, small)
-- Liveness and readiness state, flipped during startup and graceful shutdown.
-- `/health`, `/health/liveness`, `/health/readiness`, `/info` (build and git info embedded at build time), Kubernetes platform detection.
-- Secured by the Slice 5 chain by default (health may be opened explicitly).
-- Seeds the wider `oxbloom-observability` crate from `IDEA.md`.
+### C8: Availability, info and health (`oxbloom-actuator`) — done
+Done on 2026-11-14; design in `docs/superpowers/specs/2026-11-14-actuator-design.md`, plan in `docs/superpowers/plans/2026-11-14-actuator.md`, usage in the guide chapter `docs/guide/17-actuator.md` and `docs/API.md` (section 4.12), decisions in ADR 0083.
+
+Delivered:
+- The crate `oxbloom-actuator`: `Availability` (`Liveness`, `Readiness`, `break_liveness`, `set_readiness`), `Status`, `Health`, `HealthIndicator`, `HealthRunner`, `BuildInfo`, the `build_info!` macro, `build::emit`, `Platform`, `Info`, `InfoContributor` and `ActuatorSettings`; with the feature `web` the `ActuatorController`, with `logging` the `/loggers` endpoint, and with `ssl` the `SslHealthIndicator`.
+- The endpoints `GET /health`, `/health/liveness`, `/health/readiness`, `/info`, `GET /loggers`, `GET /loggers/{target}` and `POST /loggers/{target}` under `management.endpoints.base-path` (default `/actuator`). Health answers 200 for `UP` and 503 otherwise, and shows components only with `management.health.show-details = "always"`. Liveness never runs an indicator, and readiness runs the indicators named in `management.health.readiness.include`.
+- Health indicators run at the same time, each in its own task under `management.health.timeout` (default `5s`); a timeout or a panic is `DOWN` with an `error` detail. Duplicate names get the keys `name#2`, `name#3`. The built-in `ssl` indicator reports expired certificates as `DOWN` and lists the bundles with a certificate that is not valid yet or expires soon.
+- Build info through the application's `build.rs` (`oxbloom_actuator::build::emit()`) and the `build_info!()` macro; `Platform` detection of Kubernetes; `InfoContributor` beans.
+- `/loggers` over `LoggingSystem::levels`, `level` and `set_level`, with `::` separated targets and problem+json 400 answers.
+- Boot feature `actuator` (turns `web` on, enables `oxbloom-actuator/web`, and `logging` and `ssl` forward to the crate): `ActuatorAutoConfiguration` with nine property metadata entries, an `AvailabilityListener` that sets readiness at `ready` and `stopping`, validation of `management.health.readiness.include` at startup, `management.endpoints.health.public` for the security chain, and a skip when the application registers no `dyn Controller`.
+- `LoggingSystem::levels` in `oxbloom-logging` and the actuator in the `examples/todos` application, with a `build.rs`, its README and the CI matrix.
+- ADR 0083 and the guide chapter 17 (the roadmap chapter is now 18).
+
+Gate numbers at the end of C8 (as measured by the implementer of Task 6; the controller re-measures at the end):
+- `cargo test --workspace --all-features`: 2467 passed, 0 failed, 8 ignored (2364 before C8).
+- Boot feature matrix (`cargo test -p oxbloom-boot`): `--no-default-features` 447, `--features web` 447, `--features logging` 467, `--features security` 447, `--features ssl` 447, `--features actuator` 460, `--all-features` 481; each with 0 failed and 1 ignored (the probe).
+- `cargo test -p oxbloom-actuator --all-features` 84 (re-run in Task 7), `make check-examples` 44 (41 before).
+- Stack probes: boot needs 238 KB without the feature `logging` and 239 KB with it, and `frame sub $0x178,%rsp` is unchanged; each value passes and one KB less overflows.
+
+Limits that users must know (also in the guide):
+- The endpoints share the application's port; a separate management port is not available.
+- All endpoints have the same authorization: with the default chain every endpoint needs authentication, and `management.endpoints.health.public = true` opens only `<base-path>/health/**`. That option adds its own `authorize` section, so an application customizer that also calls `authorize` fails with `DuplicateAuthorizeSection`; open the health path in your own customizer instead, as `examples/todos` does.
+- The readiness 503 during shutdown shows only on open connections: the state flips at `stopping`, right before the server stops, and a new connection is usually refused during the drain.
+- `management.endpoints.enabled` switches the group on only with the value `true` or a missing key; any other value skips the group silently (visible in the conditions report).
+- The group is skipped when the application registers no `dyn Controller`.
+- A health indicator must not block the thread; the timeout cannot interrupt a blocking call.
+- `/loggers` targets use `::`; a dotted target is a 400, and `configuredLevel: null` is a 400, not a reset.
+- The git sha and branch of `/info` can be stale after an incremental build, because `rerun-if-changed` follows `.git/HEAD`.
+
+Follow-ups from C8, not yet scheduled:
+- A separate management port.
+- Roles per endpoint.
+- `/metrics`, `/env`, `/beans` and `/threaddump` endpoints, and a `diskSpace` indicator.
+- Resetting a log level through `configuredLevel: null`.
+- An `oxbloom-test` signal that fires after the bean listeners, so that `TestApp::start` returns after readiness flips on a multi-thread runtime.
+
+Deferred minors from the C8 reviews:
+- Task 1: the crates `serde` and `tokio` were unused until later tasks (they are used now), `Status` has no `Serialize` or `Hash` derives (add them when a task needs them), and `availability.rs` shares the constants 0 and 1 across the two enums.
+- Task 2: a blocking indicator cannot be interrupted by the timeout (documented: indicators must not block); the spawned tasks are not aborted when the caller drops `run()`; `build::emit` tracks `.git/HEAD` relative to the application's package directory, which does not follow commits on the same branch (use `git rev-parse --git-dir` to find the directory; the staleness is documented); `emit` has no unit test; coverage gaps remain for concurrency timing, an `Unknown`-only worst status, an `only` filter that matches nothing, and the `build_info!` macro outside its doctest; `Info::render` lets a contributor overwrite the `build` and `platform` keys (documented); the build time is a string of epoch seconds.
+- Task 2: a generated key `name#2` can collide with an indicator that is literally named `name#2`, which loses a map entry although the status stays right; there are no tests for `name#3` or for the `cancelled` branch.
+- Task 3: a base path such as `/a//b` keeps an empty segment; test gaps remain for the base paths `//a` and one with whitespace, a bad `show-details`, the parsing of `enabled`, `public` and `loggers`, `show-details = "always"` with a failing indicator, and a disabled health endpoint answering 404; the `status_body` test helper is duplicated.
+- Task 4: `ssl_indicator` duplicates the private `validity::condition` classification in `oxbloom-ssl` (expose a public helper there); the indicator skips a bundle silently when `bundles.get(&name)` fails (it should become a warning); the 1 KiB body limit and the marker check in `loggers.rs` are undocumented in the code; `GET` reports `configuredLevel` by an exact match against `levels()`, so the spellings `Root`, a group name or a dashed form report `null` while a `POST` with them succeeds; percent-encoded or very long targets are untested (it is unverified whether `param()` decodes); there are no tests for concurrent `POST`s, case-insensitive levels, `POST` of the root or a group, or the `body_too_large` marker.
+- Task 5: a value of `management.endpoints.enabled` other than `true` skips the group silently; there is no HTTP test of the 503 during the drain; `TestApp::start` can return before the availability listener fires on a multi-thread runtime (see the follow-up on an `oxbloom-test` signal); the metadata test checks 2 of the 9 defaults and has no explicit `enabled = true` case; the doc wrapping in `autoconfigure/mod.rs` is ragged and its module header omits the actuator contributor.
+- Task 6: the doc of `PublicPaths` in `examples/todos` should say that the `/actuator` prefix is hard-coded (a changed base path makes health answer 401, which fails closed); the info test of the example checks `todos::build_info()` and not the served bean, so a wiring regression would pass; the `build.rs` of the example has the same relative `rerun-if-changed=.git/HEAD` limit as Task 2; the Makefile has no rows for the features `ssl` or `actuator`, so only `ci.yml` changed.
+
+Rulings made during C8:
+- `BuildInfo::from_env` was dropped in favour of the exported macro `build_info!`, which expands in the application's crate, because a library cannot see the application's build environment; the cost if wrong is a small API rename.
+- `BuildInfo` derives `Default` (all fields absent), because the auto-configuration needs it when no bean exists.
+- `ActuatorSettings`, `Info` and `HealthRunner` are not gated on the feature `web`; only `ActuatorController` is, because the auto-configuration and the tests use them without it.
+- The work happens on the branch `c8-actuator`, with commits by the implementers as the plan says.
+- `management.endpoints.enabled` and the readiness include validation belong to the auto-configuration (Task 5): the first skips the whole group, the second fails the startup with the key and the unknown name, because the reviewer found both fail-open.
+- The auto-configuration is skipped when the application registers no `dyn Controller`, because no `WebServer` would start; the cost if wrong is that an application with only the actuator gets no server and must add a controller.
+- The metadata lists nine keys, not seven, because `management.endpoint.<id>.enabled` is one key per endpoint (the plan miscounted); the test pins the real list.
+- A value of `management.endpoints.enabled` other than `true` skips the group silently, as documented on `conditions()`, because DI has no "not equal" condition and a skip fails closed; the cost if wrong is that an operator typo disables the actuator without an error, visible in the conditions report.
+- The `examples/todos` application opens `/actuator/health/**` in its own `PublicPaths` instead of using `health.public = true`, because two `authorize` sections fail the startup; this keeps `/info` and `/loggers` at 401, and a changed base path makes health answer 401 (fail closed).
 
 ### C9: Tasks, scheduling and retry
 - Task executor properties; `#[scheduled]` with cron, fixed rate and fixed delay; shutdown awareness.
@@ -453,7 +503,7 @@ Deferred minors from the C10b reviews:
 5. **C5 Logging** (C5a and C5b done), then **C6 Web server properties, errors and JSON** (C6a, C6b-1 and C6b-2 done).
 6. **C4 Conditions and auto-configuration** (C4a, the mechanism, and C4b, auto-configuring the existing wiring with property metadata, done).
 7. **C10 Test support** (C10a, the context runner and clock, and C10b, `TestApp`, `TestClient` and slicing, done).
-8. **C7 SSL bundles** (done), then **C8 Availability, C9 Tasks and retry.**
+8. **C7 SSL bundles** (done) and **C8 Availability, info and health** (done), then **C9 Tasks and retry.**
 9. Security Slices 7 to 9, then `oxbloom-ai`, database, jobs and the rest of `IDEA.md`.
 10. **C11 Service connections** after the database and queue crates exist.
 

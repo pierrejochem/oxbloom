@@ -19,7 +19,7 @@ Spring Boot splits one feature into many modules: the feature itself, its `-test
 
 | Spring Boot modules | Oxbloom plan | Status |
 |---|---|---|
-| `actuator`, `actuator-autoconfigure`, `health` | `oxbloom-actuator` (slice C8): health, liveness and readiness, info | planned (core) |
+| `actuator`, `actuator-autoconfigure`, `health` | `oxbloom-actuator` (slice C8): health, liveness and readiness, info | done in core slice C8 |
 | `micrometer-metrics`, `micrometer-observation`, `micrometer-tracing*`, `opentelemetry`, `zipkin` | `oxbloom-observability`: `tracing` spans, metrics, OpenTelemetry export | M2 |
 | `http-client`, `restclient`, `webclient`, `http-converter`, `http-codec` | `oxbloom-http-client`: outbound HTTP with timeouts, retries and SSL bundles (candidate: `reqwest`) | M1 |
 | `jackson`, `jackson2`, `gson`, `jsonb`, `kotlinx-serialization-json` | covered by `serde_json` and the JSON work in slice C6; no separate crates | folded |
