@@ -28,8 +28,8 @@ impl Default for CleanupSettings {
 
 /// Removes done todos that have been done for longer than `todos.cleanup.max-age`.
 ///
-/// The task runs one minute after the end of its previous run (`fixed_delay`), starting one
-/// minute after the application starts. Boot's `tasks` feature collects it because
+/// The task runs when the scheduler starts (later with `tasks.scheduling.initial-delay`), and
+/// then one minute after the end of each run (`fixed_delay`). Boot's `tasks` feature collects it because
 /// `lib.rs` registers the bean `provides` as a `dyn Scheduling`. The period is a literal of
 /// the attribute; the age is configuration. The task is named `TodoCleanup::cleanup`.
 ///

@@ -50,9 +50,9 @@ curl -X POST -H 'content-type: application/json' \
 
 The `TodoCleanup` bean in `src/cleanup.rs` has one scheduled task, `TodoCleanup::cleanup`. It
 removes every todo that has been done for longer than `todos.cleanup.max-age`, which is 24
-hours in `application.toml`. The task uses `fixed_delay = "1m"`, so it runs one minute after
-the previous run ended, and the first run is one minute after the application starts. The
-period is written in the attribute and cannot be changed by configuration; the age can, for
+hours in `application.toml`. The task uses `fixed_delay = "1m"`, so the first run happens
+when the scheduler starts, and every later run starts one minute after the previous run ended.
+Setting `tasks.scheduling.initial-delay` postpones the first run. The period is written in the attribute and cannot be changed by configuration; the age can, for
 example with `--todos.cleanup.max-age=30m`. A todo that is set back to not done is not removed.
 
 Boot starts the scheduler because the bean is registered as a `dyn Scheduling`. Its settings

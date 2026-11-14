@@ -219,11 +219,14 @@ impl TodoStore {
             .filter(|(_, at)| **at < cutoff)
             .map(|(id, _)| *id)
             .collect();
+        let mut removed = 0;
         for id in &expired {
-            items.remove(id);
             done_at.remove(id);
+            if items.remove(id).is_some() {
+                removed += 1;
+            }
         }
-        expired.len()
+        removed
     }
 
     /// Removes the todo; `true` if it existed.
@@ -239,8 +242,9 @@ impl TodoStore {
     /// assert!(!store.delete(1));
     /// ```
     pub fn delete(&self, id: u64) -> bool {
+        let mut items = self.items();
         self.done_at().remove(&id);
-        self.items().remove(&id).is_some()
+        items.remove(&id).is_some()
     }
 }
 
@@ -272,6 +276,21 @@ mod tests {
         store.create("a".into());
         store.delete(1);
         assert_eq!(store.create("b".into()).id, 2);
+    }
+
+    #[test]
+    fn done_at_is_cleared_on_delete_and_undone_keeps_the_todo() {
+        let store = TodoStore::default();
+        let long_ago = SystemTime::UNIX_EPOCH;
+        let deleted = store.create("deleted".into()).id;
+        let undone = store.create("undone".into()).id;
+        store.patch_at(deleted, None, Some(true), long_ago);
+        store.patch_at(undone, None, Some(true), long_ago);
+        store.patch_at(undone, None, Some(false), long_ago);
+        assert!(store.delete(deleted));
+        assert!(store.done_at().is_empty());
+        assert_eq!(store.remove_done_before(SystemTime::now()), 0);
+        assert_eq!(store.get(undone).map(|t| t.done), Some(false));
     }
 
     #[test]

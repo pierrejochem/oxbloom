@@ -5,7 +5,7 @@
 port = 8081
 
 # The cleanup task removes done todos that have been done for longer than this. It runs
-# one minute after its previous run ended. Durations: 500ms, 30s, 15m, 24h.
+# one minute after each run ended, and first when the application starts. Durations: 500ms, 30s, 15m, 24h.
 [todos.cleanup]
 max-age = "24h"
 
