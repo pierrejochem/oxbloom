@@ -95,6 +95,11 @@
 //! health, info and (with `logging`) loggers endpoints of `oxbloom-actuator` and keeps the
 //! readiness state in step with the run: accepting at `ready`, refusing at `stopping`.
 //!
+//! Cargo feature `tasks` adds `TasksAutoConfiguration`, which runs the `#[scheduled]` methods
+//! of every `dyn Scheduling` bean with the `oxbloom-tasks` scheduler, configured by the
+//! `tasks.scheduling.*` keys, and `SchedulerService`, which starts it after the web server and
+//! stops it first.
+//!
 //! Cargo feature `logging` installs the `oxbloom_logging` subscriber, configured by the
 //! `logging.*` keys, and registers its `LoggingSystem` as a bean so levels can be changed at
 //! runtime. Turn it off with `OxbloomApplicationBuilder::logging(false)` or
@@ -141,7 +146,7 @@ mod analyzers;
 mod app;
 mod arguments;
 mod autoconfig;
-#[cfg(any(feature = "security", feature = "web"))]
+#[cfg(any(feature = "security", feature = "web", feature = "tasks"))]
 mod autoconfigure;
 mod banner;
 mod error;
@@ -166,7 +171,7 @@ pub use autoconfig::{AutoConfiguration, AutoConfigurations, ConfigRef};
 pub use autoconfigure::ActuatorAutoConfiguration;
 #[cfg(feature = "ssl")]
 pub use autoconfigure::SslAutoConfiguration;
-#[cfg(any(feature = "security", feature = "web"))]
+#[cfg(any(feature = "security", feature = "web", feature = "tasks"))]
 pub use autoconfigure::auto_configurations;
 #[cfg(feature = "security")]
 pub use autoconfigure::{
@@ -174,6 +179,8 @@ pub use autoconfigure::{
 };
 #[cfg(feature = "web")]
 pub use autoconfigure::{RequestLogAutoConfiguration, WebServerAutoConfiguration};
+#[cfg(feature = "tasks")]
+pub use autoconfigure::{SchedulerService, TasksAutoConfiguration};
 pub use banner::Banner;
 pub use error::{ExitStatus, RunnerError, ServiceError, StartupError, StartupPhase};
 pub use exit::ExitCodeGenerator;

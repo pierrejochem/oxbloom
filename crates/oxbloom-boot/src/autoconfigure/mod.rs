@@ -18,6 +18,8 @@ mod security;
 mod server;
 #[cfg(feature = "ssl")]
 mod ssl;
+#[cfg(feature = "tasks")]
+mod tasks;
 
 #[cfg(feature = "actuator")]
 pub use actuator::ActuatorAutoConfiguration;
@@ -31,6 +33,8 @@ pub use security::{SecurityAutoConfiguration, SecurityCustomizer};
 pub use server::WebServerAutoConfiguration;
 #[cfg(feature = "ssl")]
 pub use ssl::SslAutoConfiguration;
+#[cfg(feature = "tasks")]
+pub use tasks::{SchedulerService, TasksAutoConfiguration};
 
 use crate::autoconfig::AutoConfigurations;
 
@@ -38,8 +42,7 @@ use crate::autoconfig::AutoConfigurations;
 /// `JwtDecoderAutoConfiguration` and then `SecurityAutoConfiguration`; with `ssl`,
 /// `SslAutoConfiguration`; with `actuator`, `ActuatorAutoConfiguration`; with `web`,
 /// `RequestLogAutoConfiguration` and then `WebServerAutoConfiguration` (after the others when
-/// several features are on). Remove one
-/// with
+/// several features are on); with `tasks`, `TasksAutoConfiguration` last. Remove one with
 /// [`exclude`](crate::OxbloomApplicationBuilder::exclude).
 ///
 /// # Examples
@@ -48,11 +51,13 @@ use crate::autoconfig::AutoConfigurations;
 /// use oxbloom_boot::{Banner, OxbloomApplication, OxbloomApplicationBuilder, auto_configurations};
 /// use oxbloom_config::Config;
 ///
-/// // `security` adds two auto-configurations, `ssl` one, `actuator` one and `web` two.
+/// // `security` adds two auto-configurations, `ssl` one, `actuator` one, `web` two and
+/// // `tasks` one.
 /// let expected = 2 * usize::from(cfg!(feature = "security"))
 ///     + usize::from(cfg!(feature = "ssl"))
 ///     + usize::from(cfg!(feature = "actuator"))
-///     + 2 * usize::from(cfg!(feature = "web"));
+///     + 2 * usize::from(cfg!(feature = "web"))
+///     + usize::from(cfg!(feature = "tasks"));
 /// assert_eq!(auto_configurations().len(), expected);
 ///
 /// # tokio::runtime::Builder::new_current_thread().build()?.block_on(async {
@@ -99,6 +104,12 @@ use crate::autoconfig::AutoConfigurations;
 ///     assert_eq!(keys(all(), "management."), 9);
 ///     assert_eq!(keys(all().exclude::<ActuatorAutoConfiguration>(), "management."), 0);
 /// }
+/// #[cfg(feature = "tasks")]
+/// {
+///     use oxbloom_boot::TasksAutoConfiguration;
+///     assert_eq!(keys(all(), "tasks."), 5);
+///     assert_eq!(keys(all().exclude::<TasksAutoConfiguration>(), "tasks."), 0);
+/// }
 /// # let _ = (keys, all);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// # })?;
@@ -118,5 +129,7 @@ pub fn auto_configurations() -> AutoConfigurations {
     let list = list
         .add::<RequestLogAutoConfiguration>()
         .add::<WebServerAutoConfiguration>();
+    #[cfg(feature = "tasks")]
+    let list = list.add::<TasksAutoConfiguration>();
     list
 }

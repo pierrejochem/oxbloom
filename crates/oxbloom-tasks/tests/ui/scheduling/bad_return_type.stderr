@@ -1,0 +1,5 @@
+error: the scheduled method `refresh` must return `()` or `Result<(), E>` where `E: Display`
+ --> tests/ui/scheduling/bad_return_type.rs:8:26
+  |
+8 |     fn refresh(&self) -> u32 {
+  |                          ^^^

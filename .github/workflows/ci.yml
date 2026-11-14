@@ -60,6 +60,10 @@ jobs:
           cargo build -p oxbloom-actuator --no-default-features
           cargo build -p oxbloom-actuator --no-default-features --features ssl
           cargo build -p oxbloom-actuator --no-default-features --features logging
+      - name: oxbloom-tasks with all features
+        run: cargo test -p oxbloom-tasks --all-features
+      - name: oxbloom-tasks builds without default features
+        run: cargo build -p oxbloom-tasks --no-default-features
       - name: oxbloom-boot builds with each feature set
         run: |
           cargo build -p oxbloom-boot --no-default-features
@@ -71,6 +75,11 @@ jobs:
           cargo build -p oxbloom-boot --no-default-features --features actuator,logging
           cargo build -p oxbloom-boot --no-default-features --features actuator,ssl
           cargo build -p oxbloom-boot --no-default-features --features actuator,security
+          cargo build -p oxbloom-boot --no-default-features --features tasks
+          cargo build -p oxbloom-boot --no-default-features --features tasks,logging
+          cargo build -p oxbloom-boot --no-default-features --features tasks,ssl
+          cargo build -p oxbloom-boot --no-default-features --features tasks,security
+          cargo build -p oxbloom-boot --no-default-features --features tasks,actuator
       - name: oxbloom-test with the web feature
         run: cargo test -p oxbloom-test --features web
       - name: oxbloom-test with the web and tls features

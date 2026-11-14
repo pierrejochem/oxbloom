@@ -1,0 +1,11 @@
+error: the scheduled method `refresh` must take `&self`: the scheduler calls it on the shared instance
+ --> tests/ui/scheduling/not_self.rs:8:14
+  |
+8 |     async fn refresh() {}
+  |              ^^^^^^^
+
+error: the scheduled method `consume` must take `&self`: the scheduler calls it on the shared instance
+  --> tests/ui/scheduling/not_self.rs:11:22
+   |
+11 |     async fn consume(self) {}
+   |                      ^^^^

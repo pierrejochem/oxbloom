@@ -1,0 +1,5 @@
+error: the scheduled method `refresh` has two triggers, `cron` and `fixed_rate`; use exactly one of `cron`, `fixed_rate` or `fixed_delay`
+ --> tests/ui/scheduling/two_triggers.rs:7:39
+  |
+7 |     #[scheduled(cron = "0 0 * * * *", fixed_rate = "30s")]
+  |                                       ^^^^^^^^^^

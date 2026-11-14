@@ -1,6 +1,7 @@
-//! Attribute macros for Oxbloom: controllers (`#[controller]` and the route attributes) and
+//! Attribute macros for Oxbloom: controllers (`#[controller]` and the route attributes),
 //! dependency injection (`#[component]`, `#[configuration]`, `#[bean]`, used through
-//! `oxbloom_di`, and `#[auto_configuration]`, used through `oxbloom_boot`).
+//! `oxbloom_di`, and `#[auto_configuration]`, used through `oxbloom_boot`) and scheduled tasks
+//! (`#[scheduling]` and `#[scheduled]`, used through `oxbloom_tasks`).
 //!
 //! Controllers:
 //! `#[controller("/base")]` goes on an `impl` block. Methods annotated with
@@ -14,6 +15,7 @@ mod auto_configuration;
 mod component;
 mod configuration;
 mod options;
+mod scheduling;
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -798,6 +800,130 @@ pub fn bean(_args: TokenStream, input: TokenStream) -> TokenStream {
     let error = Error::new(
         proc_macro2::Span::call_site(),
         "#[bean] is only valid on methods inside a #[configuration] impl block",
+    )
+    .into_compile_error();
+    // The item stays, so the misplaced attribute is the only error.
+    quote! { #error #input }.into()
+}
+
+/// Generates `impl ::oxbloom_tasks::Scheduling` for an inherent `impl` block whose
+/// `#[scheduled(..)]` methods run on a schedule.
+///
+/// `fn scheduled(self: Arc<Self>) -> Vec<Task>` returns one task per `#[scheduled]` method, in
+/// declaration order; each run calls the method on the shared instance. Methods without
+/// `#[scheduled]` are left alone. Use it through `oxbloom_tasks::scheduling`; the generated
+/// code refers to the `oxbloom_tasks` crate by that name, so the dependency must not be renamed
+/// in `Cargo.toml`.
+///
+/// `#[scheduled(..)]` keys, all string literals:
+///
+/// - exactly one trigger: `cron = "0 0 3 * * *"` (six fields, seconds first),
+///   `fixed_rate = "30s"` (measured from the start of the last run) or `fixed_delay = "30s"`
+///   (measured from its end); durations are a whole number with `ms`, `s`, `m`, `h` or `d`;
+/// - `initial_delay = "5s"`: postpones the first run;
+/// - `zone = "Europe/Amsterdam"`: the IANA zone of a `cron` trigger; without it the trigger
+///   uses the scheduler's zone (`SchedulerConfig::zone`, `tasks.scheduling.zone` in boot, UTC by
+///   default);
+/// - `name = ".."`: the task name in logs and in `Scheduler::tasks` (default `Type::method`).
+///
+/// A method takes only `&self` and returns `()` or `Result<(), E>` where `E: Display`; an
+/// `Err` is a failed run, logged with `E`'s `to_string()`. An `async fn` is awaited on the
+/// runtime; a plain `fn` runs in `tokio::task::spawn_blocking`, so blocking work does not stall
+/// the other tasks.
+///
+/// The literals are parsed when `scheduled()` runs. A value that does not parse (a bad cron
+/// expression, zone or duration, or a zero `fixed_rate` or `fixed_delay`) gives
+/// `Task::invalid`, and `Scheduler::try_new` fails with a `TaskError` naming the task and the
+/// key, never the value.
+///
+/// Trait impls, two triggers or none, `zone` without `cron`, unknown or repeated keys,
+/// methods that take anything besides `&self` (or are generic), a return type other than `()`
+/// or `Result<..>`, and `#[scheduled]` outside a `#[scheduling]` impl are compile errors.
+///
+/// # Examples
+///
+/// ```
+/// use std::sync::Arc;
+/// use std::time::Duration;
+/// use oxbloom_tasks::{Scheduling, Trigger, scheduling};
+///
+/// struct Reports;
+///
+/// #[scheduling]
+/// impl Reports {
+///     #[scheduled(cron = "0 0 3 * * *", zone = "Europe/Amsterdam")]
+///     async fn nightly(&self) -> Result<(), std::io::Error> {
+///         Ok(())
+///     }
+///
+///     #[scheduled(fixed_rate = "30s", initial_delay = "5s", name = "refresh")]
+///     fn refresh(&self) {}
+/// }
+///
+/// let tasks = Arc::new(Reports).scheduled();
+/// assert_eq!(tasks[0].name(), "Reports::nightly");
+/// assert_eq!(tasks[1].name(), "refresh");
+/// assert_eq!(tasks[1].trigger(), Some(&Trigger::fixed_rate(Duration::from_secs(30))?));
+/// assert_eq!(tasks[1].delay(), Some(Duration::from_secs(5)));
+/// # Ok::<(), oxbloom_tasks::TriggerError>(())
+/// ```
+///
+/// A value that does not parse fails when the scheduler is built:
+///
+/// ```
+/// use std::sync::Arc;
+/// use oxbloom_core::{Clock, SystemClock};
+/// use oxbloom_tasks::{Scheduler, SchedulerConfig, Scheduling, scheduling};
+///
+/// struct Jobs;
+///
+/// #[scheduling]
+/// impl Jobs {
+///     #[scheduled(fixed_delay = "soon")]
+///     async fn poll(&self) {}
+/// }
+///
+/// let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+/// let err = Scheduler::try_new(Arc::new(Jobs).scheduled(), SchedulerConfig::default(), clock)
+///     .unwrap_err();
+/// assert_eq!(err.task(), "Jobs::poll");
+/// assert_eq!(err.key(), "fixed_delay");
+/// assert!(!err.to_string().contains("soon"));
+/// ```
+#[proc_macro_attribute]
+pub fn scheduling(args: TokenStream, input: TokenStream) -> TokenStream {
+    let item = parse_macro_input!(input as ItemImpl);
+    scheduling::expand(args.into(), item)
+        .unwrap_or_else(Error::into_compile_error)
+        .into()
+}
+
+/// Marks a method of a `#[scheduling]` impl as a scheduled task; see [`macro@scheduling`] for
+/// the keys. Anywhere else it is a compile error.
+///
+/// # Examples
+///
+/// ```
+/// use std::sync::Arc;
+/// use oxbloom_tasks::{Scheduling, scheduling};
+///
+/// struct Cleanup;
+///
+/// #[scheduling]
+/// impl Cleanup {
+///     #[scheduled(fixed_delay = "1m")]
+///     async fn remove_done(&self) {}
+/// }
+///
+/// assert_eq!(Arc::new(Cleanup).scheduled()[0].name(), "Cleanup::remove_done");
+/// ```
+#[proc_macro_attribute]
+pub fn scheduled(_args: TokenStream, input: TokenStream) -> TokenStream {
+    let input = TokenStream2::from(input);
+    // The call site of an attribute macro is the attribute itself.
+    let error = Error::new(
+        proc_macro2::Span::call_site(),
+        "#[scheduled] is only valid on methods inside a #[scheduling] impl block",
     )
     .into_compile_error();
     // The item stays, so the misplaced attribute is the only error.

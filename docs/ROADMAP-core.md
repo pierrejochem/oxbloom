@@ -18,7 +18,7 @@ Each item below becomes its own slice with its own spec, plan and review, as in 
 | `availability`, `info`, `admin`, `cloud` | Liveness and readiness state, build and git info, platform detection (Kubernetes) | `oxbloom-actuator` (C8 done): liveness and readiness state flipped by boot at `ready` and `stopping`; `/health`, `/health/liveness`, `/health/readiness`, `/info` and `/loggers` under a base path (default `/actuator`); `HealthIndicator` and `InfoContributor` beans with a timeout per indicator; a built-in SSL certificate indicator; build and git info through the application's `build.rs` and the `build_info!` macro; Kubernetes detection. No separate management port, no roles per endpoint, no metrics |
 | `web` (server properties, error handling, forwarded headers, compression, static resources, JSON) | `server.*` properties, error attributes and problem details, content negotiation, JSON conversion | `oxbloom-web` (C6a, C6b-1 and C6b-2 done): router, Hyper server, ordered `Filter` chain (`order` module), `HttpError` and `ErrorRenderer` with problem+json, `server.*` limits, shutdown timeout and forwarded headers. It also has `Json<T>`, `Request::json` and `Accept` negotiation (feature `json`). It also has a CORS filter, a compression filter (gzip, brotli, zstd) and static resources (disk and embedded). |
 | `ssl` | SSL bundles from PEM or keystores, reloadable | `oxbloom-ssl` (C7 done): named bundles from PEM and PKCS#12, polling reload, validity warnings; HTTPS for the web server (`server.ssl.bundle`), a bundle for the JWKS fetcher (`security.jwt.jwks-ssl-bundle`) and `TestClient::connect_tls`. No mutual TLS, no JKS, no client reload |
-| `task`, `thread`, `retry` | Task executor and scheduler properties, retry policy | None (jobs, queue, worker, scheduler are planned in `IDEA.md`) |
+| `task`, `thread`, `retry` | Task executor and scheduler properties, retry policy | `oxbloom-tasks` (C9a done): `#[scheduling]` and `#[scheduled]` with cron (six fields, Spring day-of-week numbers, IANA zones, daylight saving rules), fixed rate and fixed delay; a `Scheduler` with one clock-driven loop per task, skip on overlap, a concurrency bound and a bounded shutdown; the `tasks.scheduling.*` keys; `TasksAutoConfiguration` in `oxbloom-boot` (feature `tasks`). Retry, backoff and jitter (C9b) are open, and so are persistence, distributed locking and run-time changes of the task list |
 | `json` | Mapper configuration, JSON parser abstraction | `serde_json` used directly |
 | `diagnostics` (`FailureAnalyzer`) | Human-readable startup failure reports with a suggested action | `oxbloom-boot` (C3b, C4b and C5a done): `FailureAnalyzer`, `FailureAnalysis`, built-in analyzers for a missing config key, bean wiring, port in use, security build errors, invalid `security.jwt` configuration and invalid `logging` configuration (the last two are internal analyzers, not public items) |
 | `spring-boot-test` and `-test-autoconfigure` | `@SpringBootTest`, `ApplicationContextRunner`, output capture, test property sources, sliced tests (web, JSON), mock web client | C10a and C10b done: `oxbloom-test` has `ContextRunner`, captured output, temporary config directories, `Clock`s, `TestClient` and `TestApp` with slice presets |
@@ -442,10 +442,71 @@ Rulings made during C8:
 - A value of `management.endpoints.enabled` other than `true` skips the group silently, as documented on `conditions()`, because DI has no "not equal" condition and a skip fails closed; the cost if wrong is that an operator typo disables the actuator without an error, visible in the conditions report.
 - The `examples/todos` application opens `/actuator/health/**` in its own `PublicPaths` instead of using `health.public = true`, because two `authorize` sections fail the startup; this keeps `/info` and `/loggers` at 401, and a changed base path makes health answer 401 (fail closed).
 
-### C9: Tasks, scheduling and retry
-- Task executor properties; `#[scheduled]` with cron, fixed rate and fixed delay; shutdown awareness.
-- `RetryPolicy`/`#[retryable]` with backoff and jitter (the Boot `retry` package).
-- Feeds the `oxbloom-jobs`/`queue`/`worker`/`scheduler` crates in `IDEA.md`.
+### C9a: Tasks and scheduling (`oxbloom-tasks`) — done
+Done on 2026-11-14; the design is the C9a spec `2026-11-14-tasks-scheduling-design.md` and the plan is `2026-11-14-tasks-scheduling.md` (both local files under `docs/superpowers`, named here without a link), usage is in the guide chapter `docs/guide/18-tasks.md` and `docs/API.md` (section 4.13), and decisions are in ADR 0084.
+
+Delivered:
+- The crate `oxbloom-tasks`: `Trigger` (`FixedRate`, `FixedDelay`, `Cron`), `CronExpr`, `Zone`, `TriggerError`, `parse_duration`, `Task`, `Scheduling`, `Outcome`, `TaskError`, `Scheduler`, `SchedulerConfig`, `TaskStatus` and `TasksSettings`.
+- The macros `#[scheduling]` and `#[scheduled(..)]` in `oxbloom-macros`, re-exported by `oxbloom-tasks`, without a feature flag. They generate `impl Scheduling` for an inherent impl block, with compile errors that name the method, and the application registers the bean with `.provides(.. -> Arc<dyn Scheduling>)`.
+- Cron expressions with six fields, seconds first, Spring numbering and names of the day of the week (mixed freely and translated before the `cron` crate), IANA zones, and daylight saving rules: a skipped local time does not fire and a repeated one fires once.
+- A scheduler with one loop per task, driven only by the injected `Clock` in chunks of at most one second; skip on overlap, logged at `warn` and counted; failures and panics logged at `error` with the schedule continuing; a global concurrency bound; `initial_delay`; and a shutdown that waits up to `tasks.scheduling.shutdown-timeout` and then aborts the runs, also when the `stop` future is dropped.
+- Startup errors that name the task and the key (`cron`, `zone`, `fixed_rate`, `fixed_delay`, `initial_delay` or `name`) and never the value, and a rejection of duplicate task names.
+- `Scheduler::tasks()` as a snapshot for inspection and `Scheduler::is_running()`.
+- Boot feature `tasks`: `TasksAutoConfiguration` with five property metadata entries and `SchedulerService`, a boot service in the phase `i32::MAX` with the DI order `i32::MAX`, so it starts after the web server and before readiness flips, and stops before the server.
+- The `TodoCleanup` task in `examples/todos` (a fixed delay of one minute that removes done todos older than `todos.cleanup.max-age`), its tests and its README, and the CI matrix.
+- ADR 0084 and the guide chapter 18 (the roadmap chapter is now 19).
+
+Gate numbers at the end of C9a (re-measured at the final gate on the final tree):
+- `cargo test --workspace --all-features`: 2619 passed, 0 failed, 8 ignored (2481 before C9a).
+- Boot feature matrix (`cargo test -p oxbloom-boot`): `--no-default-features` 447, `--features web` 447, `--features logging` 467, `--features security` 447, `--features ssl` 447, `--features actuator` 460, `--features tasks` 462, `--all-features` 496; each with 0 failed and 1 ignored (the probe).
+- `cargo test -p oxbloom-tasks --all-features` 113, `cargo test -p oxbloom-macros` 21, `make check-examples` 50 (44 before).
+- Stack probes: boot needs 238 KB without the feature `logging` and 239 KB with it (237 and 238 overflow), unchanged from C8.
+
+Limits that users must know (also in the guide):
+- A trigger that finds the previous run still active is skipped and not made up later.
+- A forward clock jump gives one run, never a burst. A backward jump delays a fixed-rate or fixed-delay task by at most one period. A cron task has no backward clamp, so an NTP step back stalls a per-second cron task for that span.
+- Sub-hourly cron expressions have a gap of about 75 minutes on a fall-back day.
+- Cron evaluation ends at the year 2100.
+- A plain `fn` runs in `spawn_blocking` and cannot be aborted: `stop` returns at the deadline, the thread is leaked until the work finishes, and the tokio runtime shutdown still waits for it.
+- Unknown keys under `tasks` are rejected only when the group runs. With `tasks.scheduling.enabled = false`, or with no `dyn Scheduling` bean, `tasks.typo` is accepted silently, and any value of `enabled` other than `true` switches the group off silently.
+- The configuration duration grammar (`1.5s`) is richer than the one of the attribute literals and `parse_duration` (a whole number with `ms`, `s`, `m`, `h` or `d`).
+- The scheduler shares the phase and the order `i32::MAX` with the web server, so another service with both values would tie with it.
+- A method named `clone`, `to_string` or `scheduled` can collide with `Arc` or trait methods; a `#[cfg]`-gated `#[scheduled]` method and `unsafe fn` are not supported; the return type is checked by shape.
+- `Trigger::cron_in_default_zone(x)` and `Trigger::cron(x, Zone::Utc)` are not equal under `PartialEq`.
+
+Follow-ups from C9a, not yet scheduled:
+- An actuator `/scheduledtasks` endpoint over `Scheduler::tasks()`.
+- Persistence and catch-up of missed runs, and distributed locking for several instances.
+- Adding and removing tasks at run time.
+- Per-task concurrency limits.
+- A backward clamp for cron tasks.
+- One duration grammar for configuration and attributes.
+- `#[diagnostic::on_unimplemented]` on `RunResult`, for a clearer error when a task returns an error type that is not `Display`.
+- Fully qualified calls (`Self::method(&*this)`) in the macro output, so a method named `clone`, `to_string` or `scheduled` works.
+- Re-emitting the impl block when the macro reports an error, so the compiler does not add "no method found" errors.
+
+Deferred minors from the C9a reviews:
+- Task 1: the branch `_ => cursor = now` of the loop-stall guard in the cron evaluation should return `None` (it cannot be reached with the current `cron` crate). Coverage gaps remain for zones with a half-hour offset, a `last_end` earlier than `last_start`, and the `if let Some(far)` assertion. The crates `tokio`, `tracing` and `oxbloom-core` were unused until Task 2 (they are used now). Duplicate expansion in a day-of-week field (`0-7`, `1,1`) is untested.
+- Task 2: the log recorder helper in the tests captures events only on the test thread, so there is no multi-thread capture. A cancelled run is recorded as `Failed` without a log line. The skip event has no field with the count of skipped triggers. There is no test of `stop` called twice, of `start` after `stop`, or of a `spawn_blocking` call inside a user future, where the runtime shutdown waits for the blocking thread. `SchedulerConfig::zone` is read by `Scheduler::try_new` only to fill cron triggers without a zone.
+- Task 3: the error for a repeated trigger key reads "two triggers `cron` and `cron`". There is no custom message for an error type that is not `Display`.
+- Task 4: a `fixed_delay` of `0s` is untested at the boot level.
+- Task 5: the jump of the workspace test count from 2481 to 2611 at that point is not attributed in the implementer's report (Task 4 added 15 under `--all-features` and Task 5 about 6), so the final gate re-verified it (2619 passed). The test `the_max_age_comes_from_configuration` stores its result in a field called `removed_with`, which is misleading. The wording of the `done_at` doc is cosmetic. There is no scheduler-level run test of the example, because the attribute period is the literal `1m`. Some lines in the example's README, `cleanup.rs` and `application.toml` are long. The new `delete` test is sequential, so it is a regression guard and not a race test.
+
+Rulings made during C9a:
+- The macro generates `impl Scheduling` and the application registers the bean as a `dyn Scheduling`, where the spec said the macro registers a `dyn ScheduledTask` bean per method, because an impl macro cannot register beans (`#[controller]` works the same way); the user-visible behavior is the same.
+- Work happens on the branch `c9a-tasks`, with commits by the implementers; the specs and plans under `docs/superpowers` and the `.superpowers` directory stay local and git-ignored.
+- The Task 2 tests use a small local test clock instead of the `ManualClock` of `oxbloom-test`, because `oxbloom-test` depends on `oxbloom-boot`, which optionally depends on `oxbloom-tasks`, so a dev-dependency would make a cycle.
+- Spring day-of-week numbering (`0` and `7` are Sunday, `1` is Monday) is translated in the cron parser instead of rejecting numeric days; names are translated to numbers too, so `SUN-TUE` means Sunday to Tuesday.
+- `Task::invalid` takes the key (`name`, `key: &'static str`, `error`) and `TaskError` names it, because startup errors must name the task and the key.
+- `Scheduler::stop` has an abort-on-drop guard around the runs in flight, because boot abandons a service's `stop` at its own deadline and a dropped future would otherwise leave the runs detached.
+- `tasks.scheduling.zone` applies to cron tasks without a `zone`: the cron trigger keeps an optional zone and `Scheduler::try_new` fills the configured one.
+- `oxbloom-macros` stays free of feature flags, like `#[controller]`, and the spec's "behind a feature" is amended in ADR 0084.
+- `Scheduler::try_new` rejects duplicate task names, because names identify tasks in `tasks()` and in logs across several `#[scheduling]` impls.
+- The scheduler uses the phase `i32::MAX` of the web server and the DI order `i32::MAX`, because no higher phase exists; this was verified by reading the stable sort by phase, the stable DI order and the reverse stop.
+
+### C9b: Retry (open)
+- `RetryPolicy` and `#[retryable]` with backoff and jitter (the Boot `retry` package), built on the task types of `oxbloom-tasks`.
+- Feeds the `oxbloom-jobs`/`queue`/`worker` crates in `IDEA.md`.
 
 ### C10: Test support (`oxbloom-test`)
 
@@ -505,7 +566,7 @@ Deferred minors from the C10b reviews:
 5. **C5 Logging** (C5a and C5b done), then **C6 Web server properties, errors and JSON** (C6a, C6b-1 and C6b-2 done).
 6. **C4 Conditions and auto-configuration** (C4a, the mechanism, and C4b, auto-configuring the existing wiring with property metadata, done).
 7. **C10 Test support** (C10a, the context runner and clock, and C10b, `TestApp`, `TestClient` and slicing, done).
-8. **C7 SSL bundles** (done) and **C8 Availability, info and health** (done), then **C9 Tasks and retry.**
+8. **C7 SSL bundles** (done) and **C8 Availability, info and health** (done), **C9a Tasks and scheduling** (done), then **C9b Retry.**
 9. Security Slices 7 to 9, then `oxbloom-ai`, database, jobs and the rest of `IDEA.md`.
 10. **C11 Service connections** after the database and queue crates exist.
 

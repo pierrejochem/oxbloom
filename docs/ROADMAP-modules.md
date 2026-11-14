@@ -38,7 +38,7 @@ Spring Boot splits one feature into many modules: the feature itself, its `-test
 | `websocket`, `rsocket` | `oxbloom-websocket` (candidate: `tokio-tungstenite`); RSocket skipped | M8 |
 | `graphql` | `oxbloom-graphql` (candidate: `async-graphql`) | M8 |
 | `grpc-client`, `grpc-server` | `oxbloom-grpc` (candidate: `tonic`) | M8 |
-| `quartz`, `batch`, `batch-jdbc`, `batch-data-mongodb` | `oxbloom-scheduler` (cron, fixed rate) in slice C9; `batch` becomes `oxbloom-batch` on top of `oxbloom-data` | C9, then M9 |
+| `quartz`, `batch`, `batch-jdbc`, `batch-data-mongodb` | scheduling is `oxbloom-tasks` (cron, fixed rate, fixed delay), done in core slice C9a; `batch` becomes `oxbloom-batch` on top of `oxbloom-data` | C9a done, then M9 |
 | `mail`, `sendgrid` | `oxbloom-mail` (candidate: `lettre`) | M9 |
 | `hateoas`, `data-rest` | `oxbloom-hateoas` only if a hypermedia API is wanted; no auto-exposed repositories | skipped for now |
 | `jersey`, `webservices` (SOAP), `restdocs` | do not apply | skipped |
