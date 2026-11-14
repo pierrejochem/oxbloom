@@ -16,7 +16,10 @@
 //! ```
 
 mod availability;
+pub mod build;
 mod health;
+mod info;
 
 pub use availability::{Availability, Liveness, Readiness};
-pub use health::{Health, HealthIndicator, Status};
+pub use health::{Health, HealthIndicator, HealthRunner, Status};
+pub use info::{BuildInfo, Info, InfoContributor, Platform};

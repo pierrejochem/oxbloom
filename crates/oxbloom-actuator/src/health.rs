@@ -1,4 +1,6 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 
@@ -193,6 +195,103 @@ pub trait HealthIndicator: Send + Sync {
 
     /// Checks the component.
     async fn health(&self) -> Health;
+}
+
+/// Runs health indicators concurrently, each under a timeout, and combines the results.
+///
+/// An indicator that exceeds the timeout or panics is reported `Down` with an `error`
+/// detail of `timed out` or `panicked`. Each indicator runs in its own task, so a panic
+/// never reaches the caller.
+///
+/// # Examples
+///
+/// ```
+/// # tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap().block_on(async {
+/// use std::sync::Arc;
+/// use std::time::Duration;
+/// use async_trait::async_trait;
+/// use oxbloom_actuator::{Health, HealthIndicator, HealthRunner, Status};
+///
+/// struct Database;
+///
+/// #[async_trait]
+/// impl HealthIndicator for Database {
+///     fn name(&self) -> &str { "db" }
+///     async fn health(&self) -> Health { Health::up() }
+/// }
+///
+/// let runner = HealthRunner::new(vec![Arc::new(Database)], Duration::from_secs(1));
+/// let (status, parts) = runner.run(None).await;
+/// assert_eq!(status, Status::Up);
+/// assert_eq!(parts["db"].status, Status::Up);
+/// # });
+/// ```
+pub struct HealthRunner {
+    indicators: Vec<Arc<dyn HealthIndicator>>,
+    timeout: Duration,
+}
+
+impl HealthRunner {
+    /// Creates a runner for `indicators` with a per-indicator `timeout`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use oxbloom_actuator::HealthRunner;
+    ///
+    /// let _runner = HealthRunner::new(vec![], Duration::from_secs(5));
+    /// ```
+    pub fn new(indicators: Vec<Arc<dyn HealthIndicator>>, timeout: Duration) -> Self {
+        Self {
+            indicators,
+            timeout,
+        }
+    }
+
+    /// Runs the indicators, or only those named in `only`, and returns the worst status and
+    /// each indicator's health by name.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap().block_on(async {
+    /// use std::time::Duration;
+    /// use oxbloom_actuator::{HealthRunner, Status};
+    ///
+    /// let runner = HealthRunner::new(vec![], Duration::from_secs(1));
+    /// let (status, parts) = runner.run(None).await;
+    /// assert_eq!(status, Status::Up);
+    /// assert!(parts.is_empty());
+    /// # });
+    /// ```
+    pub async fn run(&self, only: Option<&[String]>) -> (Status, BTreeMap<String, Health>) {
+        let handles: Vec<_> =
+            self.indicators
+                .iter()
+                .filter(|i| only.is_none_or(|names| names.iter().any(|n| n == i.name())))
+                .map(|indicator| {
+                    let name = indicator.name().to_string();
+                    let indicator = Arc::clone(indicator);
+                    let timeout = self.timeout;
+                    let handle = tokio::spawn(async move {
+                        tokio::time::timeout(timeout, indicator.health()).await
+                    });
+                    (name, handle)
+                })
+                .collect();
+        let mut parts = BTreeMap::new();
+        for (name, handle) in handles {
+            let health = match handle.await {
+                Ok(Ok(health)) => health,
+                Ok(Err(_elapsed)) => Health::down().detail("error", "timed out"),
+                Err(_join_error) => Health::down().detail("error", "panicked"),
+            };
+            parts.insert(name, health);
+        }
+        let status = Status::worst(parts.values().map(|h| h.status));
+        (status, parts)
+    }
 }
 
 #[cfg(test)]
