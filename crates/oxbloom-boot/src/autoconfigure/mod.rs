@@ -68,7 +68,7 @@ use crate::autoconfig::AutoConfigurations;
 /// #[cfg(feature = "security")]
 /// {
 ///     use oxbloom_boot::JwtDecoderAutoConfiguration;
-///     assert_eq!(keys(all(), "security.jwt."), 7);
+///     assert_eq!(keys(all(), "security.jwt."), 8);
 ///     assert_eq!(keys(all().exclude::<JwtDecoderAutoConfiguration>(), "security.jwt."), 0);
 /// }
 /// #[cfg(feature = "web")]

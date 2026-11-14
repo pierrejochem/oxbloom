@@ -392,7 +392,7 @@ fn ssl_bundle_name(config: &Config) -> Result<Option<String>, ConfigError> {
 
 /// The names of `bundles` for an error text, or `none`.
 #[cfg(feature = "ssl")]
-fn available(bundles: Option<&SslBundles>) -> String {
+pub(crate) fn available(bundles: Option<&SslBundles>) -> String {
     let names = bundles.map(SslBundles::names).unwrap_or_default();
     if names.is_empty() {
         "none".to_owned()

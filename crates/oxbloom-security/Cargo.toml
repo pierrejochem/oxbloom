@@ -7,13 +7,16 @@ rust-version.workspace = true
 
 [features]
 di = ["dep:oxbloom-di"]
-jwks = ["dep:reqwest"]
+jwks = ["dep:reqwest", "dep:rustls"]
 
 [dependencies]
 async-trait = "0.1.92"
 http = "1.5.0"
 jsonwebtoken = { version = "11.1.0", features = ["rust_crypto"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls"], optional = true }
+# Only to name `rustls::ClientConfig` in `ReqwestJwksFetcher::with_tls`; the client
+# configuration a caller passes carries its own crypto provider (aws-lc-rs, never ring).
+rustls = { version = "0.23.46", default-features = false, features = ["std"], optional = true }
 oxbloom-config = { version = "0.1.0", path = "../oxbloom-config" }
 oxbloom-core = { version = "0.1.0", path = "../oxbloom-core" }
 oxbloom-di = { version = "0.1.0", path = "../oxbloom-di", optional = true }
@@ -23,5 +26,10 @@ serde_json = "1.0.154"
 tokio = { version = "1.54.1", features = ["rt", "sync", "time"] }
 
 [dev-dependencies]
+# A local HTTPS JWKS server for `tests/jwks_tls.rs`, with a private CA generated at test time;
+# `aws-lc-rs` only, no `ring`.
+rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs", "pem"] }
+rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
+tokio-rustls = { version = "0.26.6", default-features = false }
 tempfile = "3.27.0"
 tokio = { version = "1.54.1", features = ["rt", "macros", "test-util", "net", "io-util", "sync"] }

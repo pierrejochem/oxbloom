@@ -52,6 +52,8 @@ const K_PEM: &str = "security.jwt.public-key-pem";
 const K_JWKS: &str = "security.jwt.jwk-set-uri";
 const K_AUDIENCE: &str = "security.jwt.audience";
 const K_SKEW: &str = "security.jwt.clock-skew-secs";
+const K_BUNDLE: &str = "security.jwt.jwks-ssl-bundle";
+const BUNDLE_RULE: &str = "must be the name of an SSL bundle";
 const DEFAULT_SKEW_SECS: u64 = 60;
 const MAX_SKEW_SECS: u64 = 3600;
 
@@ -70,6 +72,8 @@ struct JwtSettings {
     secret: Option<Secret<String>>,
     #[serde(rename = "public-key-pem")]
     public_key_pem: Option<Secret<String>>,
+    #[serde(rename = "jwks-ssl-bundle")]
+    jwks_ssl_bundle: Option<String>,
 }
 
 fn invalid(key: &str, message: &str) -> ConfigError {
@@ -143,6 +147,63 @@ fn map_jwks_error(error: JwksError) -> ConfigError {
     }
 }
 
+/// The name of the SSL bundle whose trust the JWKS client uses, from
+/// `security.jwt.jwks-ssl-bundle`, or `None` when the key is not set.
+///
+/// This crate does not load SSL bundles. The caller resolves the name, builds the fetcher
+/// with `ReqwestJwksFetcher::with_tls` (cargo feature `jwks`) and
+/// passes it to [`jwt_decoder_from_config`]; `oxbloom-boot` does this with its `ssl` feature.
+/// Without the key nothing changes: the fetcher keeps the platform certificate verifier. The
+/// JWKS client is built once, when the decoder is built, so a later reload of the bundle's
+/// files does not reach it.
+///
+/// # Errors
+///
+/// [`ConfigError::Invalid`] on `security.jwt.jwks-ssl-bundle` when the value is not a string
+/// or is empty. The message never contains the value.
+///
+/// # Examples
+///
+/// ```
+/// use oxbloom_config::{Config, ConfigError};
+/// use oxbloom_security::jwks_ssl_bundle;
+///
+/// let config = Config::from_str("[security.jwt]\njwks-ssl-bundle = \"corporate\"")?;
+/// assert_eq!(jwks_ssl_bundle(&config)?.as_deref(), Some("corporate"));
+///
+/// // Without the key the platform verifier stays in use.
+/// assert_eq!(jwks_ssl_bundle(&Config::from_str("")?)?, None);
+///
+/// // An empty name is an error on the key.
+/// let empty = Config::from_str("[security.jwt]\njwks-ssl-bundle = \"\"")?;
+/// assert!(matches!(
+///     jwks_ssl_bundle(&empty),
+///     Err(ConfigError::Invalid { key, .. }) if key == "security.jwt.jwks-ssl-bundle"
+/// ));
+/// # Ok::<(), ConfigError>(())
+/// ```
+pub fn jwks_ssl_bundle(config: &Config) -> Result<Option<String>, ConfigError> {
+    let name = match config.get::<String>(K_BUNDLE) {
+        Ok(name) => name,
+        Err(ConfigError::Missing { .. }) => return Ok(None),
+        Err(ConfigError::Invalid { .. }) => return Err(invalid(K_BUNDLE, BUNDLE_RULE)),
+        Err(other) => return Err(other),
+    };
+    check_bundle_name(&name)?;
+    Ok(Some(name))
+}
+
+/// Refuses an empty or whitespace-only bundle name.
+fn check_bundle_name(name: &str) -> Result<(), ConfigError> {
+    if name.trim().is_empty() {
+        return Err(invalid(
+            K_BUNDLE,
+            "must not be empty; give the name of an SSL bundle",
+        ));
+    }
+    Ok(())
+}
+
 /// Builds a [`DefaultJwtDecoder`] from the `security.jwt` section of `config`.
 ///
 /// Keys: `algorithms` (required list of `HS256`, `HS384`, `HS512`, `RS256`, `RS384`, `RS512`,
@@ -159,7 +220,9 @@ fn map_jwks_error(error: JwksError) -> ConfigError {
 /// line, even when the key was not registered. Empty or whitespace-only items in `audience` and
 /// `algorithms` are rejected.
 ///
-/// A `jwk-set-uri` needs a `fetcher` and must use `https`.
+/// A `jwk-set-uri` needs a `fetcher` and must use `https`. `jwks-ssl-bundle` names the SSL
+/// bundle whose trust that fetcher uses; this function only checks that it is not empty and
+/// that `jwk-set-uri` is set, and the caller resolves it (see [`jwks_ssl_bundle`]).
 ///
 /// # Errors
 ///
@@ -271,6 +334,16 @@ pub fn jwt_decoder_from_config_with_clock(
         .any(|item| item.trim().is_empty())
     {
         return Err(invalid(K_ALGORITHMS, "algorithm items must not be empty"));
+    }
+
+    if let Some(name) = &settings.jwks_ssl_bundle {
+        check_bundle_name(name)?;
+        if settings.jwk_set_uri.is_none() {
+            return Err(invalid(
+                K_BUNDLE,
+                "only valid with `security.jwt.jwk-set-uri`",
+            ));
+        }
     }
 
     let skew = settings.clock_skew_secs.unwrap_or(DEFAULT_SKEW_SECS);

@@ -81,7 +81,9 @@
 //!
 //! # Features
 //!
-//! - `jwks`: [`ReqwestJwksFetcher`] (reqwest with rustls). Needs a C compiler to build.
+//! - `jwks`: [`ReqwestJwksFetcher`] (reqwest with rustls), with `ReqwestJwksFetcher::with_tls`
+//!   for a custom rustls client configuration such as one from an SSL bundle. Needs a C
+//!   compiler to build.
 //! - `di`: [`SecurityContainerExt`] registers a built chain in a `oxbloom-di` container.
 
 mod authentication;
@@ -107,7 +109,9 @@ pub use chain::{
     AccessDeniedHandler, AuthenticationEntryPoint, DefaultAccessDeniedHandler, DefaultEntryPoint,
     SecurityFilterChain,
 };
-pub use config::{SECRET_KEY, jwt_decoder_from_config, jwt_decoder_from_config_with_clock};
+pub use config::{
+    SECRET_KEY, jwks_ssl_bundle, jwt_decoder_from_config, jwt_decoder_from_config_with_clock,
+};
 #[cfg(feature = "di")]
 pub use di::SecurityContainerExt;
 pub use http_security::{

@@ -2,12 +2,14 @@
 
 use std::sync::Arc;
 
-use oxbloom_config::Config;
+use oxbloom_config::{Config, ConfigError};
 use oxbloom_core::Clock;
 use oxbloom_di::{Conditions, Configuration, ContainerBuilder, DiError, component};
 use oxbloom_security::{
-    DefaultJwtDecoder, JwksFetcher, JwtDecoder, jwt_decoder_from_config_with_clock,
+    DefaultJwtDecoder, JwksFetcher, JwtDecoder, jwks_ssl_bundle, jwt_decoder_from_config_with_clock,
 };
+#[cfg(feature = "ssl")]
+use oxbloom_ssl::SslBundles;
 
 use crate::autoconfig::AutoConfiguration;
 use crate::metadata::PropertyMetadata;
@@ -19,7 +21,15 @@ use crate::metadata::PropertyMetadata;
 /// application registered its own `dyn JwtDecoder`; an optional `dyn JwksFetcher` bean is
 /// passed on for `security.jwt.jwk-set-uri`, and an optional `dyn Clock` bean
 /// (`oxbloom_core::Clock`) replaces the system time in the `exp` and `nbf` checks, which lets
-/// tests move the time. A broken section fails the build with
+/// tests move the time.
+///
+/// With the feature `ssl`, `security.jwt.jwks-ssl-bundle` names an SSL bundle of the
+/// `oxbloom_ssl::SslBundles` bean; the JWK set is then fetched by a
+/// `ReqwestJwksFetcher::with_tls` built from that bundle's client configuration, in place of a
+/// `dyn JwksFetcher` bean. The fetcher is built once with the decoder and does not follow a
+/// reload of the bundle's files. An unknown name, or a name while there is no bundle (or no
+/// feature `ssl`), is a `ConfigError::Invalid` on that key that lists the available bundle
+/// names. Without the key nothing changes. A broken section fails the build with
 /// `DiError::Creation` whose source is the `ConfigError` naming the key; no message carries
 /// the secret.
 ///
@@ -98,17 +108,74 @@ impl AutoConfiguration for JwtDecoderAutoConfiguration {
 /// The decoder of the `security.jwt` section; the `ConfigError` stays the typed source of a `DiError::Creation` that names the decoder.
 /// A `dyn Clock` bean, when there is one, replaces the system time in the `exp` and `nbf`
 /// checks.
+///
+/// With the feature `ssl`, a `security.jwt.jwks-ssl-bundle` replaces the `dyn JwksFetcher`
+/// bean with a fetcher built from the named bundle of the optional `SslBundles` bean.
 fn jwt_decoder(
     config: Arc<Config>,
     fetcher: Option<Arc<dyn JwksFetcher>>,
     clock: Option<Arc<dyn Clock>>,
+    #[cfg(feature = "ssl")] bundles: Option<Arc<SslBundles>>,
 ) -> Result<DefaultJwtDecoder, DiError> {
-    jwt_decoder_from_config_with_clock(&config, fetcher, clock)
-        .map_err(DiError::creation_from::<DefaultJwtDecoder>)
+    let creation = DiError::creation_from::<DefaultJwtDecoder>;
+    let fetcher = match jwks_ssl_bundle(&config).map_err(creation)? {
+        None => fetcher,
+        #[cfg(feature = "ssl")]
+        Some(name) => Some(bundle_fetcher(&name, bundles.as_deref()).map_err(creation)?),
+        #[cfg(not(feature = "ssl"))]
+        Some(_) => {
+            return Err(creation(ConfigError::invalid(
+                JWKS_SSL_BUNDLE,
+                "needs the `ssl` feature of `oxbloom-boot`; available bundles: none",
+            )));
+        }
+    };
+    jwt_decoder_from_config_with_clock(&config, fetcher, clock).map_err(creation)
+}
+
+const JWKS_SSL_BUNDLE: &str = "security.jwt.jwks-ssl-bundle";
+
+/// The JWKS fetcher of the bundle `name`: an error on `security.jwt.jwks-ssl-bundle` that lists
+/// the available bundle names when the bundle is missing or its client configuration cannot be
+/// built. The texts carry bundle names only, never a file path or file content.
+#[cfg(feature = "ssl")]
+fn bundle_fetcher(
+    name: &str,
+    bundles: Option<&SslBundles>,
+) -> Result<Arc<dyn JwksFetcher>, ConfigError> {
+    use crate::web::available;
+    use oxbloom_security::ReqwestJwksFetcher;
+
+    let unknown = || {
+        ConfigError::invalid(
+            JWKS_SSL_BUNDLE,
+            format!(
+                "names an SSL bundle that does not exist; available bundles: {}",
+                available(bundles)
+            ),
+        )
+    };
+    let bundle = bundles
+        .ok_or_else(unknown)?
+        .get(name)
+        .map_err(|_| unknown())?;
+    let unusable = || {
+        ConfigError::invalid(
+            JWKS_SSL_BUNDLE,
+            format!(
+                "names SSL bundle `{}`, whose TLS client cannot be built; available bundles: {}",
+                bundle.name(),
+                available(bundles)
+            ),
+        )
+    };
+    let client_config = bundle.client_config().map_err(|_| unusable())?;
+    let fetcher = ReqwestJwksFetcher::with_tls(client_config).map_err(|_| unusable())?;
+    Ok(Arc::new(fetcher))
 }
 
 /// Exactly the keys `jwt_decoder_from_config` reads (pinned by a test).
-static JWT: [PropertyMetadata; 7] = [
+static JWT: [PropertyMetadata; 8] = [
     PropertyMetadata::new(
         "security.jwt.algorithms",
         "array of String",
@@ -139,8 +206,18 @@ static JWT: [PropertyMetadata; 7] = [
         "security.jwt.jwk-set-uri",
         "String",
         None,
-        "The https URI of the JWK set for RSA or EC algorithms; needs a `JwksFetcher` bean. \
-         Excludes `public-key-pem` and `secret`.",
+        "The https URI of the JWK set for RSA or EC algorithms; needs a `JwksFetcher` bean or \
+         `jwks-ssl-bundle`. Excludes `public-key-pem` and `secret`.",
+    ),
+    PropertyMetadata::new(
+        "security.jwt.jwks-ssl-bundle",
+        "String",
+        None,
+        "The name of the SSL bundle (`ssl.bundle.pem.<name>` or `ssl.bundle.pkcs12.<name>`) \
+         whose trust, and client certificate if it has one, the JWKS client uses; needs the \
+         `ssl` feature and `jwk-set-uri`, and replaces a `JwksFetcher` bean. The client is \
+         built once at startup and does not follow a reload of the bundle. Unset, the \
+         platform certificate verifier is used.",
     ),
     PropertyMetadata::new(
         "security.jwt.public-key-pem",

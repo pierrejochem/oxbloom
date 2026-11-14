@@ -3542,7 +3542,9 @@ Registers a `DefaultJwtDecoder`, provided as `dyn JwtDecoder`, when the `securit
 present but invalid section fails startup in the `Container` phase with the `ConfigError` as the
 typed cause, and a built-in analyzer for invalid `security.jwt` configuration explains it by key. Neither error text nor metadata contains the
 secret. Keys described: `security.jwt.algorithms`, `audience`, `clock-skew-secs`, `issuer`,
-`jwk-set-uri`, `public-key-pem` and `secret`.
+`jwk-set-uri`, `jwks-ssl-bundle`, `public-key-pem` and `secret`. With the feature `ssl`,
+`jwks-ssl-bundle` names an SSL bundle whose trust the JWKS client uses (built once at startup, no
+reload); an unknown name is a `ConfigError::Invalid` on that key listing the available bundle names.
 
 ```rust
 use oxbloom_boot::{auto_configurations, Banner, JwtDecoderAutoConfiguration, OxbloomApplication};

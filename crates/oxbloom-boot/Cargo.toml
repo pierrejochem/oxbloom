@@ -10,7 +10,9 @@ default = []
 web = ["dep:oxbloom-web", "dep:serde", "dep:tracing", "tokio/net"]
 security = ["dep:oxbloom-security", "oxbloom-security/di"]
 logging = ["dep:oxbloom-logging", "dep:tracing"]
-ssl = ["web", "dep:oxbloom-ssl", "oxbloom-ssl/di", "oxbloom-web/tls", "dep:tokio-rustls"]
+# With `security` as well, `security.jwt.jwks-ssl-bundle` builds the JWKS fetcher from a bundle,
+# which needs `oxbloom-security/jwks` (`ReqwestJwksFetcher::with_tls`).
+ssl = ["web", "dep:oxbloom-ssl", "oxbloom-ssl/di", "oxbloom-web/tls", "dep:tokio-rustls", "oxbloom-security?/jwks"]
 
 [dependencies]
 oxbloom-config = { version = "0.1.0", path = "../oxbloom-config", features = ["di"] }

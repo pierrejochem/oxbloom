@@ -1,6 +1,7 @@
 //! [`JwksFetcher`] over `reqwest` (cargo feature `jwks`, rustls only).
 
 use std::fmt;
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -12,7 +13,8 @@ use crate::{FetchError, JwksFetcher};
 const MAX_BODY_BYTES: usize = 1_048_576;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Fetches a JWKS over HTTP(S) with `reqwest`, rustls and the platform certificate verifier.
+/// Fetches a JWKS over HTTP(S) with `reqwest`, rustls and the platform certificate verifier, or
+/// with a given rustls client configuration ([`ReqwestJwksFetcher::with_tls`]).
 ///
 /// Limits: the whole request (connect, headers and body) must finish within the timeout
 /// (default 5 seconds); redirects are never followed, so a 3xx answer is
@@ -77,7 +79,60 @@ impl ReqwestJwksFetcher {
     /// assert!(fetcher.is_ok());
     /// ```
     pub fn with_timeout(timeout: Duration) -> Result<Self, FetchError> {
-        let client = reqwest::Client::builder()
+        Self::build(reqwest::Client::builder(), timeout)
+    }
+
+    /// A fetcher that verifies the server with `client_config` instead of the platform
+    /// certificate verifier, with the default 5 second timeout.
+    ///
+    /// The client configuration decides which CAs are trusted and whether a client
+    /// certificate is sent, for example one built from an SSL bundle with
+    /// `oxbloom_ssl::SslBundle::client_config`. Everything else is as in
+    /// [`ReqwestJwksFetcher::new`]: no redirects, no `Referer`, the same timeout and the same
+    /// 1 MiB body limit. ALPN is left as `client_config` sets it.
+    ///
+    /// The HTTP client is built once, here, from the configuration as it is now. A fetcher
+    /// built from an SSL bundle therefore does not follow a later reload of the bundle's
+    /// files; build a new fetcher (in an application: restart it) to use new certificates.
+    ///
+    /// # Errors
+    ///
+    /// [`FetchError::Network`] if the HTTP client cannot be built.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use oxbloom_security::{JwksSource, ReqwestJwksFetcher};
+    /// use rustls::{ClientConfig, RootCertStore};
+    ///
+    /// # fn corporate_ca() -> rustls::pki_types::CertificateDer<'static> { unimplemented!() }
+    /// // Trust only the corporate CA that signed the issuer's certificate.
+    /// let mut roots = RootCertStore::empty();
+    /// roots.add(corporate_ca())?;
+    /// let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+    /// let client_config = ClientConfig::builder_with_provider(provider)
+    ///     .with_safe_default_protocol_versions()?
+    ///     .with_root_certificates(roots)
+    ///     .with_no_client_auth();
+    ///
+    /// let fetcher = ReqwestJwksFetcher::with_tls(Arc::new(client_config))?;
+    /// let source = JwksSource::builder(Arc::new(fetcher), "https://issuer.corp.example/jwks.json")
+    ///     .build()?;
+    /// # let _ = source;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn with_tls(client_config: Arc<rustls::ClientConfig>) -> Result<Self, FetchError> {
+        // reqwest takes the configuration by value; the clone shares the root store, the
+        // verifier and the certificate resolver through their `Arc`s.
+        let builder = reqwest::Client::builder()
+            .tls_backend_preconfigured(Arc::unwrap_or_clone(client_config));
+        Self::build(builder, DEFAULT_TIMEOUT)
+    }
+
+    /// Applies the settings every fetcher shares and builds the client.
+    fn build(builder: reqwest::ClientBuilder, timeout: Duration) -> Result<Self, FetchError> {
+        let client = builder
             .redirect(reqwest::redirect::Policy::none())
             .timeout(timeout)
             .referer(false)

@@ -406,12 +406,13 @@ async fn secret_on_the_command_line_fails_without_showing_it() {
 }
 
 /// The keys `jwt_decoder_from_config` reads, written down by hand.
-const JWT_KEYS: [&str; 7] = [
+const JWT_KEYS: [&str; 8] = [
     "security.jwt.algorithms",
     "security.jwt.audience",
     "security.jwt.clock-skew-secs",
     "security.jwt.issuer",
     "security.jwt.jwk-set-uri",
+    "security.jwt.jwks-ssl-bundle",
     "security.jwt.public-key-pem",
     "security.jwt.secret",
 ];
