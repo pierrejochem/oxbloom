@@ -300,7 +300,8 @@ static MANAGEMENT: [PropertyMetadata; 9] = [
         "management.endpoints.base-path",
         "String",
         Some("/actuator"),
-        "The path the endpoints are served under; `/` is refused.",
+        "The path the endpoints are served under; `/`, empty segments and characters other than \
+         ASCII letters, digits, `-`, `_`, `.` and `~` are refused.",
     ),
     PropertyMetadata::new(
         "management.endpoints.health.public",

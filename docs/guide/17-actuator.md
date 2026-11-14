@@ -78,7 +78,7 @@ include = ["db"]
 | Key | Default | Meaning |
 |---|---|---|
 | `management.endpoints.enabled` | `true` | Only the value `true`, or a missing key, switches the actuator on. |
-| `management.endpoints.base-path` | `/actuator` | The path the endpoints are served under. A missing leading `/` is added and a trailing `/` is dropped; `/` alone and an empty value are errors. |
+| `management.endpoints.base-path` | `/actuator` | The path the endpoints are served under. A missing leading `/` is added and a trailing `/` is dropped; `/` alone and an empty value are errors. Each segment must be non-empty and hold only ASCII letters, digits, `-`, `_`, `.` and `~`, so `/a//b`, `/{x}`, `*`, `?` and inner whitespace are errors too. |
 | `management.endpoints.health.public` | `false` | With security, `true` permits `GET <base-path>/health/**` without authentication. |
 | `management.endpoint.health.enabled` | `true` | `false` removes `/health`, `/health/liveness` and `/health/readiness`. |
 | `management.endpoint.info.enabled` | `true` | `false` removes `/info`. |

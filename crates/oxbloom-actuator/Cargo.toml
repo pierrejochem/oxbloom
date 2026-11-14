@@ -5,13 +5,12 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
-# The features gate optional parts that later tasks add; the health and availability types
-# are always available.
+# The features gate the optional parts: `web` the controller, `logging` the loggers endpoint and
+# `ssl` the certificate indicator. The health and availability types are always available.
 [features]
 web = ["dep:oxbloom-web", "dep:http"]
 logging = ["web", "dep:oxbloom-logging"]
 ssl = ["dep:oxbloom-ssl", "dep:oxbloom-core"]
-di = []
 
 [dependencies]
 async-trait = "0.1.92"

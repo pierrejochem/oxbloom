@@ -55,6 +55,11 @@ jobs:
         run: cargo test -p oxbloom-ssl --all-features
       - name: oxbloom-actuator with all features
         run: cargo test -p oxbloom-actuator --all-features
+      - name: oxbloom-actuator builds with each feature
+        run: |
+          cargo build -p oxbloom-actuator --no-default-features
+          cargo build -p oxbloom-actuator --no-default-features --features ssl
+          cargo build -p oxbloom-actuator --no-default-features --features logging
       - name: oxbloom-boot builds with each feature set
         run: |
           cargo build -p oxbloom-boot --no-default-features

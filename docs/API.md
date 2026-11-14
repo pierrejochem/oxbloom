@@ -5480,7 +5480,7 @@ guide chapter is [Actuator](guide/17-actuator.md#actuator). The crate has the fe
 | Key | Default | Meaning |
 |---|---|---|
 | `management.endpoints.enabled` | `true` | Only `true` (or a missing key) switches the group on; any other value skips it silently. |
-| `management.endpoints.base-path` | `/actuator` | The path the endpoints are served under; `/` is refused. |
+| `management.endpoints.base-path` | `/actuator` | The path the endpoints are served under; `/`, empty segments and characters other than ASCII letters, digits, `-`, `_`, `.` and `~` are refused. |
 | `management.endpoints.health.public` | `false` | With security, permits `GET <base-path>/health/**` without authentication. |
 | `management.endpoint.health.enabled` | `true` | `false` removes the three health routes. |
 | `management.endpoint.info.enabled` | `true` | `false` removes `/info`. |
@@ -5618,8 +5618,10 @@ assert_eq!(info.render()["platform"], "none");
 `ActuatorSettings::from_config(&config)` reads the `management.*` keys, and `ActuatorSettings::default()`
 is the table above. The public fields are `enabled`, `base_path` (normalized: a leading `/` and no trailing
 `/`), `health_public`, `show_details`, `timeout`, `readiness_include`, `health_enabled`, `info_enabled` and
-`loggers_enabled`. An unknown key under `management`, `management.endpoints`, `management.endpoint` or
-`management.health`, a `base-path` of `/` or an empty one, and a `show-details` other than `never` or
+`loggers_enabled`. `enabled` is read by boot's auto-configuration; `ActuatorController` ignores it. An
+unknown key under `management`, `management.endpoints`, `management.endpoint` or `management.health`, a
+`base-path` of `/`, an empty one or one with an empty segment or a character outside ASCII letters, digits,
+`-`, `_`, `.` and `~`, and a `show-details` other than `never` or
 `always` are `ConfigError::Invalid`, which never shows a configured value.
 
 ```rust

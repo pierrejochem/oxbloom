@@ -30,9 +30,15 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ActuatorSettings {
-    /// `management.endpoints.enabled`: `false` turns the whole actuator off. Default `true`.
+    /// `management.endpoints.enabled`. Default `true`. This type only records the key; boot's
+    /// actuator auto-configuration reads it and registers nothing when it is not `true`.
+    /// [`ActuatorController`](crate::ActuatorController) does not look at it.
     pub enabled: bool,
     /// `management.endpoints.base-path`, normalized with a leading `/` and no trailing `/`.
+    ///
+    /// Surrounding whitespace and outer slashes are trimmed. Each segment between slashes
+    /// must be non-empty and hold only ASCII letters, digits, `-`, `_`, `.` and `~`; so `/`,
+    /// an empty path, `/a//b`, `/{x}`, `*`, `?` and inner whitespace are rejected.
     pub base_path: String,
     /// `management.endpoints.health.public`: `true` opens the health endpoints to everyone.
     /// Default `false`.
@@ -132,8 +138,9 @@ impl ActuatorSettings {
     /// Reads the settings from the `management` keys of `config`.
     ///
     /// A missing `management` section gives the defaults. Fails with
-    /// [`ConfigError::Invalid`] for an unknown key, for a `base-path` of `/` or an empty one,
-    /// and for a `show-details` that is neither `never` nor `always`. The error never shows a
+    /// [`ConfigError::Invalid`] for an unknown key, for a `base-path` of `/`, an empty one or
+    /// one that breaks the segment rule of [`base_path`](Self::base_path), and for a
+    /// `show-details` that is neither `never` nor `always`. The error never shows a
     /// configured value.
     ///
     /// # Examples
@@ -185,13 +192,78 @@ impl ActuatorSettings {
     }
 }
 
+const BASE_PATH: &str = "management.endpoints.base-path";
+
+/// Trims the base path and checks its segments. The error names the key, never the value.
 fn normalize(path: &str) -> Result<String, ConfigError> {
     let trimmed = path.trim().trim_matches('/');
     if trimmed.is_empty() {
         return Err(ConfigError::invalid(
-            "management.endpoints.base-path",
+            BASE_PATH,
             "must name a path below the root, such as `/actuator`",
         ));
     }
+    let safe = |c: char| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '~');
+    if trimmed
+        .split('/')
+        .any(|segment| segment.is_empty() || !segment.chars().all(safe))
+    {
+        return Err(ConfigError::invalid(
+            BASE_PATH,
+            "each segment must be non-empty and hold only ASCII letters, digits, `-`, `_`, `.` \
+             and `~`",
+        ));
+    }
     Ok(format!("/{trimmed}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rejected(path: &str) {
+        let error = normalize(path).expect_err(path);
+        let text = error.to_string();
+        assert!(text.contains(BASE_PATH), "{text}");
+        let inner = path.trim().trim_matches('/');
+        assert!(
+            inner.is_empty() || !text.contains(inner),
+            "{text} shows the value"
+        );
+    }
+
+    #[test]
+    fn normalize_trims_and_accepts_safe_segments() {
+        assert_eq!(normalize("ops/").unwrap(), "/ops");
+        assert_eq!(normalize(" //a/b-c_d.e~f/ ").unwrap(), "/a/b-c_d.e~f");
+        assert_eq!(normalize("/v1/manage").unwrap(), "/v1/manage");
+    }
+
+    #[test]
+    fn normalize_rejects_the_root_and_an_empty_path() {
+        for path in ["/", "", "  ", "//"] {
+            rejected(path);
+        }
+    }
+
+    #[test]
+    fn normalize_rejects_route_pattern_characters() {
+        for path in ["/{x}", "/a{b", "/a}b", "/*", "/a*", "/a?b"] {
+            rejected(path);
+        }
+    }
+
+    #[test]
+    fn normalize_rejects_inner_whitespace() {
+        for path in ["/a b", "/a\tb", "/a/ b"] {
+            rejected(path);
+        }
+    }
+
+    #[test]
+    fn normalize_rejects_empty_inner_segments() {
+        for path in ["/a//b", "a///b/"] {
+            rejected(path);
+        }
+    }
 }
