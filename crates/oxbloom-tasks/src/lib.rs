@@ -1,4 +1,5 @@
-//! Task scheduling for Oxbloom: fixed-rate, fixed-delay and cron triggers.
+//! Task scheduling for Oxbloom: fixed-rate, fixed-delay and cron triggers, and the
+//! [`Scheduler`] that runs [`Task`]s on tokio when they fire.
 //!
 //! A [`Trigger`] decides when a task runs next. [`Trigger::fixed_rate`] measures the period
 //! from the start of the last run, [`Trigger::fixed_delay`] from its end, and [`Trigger::cron`]
@@ -17,6 +18,10 @@
 //! # Ok::<(), oxbloom_tasks::TriggerError>(())
 //! ```
 
+mod scheduler;
+mod task;
 mod trigger;
 
+pub use scheduler::{Scheduler, SchedulerConfig, TaskStatus};
+pub use task::{BoxFuture, Outcome, RunFn, Scheduling, Task, TaskError};
 pub use trigger::{CronExpr, Trigger, TriggerError, Zone, parse_duration};
