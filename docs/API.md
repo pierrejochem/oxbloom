@@ -5217,14 +5217,15 @@ assert!(matches!(
 ```
 
 A PKCS#12 bundle (`ssl.bundle.pkcs12.<name>`) is read the same way. A wrong password or a damaged file is
-`SslError::Pkcs12`; legacy files with 3DES or RC2 key bags are read as well.
+`SslError::Pkcs12`. The `p12-keystore` reader is used with its `pbes1` feature enabled for older files; only
+files written by the reader's own writer are covered by tests.
 
 ```rust
 let config = Config::from_str(
-    "[ssl.bundle.pkcs12.legacy]\npath = \"config/legacy.p12\"\npassword = \"${LEGACY_P12_PASSWORD}\"",
+    "[ssl.bundle.pkcs12.p12]\npath = \"config/server.p12\"\npassword = \"${P12_PASSWORD}\"",
 )?;
-let legacy = SslBundles::from_config(&config)?.get("legacy")?;
-assert!(legacy.has_identity());
+let p12 = SslBundles::from_config(&config)?.get("p12")?;
+assert!(p12.has_identity());
 ```
 
 #### `SslBundles::with_clock(clock)`

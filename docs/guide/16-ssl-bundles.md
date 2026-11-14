@@ -21,9 +21,9 @@ certificate = "config/web.crt"   # a file path, or inline PEM (starts with -----
 private-key = "config/web.key"   # Secret; a file path or inline PEM
 trust       = "config/ca.pem"    # optional
 
-[ssl.bundle.pkcs12.legacy]
-path     = "config/legacy.p12"
-password = "${LEGACY_P12_PASSWORD}"   # Secret
+[ssl.bundle.pkcs12.p12]
+path     = "config/server.p12"
+password = "${P12_PASSWORD}"   # Secret
 
 [server.ssl]
 bundle = "web"
@@ -76,17 +76,17 @@ A file with several certificates (a chain, with LF or CRLF line ends) loads in o
 A PKCS#12 file (`.p12`, `.pfx`) holds the identity and, often, the CA chain. The leaf is the certificate that belongs to the private key; every other certificate in the file becomes the trust store. Keep the password out of the file with a placeholder:
 
 ```toml
-[ssl.bundle.pkcs12.legacy]
-path     = "config/legacy.p12"
-password = "${LEGACY_P12_PASSWORD}"
+[ssl.bundle.pkcs12.p12]
+path     = "config/server.p12"
+password = "${P12_PASSWORD}"
 ```
 
 ```rust
-let legacy = SslBundles::from_config(&config)?.get("legacy")?;
-assert!(legacy.has_identity());
+let p12 = SslBundles::from_config(&config)?.get("p12")?;
+assert!(p12.has_identity());
 ```
 
-A wrong password or a damaged file is `SslError::Pkcs12`. Files written by OpenSSL 3 and `keytool` (PBES2) load, and so do older files with 3DES or RC2 key bags. JKS keystores are not supported; convert them with `keytool -importkeystore -deststoretype pkcs12`.
+A wrong password or a damaged file is `SslError::Pkcs12`. The `p12-keystore` reader is used with its `pbes1` feature enabled for older files; only files written by the reader's own writer are covered by tests. JKS keystores are not supported; convert them with `keytool -importkeystore -deststoretype pkcs12`.
 
 ## HTTPS for the web server
 
