@@ -35,6 +35,14 @@ impl FailureAnalyzer for SecurityAnalyzer {
                  wildcards such as `*.pdf` are not supported.",
                 "Use `/users/*` or `/users/**` and match the rest in a handler.",
             ),
+            SecurityBuildError::HttpBasicWithoutProvider => (
+                "`http_basic` is configured without a password provider.",
+                "Add one with `password_provider`, for example a `DaoAuthenticationProvider`.",
+            ),
+            SecurityBuildError::InvalidRealm => (
+                "The HTTP Basic realm contains a double quote, a backslash or a control character.",
+                "Use a realm of plain printable text, such as `Oxbloom`.",
+            ),
         };
         Some(FailureAnalysis::new(description, action))
     }
@@ -153,6 +161,24 @@ mod tests {
             SecurityBuildError::InvalidPattern,
             "A security matcher pattern is not valid. Patterns use Ant syntax, and `*` or `**` is allowed only as a whole path segment; `{id}`, `?` and partial wildcards such as `*.pdf` are not supported.",
             "Use `/users/*` or `/users/**` and match the rest in a handler.",
+        );
+    }
+
+    #[test]
+    fn http_basic_without_provider_text() {
+        check(
+            SecurityBuildError::HttpBasicWithoutProvider,
+            "`http_basic` is configured without a password provider.",
+            "Add one with `password_provider`, for example a `DaoAuthenticationProvider`.",
+        );
+    }
+
+    #[test]
+    fn invalid_realm_text() {
+        check(
+            SecurityBuildError::InvalidRealm,
+            "The HTTP Basic realm contains a double quote, a backslash or a control character.",
+            "Use a realm of plain printable text, such as `Oxbloom`.",
         );
     }
 

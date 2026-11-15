@@ -10,6 +10,8 @@
 mod actuator;
 #[cfg(feature = "security")]
 mod jwt;
+#[cfg(feature = "security")]
+mod password;
 #[cfg(feature = "web")]
 mod request_log;
 #[cfg(feature = "security")]
@@ -25,6 +27,8 @@ mod tasks;
 pub use actuator::ActuatorAutoConfiguration;
 #[cfg(feature = "security")]
 pub use jwt::JwtDecoderAutoConfiguration;
+#[cfg(feature = "security")]
+pub use password::PasswordEncoderAutoConfiguration;
 #[cfg(feature = "web")]
 pub use request_log::RequestLogAutoConfiguration;
 #[cfg(feature = "security")]
@@ -39,7 +43,8 @@ pub use tasks::{RetryAutoConfiguration, SchedulerService, TasksAutoConfiguration
 use crate::autoconfig::AutoConfigurations;
 
 /// The auto-configurations of the enabled features, in order: with `security`,
-/// `JwtDecoderAutoConfiguration` and then `SecurityAutoConfiguration`; with `ssl`,
+/// `JwtDecoderAutoConfiguration`, `PasswordEncoderAutoConfiguration` and then
+/// `SecurityAutoConfiguration`; with `ssl`,
 /// `SslAutoConfiguration`; with `actuator`, `ActuatorAutoConfiguration`; with `web`,
 /// `RequestLogAutoConfiguration` and then `WebServerAutoConfiguration` (after the others when
 /// several features are on); with `tasks`, `TasksAutoConfiguration` and then
@@ -52,9 +57,9 @@ use crate::autoconfig::AutoConfigurations;
 /// use oxbloom_boot::{Banner, OxbloomApplication, OxbloomApplicationBuilder, auto_configurations};
 /// use oxbloom_config::Config;
 ///
-/// // `security` adds two auto-configurations, `ssl` one, `actuator` one, `web` two and
+/// // `security` adds three auto-configurations, `ssl` one, `actuator` one, `web` two and
 /// // `tasks` two.
-/// let expected = 2 * usize::from(cfg!(feature = "security"))
+/// let expected = 3 * usize::from(cfg!(feature = "security"))
 ///     + usize::from(cfg!(feature = "ssl"))
 ///     + usize::from(cfg!(feature = "actuator"))
 ///     + 2 * usize::from(cfg!(feature = "web"))
@@ -80,9 +85,12 @@ use crate::autoconfig::AutoConfigurations;
 /// let all = || OxbloomApplication::builder().auto_configurations(auto_configurations());
 /// #[cfg(feature = "security")]
 /// {
-///     use oxbloom_boot::JwtDecoderAutoConfiguration;
+///     use oxbloom_boot::{JwtDecoderAutoConfiguration, PasswordEncoderAutoConfiguration};
 ///     assert_eq!(keys(all(), "security.jwt."), 8);
 ///     assert_eq!(keys(all().exclude::<JwtDecoderAutoConfiguration>(), "security.jwt."), 0);
+///     // 4 `security.password` keys, 2 `security.http-basic` keys and 4 `security.users` keys.
+///     assert_eq!(keys(all(), "security."), 18);
+///     assert_eq!(keys(all().exclude::<PasswordEncoderAutoConfiguration>(), "security."), 8);
 /// }
 /// #[cfg(feature = "web")]
 /// {
@@ -123,6 +131,7 @@ pub fn auto_configurations() -> AutoConfigurations {
     #[cfg(feature = "security")]
     let list = list
         .add::<JwtDecoderAutoConfiguration>()
+        .add::<PasswordEncoderAutoConfiguration>()
         .add::<SecurityAutoConfiguration>();
     #[cfg(feature = "ssl")]
     let list = list.add::<SslAutoConfiguration>();

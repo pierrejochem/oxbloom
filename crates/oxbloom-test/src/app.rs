@@ -9,7 +9,9 @@ use oxbloom_boot::{
     ShutdownHandle, StartupError, WebServer, WebServerAutoConfiguration,
 };
 #[cfg(feature = "security")]
-use oxbloom_boot::{JwtDecoderAutoConfiguration, SecurityAutoConfiguration};
+use oxbloom_boot::{
+    JwtDecoderAutoConfiguration, PasswordEncoderAutoConfiguration, SecurityAutoConfiguration,
+};
 use oxbloom_config::Config;
 use oxbloom_core::Clock;
 use oxbloom_di::{Container, ContainerBuilder};
@@ -166,8 +168,8 @@ impl TestApp {
     }
 
     /// Creates an application with the secured slice: the [`web`](Self::web) slice plus
-    /// `JwtDecoderAutoConfiguration` and `SecurityAutoConfiguration`. Needs the feature
-    /// `security`.
+    /// `JwtDecoderAutoConfiguration`, `PasswordEncoderAutoConfiguration` and
+    /// `SecurityAutoConfiguration`. Needs the feature `security`.
     ///
     /// Without a `SecurityCustomizer`, every request must be authenticated. Put the
     /// `security.jwt` section in [`config_str`](Self::config_str), because secret keys are
@@ -204,6 +206,7 @@ impl TestApp {
     pub fn secured() -> TestApp {
         TestApp::web()
             .auto_configuration::<JwtDecoderAutoConfiguration>()
+            .auto_configuration::<PasswordEncoderAutoConfiguration>()
             .auto_configuration::<SecurityAutoConfiguration>()
     }
 

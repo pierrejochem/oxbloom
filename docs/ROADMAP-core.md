@@ -553,6 +553,66 @@ Rulings made during C9b:
 - The retry API is documented as a subsection of `docs/API.md` section 4.13, not as a new section 4.14, and `RetryAutoConfiguration` sits beside `TasksAutoConfiguration` in the boot section.
 - Work happens on the branch `c9b-retry`, which started from `c9a-tasks` because C9a was not merged to `main` yet.
 
+### Security Slice 6a: Password encoding, user details and HTTP Basic (`oxbloom-security`) — done
+Done on 2026-11-14; the design is the Slice 6a spec `2026-11-14-password-basic-design.md` and the plan is `2026-11-14-password-basic.md` (both local files under `docs/superpowers`, named here without a link), usage is in the guide chapter `docs/guide/19-password-login.md` and `docs/API.md` (section 4.7, the password login subsection, and `PasswordEncoderAutoConfiguration`), and decisions are in ADR 0086. Slice 6b (form login, sessions, logout) is open.
+
+Delivered:
+- In `oxbloom-security`: `PasswordEncoder`, `Argon2PasswordEncoder` (Argon2id, OWASP minimum by default, PHC strings) and `DelegatingPasswordEncoder` (`{id}hash`, only `argon2` today); `UserDetails`, `UserDetailsService`, `InMemoryUserDetailsService`; `DaoAuthenticationProvider` with a dummy-hash verification for unknown users and hashing in `spawn_blocking`; `HttpSecurity::http_basic` and `password_provider`; the settings readers `PasswordSettings`, `Argon2Settings`, `HttpBasicSettings` and `users_from_config`.
+- `AuthenticationRequest::UsernamePassword`, `AuthenticationError::{AccountDisabled, AccountLocked}` and `SecurityBuildError::{HttpBasicWithoutProvider, InvalidRealm}`.
+- In `oxbloom-boot` (feature `security`): `PasswordEncoderAutoConfiguration` (encoder, in-memory user store from `security.users`, DAO provider; ten property metadata entries including the two `security.http-basic.*` keys), HTTP Basic in `SecurityAutoConfiguration` when `security.http-basic.enabled = true`, and analyzer texts for the two new build errors.
+- `examples/todos`: `GET /api/admin/stats` behind HTTP Basic with two demo users, tests and README notes.
+- ADR 0086, the guide chapter 19 (the roadmap chapter is now 20) and the API section.
+
+Gate numbers at the end of Slice 6a: `cargo test --workspace --all-features` 2821 passed, 0 failed, 8 ignored (2700 before Slice 6a); `cargo test -p oxbloom-boot` per feature: none 460, `security` 460, `web` 460, `logging` 480, `ssl` 460, `actuator` 473, `tasks` 484, all features 518, each with 0 failed and 1 ignored (the probe); `make check-examples` 59 (54 before); clippy `-D warnings` and `cargo fmt --check` clean; the boot stack probes are unchanged at 238 KB (237 overflows) and 239 KB with all features (238 overflows); the `cargo build -p oxbloom-boot` builds for `tasks`, `tasks,logging`, `tasks,ssl`, `tasks,security`, `tasks,actuator`, `security`, `security,logging`, `security,web` and `web`, each with default features off, pass, and the `--no-default-features --features tasks` doc tests (113) pass; `cargo tree -i ring --workspace --all-features` finds no `ring`.
+
+Limits that users must know (also in the guide):
+- The enums `AuthenticationRequest`, `AuthenticationError` and `SecurityBuildError` are not `#[non_exhaustive]`, so the added variants are a semver-breaking change.
+- `security.http-basic.enabled` defaults to `false`; adding users does not open Basic.
+- Keys under `security.users.<name>` are matched ignoring case, `-` and `_`: two names that differ only in these fail to load from one file (`DuplicateKey`) and merge across sources. The written spelling is kept and compared exactly at login.
+- With Basic on, the chain adds every `dyn AuthenticationProvider` bean as a password provider.
+- No rate limiting and no lockout counters; no database store; no re-encoding of a stale hash on login.
+- `matches` verifies with the cost stored in the hash, so each concurrent login uses that memory (19 MiB by default); the dummy hash of an unknown user uses the configured cost, so equal timing holds only while stored hashes use the configured parameters. Anonymous requests are bounded only by the blocking pool of tokio (512 threads by default), so the worst case is about 512 x 19 MiB, roughly 9.5 GiB at the default cost. A login limit or a semaphore around the hash is deferred.
+- A malformed `Authorization` header bypasses a custom `entry_point` and gets the built-in Basic challenge.
+- The timing of an unknown user is equalised with a dummy hash, but a user with a malformed stored hash answers faster (a narrow difference).
+
+Follow-ups from Slice 6a, not yet scheduled:
+- Form login, sessions and logout (Slice 6b).
+- Login rate limiting, a limit on concurrent logins and lockout counters.
+- A database-backed `UserDetailsService`.
+- Re-encoding a stale hash after a successful login.
+- bcrypt and other algorithms in the `DelegatingPasswordEncoder`, and account-expiry flags and password policy.
+- `#[non_exhaustive]` on the security enums.
+
+Deferred minors from the Slice 6a reviews:
+- `matches` of the encoder itself (not the configured users, whose hashes are now range-checked at startup) takes its cost from the stored hash, so a hostile hash that bypassed the config reader can still hang or exhaust a login.
+- A stale doc comment in `chain.rs` (`basic` versus `scheme`) remains.
+- `upgrade_encoding` ignores the algorithm variant and the version, so an `argon2i` or `argon2d` hash or a version other than 19 reports no upgrade.
+- `Argon2PasswordEncoder::new` does not cap `memory_kib` upward beyond what the crate accepts: `new(u32::MAX, 1, 1)` passes validation and `encode` then panics on out-of-memory. The `expect` message in `encode` is inaccurate and there is no `# Panics` note.
+- `DelegatingPasswordEncoder::new` accepts empty ids and ids that contain braces.
+- Encoder tests are missing for `{}`, an empty rest after `{argon2}`, nested braces, hostile parameters and a registered id that is not the default.
+- `DaoAuthenticationProvider::new` runs `encode` synchronously for the dummy hash, which blocks an async worker when it is called from async code; a rustdoc note is missing.
+- A user with a malformed stored hash answers faster than an unknown user, because nothing is hashed: a narrow timing difference.
+- The raw password is copied into a plain `String` for `spawn_blocking` and is not zeroized.
+- No test captures the tracing output of a failed login, and the test for disabled and locked accounts checks the status but not the equality of `WWW-Authenticate`.
+- The Basic `HeaderValue` is formatted for every 401 with an `.ok()` fallback instead of once in `build()`.
+- A long Basic token is fully decoded before the 1024-byte caps of the provider apply; a cheap length check before decoding is missing.
+- Untested cases: `ProviderUnavailable` giving 503 in a Basic chain, the answer for a malformed header on a mixed chain, and the non-UTF-8 and non-text header cases, which assert the status only.
+- There is no failure-analyzer text for the new keys (the analyzer covers only `security.jwt`), and `TestApp::secured()` now also adds `PasswordEncoderAutoConfiguration`.
+- The `security.http-basic.*` keys sit in the metadata of `PasswordEncoderAutoConfiguration` although `SecurityAutoConfiguration` reads them, so excluding the first hides keys that the chain applies.
+- The "not echoed" test covers only the above-bound value, and every Argon2 parameter rejection is reported on `memory-kib`.
+- In the example, the `stats()` test helper returns an opaque tuple and `tests/basic.rs` hand-rolls Base64.
+- The semaphore around `DaoAuthenticationProvider::verify` (a limit on concurrent hashes) stays deferred.
+- The check that rejects a realm with control characters is written twice, in `password_config.rs` and in `HttpSecurity::http_basic`, so the two can drift apart.
+- `docs/guide/06-conditions-and-auto-configuration.md` (line 131) still says `oxbloom-boot` ships three auto-configurations; it leaves out `RequestLog`, `Ssl`, `Actuator`, `Tasks`, `Retry` and `Password`, and "without either feature" ignores `tasks`.
+- The guide chapter 19 and `docs/API.md` say only "`{argon2}` plus a PHC string" for a configured password and do not mention the startup range check on the cost parameters.
+- The example README says any authenticated user can read `/actuator/info` and `/actuator/loggers`; loggers answers 404 in that configuration, and if it were mounted, the `viewer` could change log levels because the rule asks for no role. A comment in `examples/todos/tests/api.rs` (around line 382) is stale, and no test checks that `viewer` gets 200 from `/actuator/info`.
+
+Rulings made during Slice 6a:
+- Argon2 comes from the RustCrypto `argon2` crate, which is pure Rust, so the dependency tree stays free of `ring`.
+- Basic is opt-in through `security.http-basic.enabled`, because configured users must not open a route to passwords on their own.
+- Every failed login gets the same 401 and the same challenge, also for a disabled or locked account; the reason is only in the `debug` log.
+- Work happens on the branch `s6a-password-basic`, started from `main` after the local merge of C9a and C9b.
+
 ### C10: Test support (`oxbloom-test`)
 
 #### C10a: Context runner and clock — done
@@ -606,7 +666,7 @@ Deferred minors from the C10b reviews:
 
 1. **C2 Configuration v2.** Smallest dependencies, fixes open defects, and every other slice reads config.
 2. **C1 DI v2** (done). Required by C3, C4, C8 and C10.
-3. **Security Slice 6** (`PasswordEncoder`, `UserDetailsService`, Basic, form login and sessions). It needs beans with lifecycle and typed config, so it comes after C1 and C2.
+3. **Security Slice 6** (`PasswordEncoder`, `UserDetailsService`, Basic, form login and sessions): 6a (password encoding, user details, HTTP Basic) is done, 6b (form login and sessions) is open. It needs beans with lifecycle and typed config, so it comes after C1 and C2.
 4. **C3 Application lifecycle** with `FailureAnalyzer` (done: C3a and C3b).
 5. **C5 Logging** (C5a and C5b done), then **C6 Web server properties, errors and JSON** (C6a, C6b-1 and C6b-2 done).
 6. **C4 Conditions and auto-configuration** (C4a, the mechanism, and C4b, auto-configuring the existing wiring with property metadata, done).

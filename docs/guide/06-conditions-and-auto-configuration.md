@@ -128,7 +128,7 @@ OxbloomApplication::builder()
 
 ## Auto-configured web and security
 
-`oxbloom-boot` ships three auto-configurations, behind its `security` and `web` features, that wire the pieces the framework already has. `oxbloom_boot::auto_configurations()` returns the list for the enabled features, in dependency order: `JwtDecoderAutoConfiguration` and `SecurityAutoConfiguration` with `security`, then `WebServerAutoConfiguration` with `web`. Add the list to the builder with `.auto_configurations(oxbloom_boot::auto_configurations())`. Nothing is wired until you do, and without either feature the function is not available.
+`oxbloom-boot` ships auto-configurations, behind its `security`, `web` and other features, that wire the pieces the framework already has. `oxbloom_boot::auto_configurations()` returns the list for the enabled features, in dependency order: `JwtDecoderAutoConfiguration`, `PasswordEncoderAutoConfiguration` and `SecurityAutoConfiguration` with `security`, then `WebServerAutoConfiguration` with `web`. Add the list to the builder with `.auto_configurations(oxbloom_boot::auto_configurations())`. Nothing is wired until you do, and without either feature the function is not available.
 
 You contribute to the defaults with beans, so no code of yours names the server or the chain:
 

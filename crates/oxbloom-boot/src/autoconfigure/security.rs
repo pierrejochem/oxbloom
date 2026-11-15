@@ -2,10 +2,14 @@
 
 use std::sync::Arc;
 
+use oxbloom_config::Config;
 use oxbloom_di::{Configuration, ContainerBuilder, DiError, component};
-use oxbloom_security::{HttpSecurity, JwtDecoder, SecurityFilterChain};
+use oxbloom_security::{
+    AuthenticationProvider, HttpBasicSettings, HttpSecurity, JwtDecoder, SecurityFilterChain,
+};
 
 use super::jwt::JwtDecoderAutoConfiguration;
+use super::password::PasswordEncoderAutoConfiguration;
 use crate::autoconfig::{AutoConfiguration, ConfigRef};
 
 /// Contributes rules to the `SecurityFilterChain` that [`SecurityAutoConfiguration`] builds.
@@ -91,8 +95,17 @@ pub trait SecurityCustomizer: Send + Sync {
 /// in order; when there is none, the only rule is `any_request().authenticated()`, so the
 /// application stays closed until it opens routes. A `dyn JwtDecoder` bean (from
 /// [`JwtDecoderAutoConfiguration`], which runs first, or the application's) is added with
-/// `oauth2_resource_server`. A `SecurityBuildError` fails the build as `DiError::Creation`
-/// with that error as source.
+/// `oauth2_resource_server`.
+///
+/// HTTP Basic is off unless `security.http-basic.enabled` is `true` (read with
+/// `oxbloom_security::HttpBasicSettings::from_config`). Then the chain calls `http_basic` with
+/// `security.http-basic.realm` and adds every `dyn AuthenticationProvider` bean (such as the
+/// `DaoAuthenticationProvider` of [`PasswordEncoderAutoConfiguration`], which runs first) with
+/// `password_provider`. Configured users alone never open Basic. With Basic enabled and no
+/// provider bean the build fails with `SecurityBuildError::HttpBasicWithoutProvider`.
+///
+/// A `SecurityBuildError` fails the build as `DiError::Creation` with that error as source; a
+/// bad `security.http-basic` key fails it the same way with the `ConfigError` naming the key.
 ///
 /// # Examples
 ///
@@ -100,7 +113,8 @@ pub trait SecurityCustomizer: Send + Sync {
 /// use std::sync::{Arc, Mutex};
 /// use oxbloom_boot::{
 ///     AutoConfiguration, Banner, ConfigRef, JwtDecoderAutoConfiguration, OxbloomApplication,
-///     RunListener, SecurityAutoConfiguration, auto_configurations,
+///     PasswordEncoderAutoConfiguration, RunListener, SecurityAutoConfiguration,
+///     auto_configurations,
 /// };
 /// use oxbloom_config::Config;
 /// use oxbloom_di::{Container, DiError};
@@ -136,7 +150,10 @@ pub trait SecurityCustomizer: Send + Sync {
 /// assert!(*skipped.0.lock().unwrap());
 /// assert_eq!(
 ///     SecurityAutoConfiguration::after(),
-///     [ConfigRef::of::<JwtDecoderAutoConfiguration>()]
+///     [
+///         ConfigRef::of::<JwtDecoderAutoConfiguration>(),
+///         ConfigRef::of::<PasswordEncoderAutoConfiguration>(),
+///     ]
 /// );
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// # })?;
@@ -155,15 +172,23 @@ impl Configuration for SecurityAutoConfiguration {
 
 impl AutoConfiguration for SecurityAutoConfiguration {
     fn after() -> Vec<ConfigRef> {
-        vec![ConfigRef::of::<JwtDecoderAutoConfiguration>()]
+        vec![
+            ConfigRef::of::<JwtDecoderAutoConfiguration>(),
+            ConfigRef::of::<PasswordEncoderAutoConfiguration>(),
+        ]
     }
 }
 
-/// The chain from the customizers, or the closed default, plus the decoder when there is one.
+/// The chain from the customizers, or the closed default, plus the decoder when there is one
+/// and HTTP Basic over the provider beans when `security.http-basic.enabled` is `true`.
 fn security_filter_chain(
+    config: Arc<Config>,
     customizers: Vec<Arc<dyn SecurityCustomizer>>,
     decoder: Option<Arc<dyn JwtDecoder>>,
+    providers: Vec<Arc<dyn AuthenticationProvider>>,
 ) -> Result<SecurityFilterChain, DiError> {
+    let basic = HttpBasicSettings::from_config(&config)
+        .map_err(DiError::creation_from::<SecurityFilterChain>)?;
     let mut http = HttpSecurity::new();
     if customizers.is_empty() {
         // Closed by default: nothing is reachable without authentication.
@@ -174,6 +199,13 @@ fn security_filter_chain(
     }
     if let Some(decoder) = decoder {
         http = http.oauth2_resource_server(|r| r.jwt(decoder));
+    }
+    if basic.enabled {
+        let realm = basic.realm;
+        http = http.http_basic(|b| b.realm(realm));
+        for provider in providers {
+            http = http.password_provider(provider);
+        }
     }
     http.build()
         .map_err(DiError::creation_from::<SecurityFilterChain>)

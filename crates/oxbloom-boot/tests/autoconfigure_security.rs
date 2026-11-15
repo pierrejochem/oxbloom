@@ -469,6 +469,8 @@ fn metadata_keys_match_config() {
 
 #[test]
 fn auto_configurations_lists_both_and_metadata_follows_exclusion() {
+    // `security` has three: `JwtDecoderAutoConfiguration`, `PasswordEncoderAutoConfiguration` and
+    // `SecurityAutoConfiguration`.
     // `web` adds `RequestLogAutoConfiguration` and `WebServerAutoConfiguration`, `ssl` adds
     // `SslAutoConfiguration`, `actuator` adds `ActuatorAutoConfiguration`, `tasks` adds
     // `TasksAutoConfiguration` and `RetryAutoConfiguration`.
@@ -478,7 +480,7 @@ fn auto_configurations_lists_both_and_metadata_follows_exclusion() {
     let tasks = 2 * usize::from(cfg!(feature = "tasks"));
     assert_eq!(
         auto_configurations().len(),
-        2 + web + ssl + actuator + tasks
+        3 + web + ssl + actuator + tasks
     );
     let with = OxbloomApplication::builder()
         .auto_configurations(auto_configurations())

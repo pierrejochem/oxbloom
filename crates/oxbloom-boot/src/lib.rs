@@ -176,7 +176,8 @@ pub use autoconfigure::SslAutoConfiguration;
 pub use autoconfigure::auto_configurations;
 #[cfg(feature = "security")]
 pub use autoconfigure::{
-    JwtDecoderAutoConfiguration, SecurityAutoConfiguration, SecurityCustomizer,
+    JwtDecoderAutoConfiguration, PasswordEncoderAutoConfiguration, SecurityAutoConfiguration,
+    SecurityCustomizer,
 };
 #[cfg(feature = "web")]
 pub use autoconfigure::{RequestLogAutoConfiguration, WebServerAutoConfiguration};

@@ -26,7 +26,7 @@ use oxbloom_boot::SecurityCustomizer;
 use oxbloom_di::component;
 use oxbloom_security::HttpSecurity;
 use oxbloom_web::{HttpError, IntoResponse, Json, Request, Response, controller};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::todo::TodoStore;
 
@@ -48,6 +48,13 @@ struct FullTodo {
 struct TodoChanges {
     title: Option<String>,
     done: Option<bool>,
+}
+
+/// The body of `GET /api/admin/stats`.
+#[derive(Debug, Serialize)]
+struct Stats {
+    total: usize,
+    done: usize,
 }
 
 /// A 404 as an `HttpError`; the error filter renders it as problem+json.
@@ -72,6 +79,50 @@ fn id_param(req: &Request) -> Result<u64, HttpError> {
         .ok_or_else(|| {
             HttpError::new(StatusCode::BAD_REQUEST).detail("the id must be a whole number")
         })
+}
+
+/// The admin controller for `/api/admin`: one route. The rule that guards it (HTTP Basic,
+/// role `ADMIN`) is in [`PublicPaths`].
+///
+/// # Examples
+///
+/// ```
+/// use std::sync::Arc;
+/// use oxbloom_web::{App, HttpMethod, Request};
+/// use todos::api::{AdminController, TodoController};
+/// use todos::todo::TodoStore;
+///
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let store = Arc::new(TodoStore::default());
+/// store.create("one".into());
+/// let controller = Arc::new(AdminController { store });
+/// let app = App::new().routes(controller.routes())?;
+/// let res = app.handle(Request::new(HttpMethod::Get, "/api/admin/stats")).await;
+/// assert_eq!(res.status(), 200);
+/// # Ok(())
+/// # }
+/// ```
+#[component]
+pub struct AdminController {
+    /// The store the statistics are counted on.
+    pub store: Arc<TodoStore>,
+}
+
+#[controller("/api/admin")]
+impl AdminController {
+    /// `GET /api/admin/stats`: the numbers of todos, as `{"total":..,"done":..}`. The
+    /// security rules let only the role `ADMIN` in.
+    #[get("/stats")]
+    async fn stats(&self, _req: Request) -> Response {
+        let all = self.store.list(None);
+        let done = all.iter().filter(|t| t.done).count();
+        Json(&Stats {
+            total: all.len(),
+            done,
+        })
+        .into_response()
+    }
 }
 
 /// The CRUD controller for `/api/todos`.
@@ -227,9 +278,11 @@ impl TodoController {
 }
 
 /// The security rules. `/api/todos/**` is open so `curl` works out of the box,
-/// and so are the actuator's health probes (`GET /actuator/health/**`); every other
-/// path, including unknown ones and the other actuator endpoints, needs an
-/// authenticated request (without a configured `security.jwt` that means 401).
+/// and so are the actuator's health probes (`GET /actuator/health/**`).
+/// `GET /api/admin/stats` needs the role `ADMIN`, through HTTP Basic (see the
+/// README). Every other path, including unknown ones and the other actuator
+/// endpoints, needs an authenticated request: any user of HTTP Basic, including
+/// `viewer`, passes, and an anonymous request gets 401.
 ///
 /// The rules live here, and not behind `management.endpoints.health.public`,
 /// because the chain takes only one `authorize` section.
@@ -264,6 +317,8 @@ impl SecurityCustomizer for PublicPaths {
                 .permit_all()
                 .get("/actuator/health/**")
                 .permit_all()
+                .get("/api/admin/stats")
+                .has_role("ADMIN")
                 .any_request()
                 .authenticated()
         })

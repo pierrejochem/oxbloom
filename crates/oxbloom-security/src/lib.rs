@@ -90,15 +90,19 @@ mod authentication;
 mod authorization;
 mod chain;
 mod config;
+mod dao;
 #[cfg(feature = "di")]
 mod di;
 mod http_security;
 mod jwks;
 mod jwt;
 mod matcher;
+mod password;
+mod password_config;
 mod provider;
 #[cfg(feature = "jwks")]
 mod reqwest_fetcher;
+mod user;
 
 pub use authentication::{
     Authentication, AuthenticationError, AuthenticationRequest, GrantedAuthority,
@@ -112,10 +116,11 @@ pub use chain::{
 pub use config::{
     SECRET_KEY, jwks_ssl_bundle, jwt_decoder_from_config, jwt_decoder_from_config_with_clock,
 };
+pub use dao::DaoAuthenticationProvider;
 #[cfg(feature = "di")]
 pub use di::SecurityContainerExt;
 pub use http_security::{
-    AuthorizeBuilder, HttpSecurity, ResourceServer, RuleBuilder, SecurityBuildError,
+    AuthorizeBuilder, HttpBasic, HttpSecurity, ResourceServer, RuleBuilder, SecurityBuildError,
 };
 pub use jsonwebtoken::{Algorithm, Header as JwtHeader};
 pub use jwks::{FetchError, JwksError, JwksFetcher, JwksSource, JwksSourceBuilder, KeyLookupError};
@@ -124,6 +129,14 @@ pub use jwt::{
     JwtConfigError, JwtDecoder, JwtDecoderBuilder,
 };
 pub use matcher::RequestMatcher;
+pub use password::{
+    ARGON2_ID, Argon2PasswordEncoder, DelegatingPasswordEncoder, PasswordEncoder,
+    PasswordEncoderError,
+};
+pub use password_config::{Argon2Settings, HttpBasicSettings, PasswordSettings, users_from_config};
 pub use provider::{AuthenticationProvider, ProviderManager};
 #[cfg(feature = "jwks")]
 pub use reqwest_fetcher::ReqwestJwksFetcher;
+pub use user::{
+    InMemoryUserDetailsService, UserDetails, UserDetailsError, UserDetailsService, UserStoreError,
+};

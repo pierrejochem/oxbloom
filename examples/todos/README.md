@@ -10,6 +10,26 @@ cargo run -p todos -- --server.port=0
 The commands below use port 8081, the port in `application.toml`. Start the example
 without `--server.port=0` to use it.
 
+## Admin route with HTTP Basic
+
+`GET /api/admin/stats` needs the role `ADMIN`. The example turns on HTTP Basic with
+`security.http-basic.enabled = true` and configures two users under `security.users` in
+`application.toml`: `admin` with the role `ADMIN` and `viewer` with the role `USER`. Their
+passwords are `{argon2}` hashes of the password encoder. Plain-text passwords are refused
+at start.
+
+The passwords `changeit` (admin) and `viewonly` (viewer) are demo values only. They are
+committed in the open, so change them, and keep real hashes out of version control, before
+any real use.
+
+```text
+curl -u admin:changeit http://127.0.0.1:8081/api/admin/stats      # 200
+curl -u viewer:viewonly http://127.0.0.1:8081/api/admin/stats     # 403
+curl http://127.0.0.1:8081/api/admin/stats                        # 401 with a Basic challenge
+```
+
+Basic sends the password with every request, so use it over TLS only.
+
 ## Actuator
 
 The health probes are open, because the security rules of the example permit
@@ -22,9 +42,10 @@ curl http://127.0.0.1:8081/actuator/health/readiness
 ```
 
 The other actuator endpoints, `/actuator/info` and `/actuator/loggers`, need
-authentication, as every path outside `/api/todos/**` and the health probes does. The
-example configures no `security.jwt` and ships no token issuer, so these calls answer 401
-as written here.
+authentication, as every path outside `/api/todos/**` and the health probes does. With HTTP
+Basic on, any authenticated user can read them, including the demo user `viewer`
+(`curl -u viewer:viewonly` gets 200 from `/actuator/info`), because the rules ask for
+authentication and no role. An anonymous call answers 401 as written here.
 
 ```text
 curl http://127.0.0.1:8081/actuator/info
@@ -37,7 +58,7 @@ available at build time.
 
 Logger targets use `::` as the separator, so a dotted target is rejected with 400. In an
 application with `security.jwt` configured, this call sets the level of the `todos` target
-to `DEBUG` at run time. In this example, without a token, it answers 401.
+to `DEBUG` at run time. In this example, an anonymous call answers 401.
 
 ```text
 curl -X POST -H 'content-type: application/json' \
