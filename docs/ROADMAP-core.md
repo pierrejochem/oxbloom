@@ -618,7 +618,8 @@ Done on 2026-11-15; the design is the Slice 6b spec `2026-11-15-sessions-design.
 
 Delivered:
 - In `oxbloom-security`: `Session` (`get`, `set`, `remove`, `invalidate`, `rotate_id`, `is_new`, `id`), `RequestSessionExt`, the `SessionStore` trait (`load`, `save`, `update`, `rotate`, `delete`, `maintain`) with `SessionData` and the sharded `InMemorySessionStore` (cap, oldest-touched eviction), `CookieSessionBackend` (AES-256-GCM through `aws-lc-rs`, key from HKDF-SHA256 over the whole secret with an empty salt and the info `oxbloom session cookie v1`, cookie name as associated data, random 96-bit nonce per write, `old-secrets` for rotation), `SessionBackend`, `SessionFilter` at `SESSION_ORDER` (-101), `SessionSettings`, `SameSite`, `SecureMode`, `SessionError` and `SessionConfig`.
-- The trait gained `update` (write only when the id still exists) and `maintain`, and `rotate` returns `Result<bool>`, so a request that was already running cannot bring a logged-out session back.
+- The trait gained `update` (write only when the id still exists) and `maintain`, and `rotate` returns `Result<bool>`, so a request that was already running cannot bring a logged-out session back. A request that loses that race stores nothing and leaves the cookie alone.
+- The filter enforces the absolute timeout at load for every backend (stored data past its creation time plus the absolute timeout counts as unknown) and gives the store the remaining lifetime of the session as its TTL, so a store that honours only the TTL never serves a session past its absolute deadline.
 - In `oxbloom-boot` (feature `security`, which now also enables `dep:oxbloom-web`): `SessionAutoConfiguration`, which runs after the password encoder and before the security chain, only when the table `security.session` exists, with ten property metadata entries. A user `dyn SessionStore` bean replaces the in-memory store with `store = "memory"`, a user `SessionFilter` bean steps the configured one aside (it must also be provided as `dyn Filter`), and one optional `Arc<dyn Clock>` bean feeds the filter, the store and the cookie backend.
 - `examples/todos`: `GET /api/visits` counts visits in a session (`store = "memory"`), open to anonymous users, with a test and README notes.
 - ADR 0087, the guide chapter 20 (the roadmap chapter is now 21) and the API section.
@@ -626,24 +627,23 @@ Delivered:
 Gate numbers at the end of Slice 6b: to be filled by the controller after the final gate.
 
 Limits that users must know (also in the guide):
-- There is no CSRF protection yet: the cookie is `HttpOnly` and `SameSite=Lax` only, until Slice 6d. There is no login or logout endpoint until Slice 6c.
+- There is no CSRF protection yet: until Slice 6d, `SameSite=Lax` is the only mitigation. `HttpOnly` keeps scripts from reading the cookie and does nothing against cross-site requests. There is no login or logout endpoint until Slice 6c.
 - A stateless cookie cannot be revoked on the server: a copy stays valid until its expiry. With the stateless backend `Session::id()` is random on every request.
 - Random nonces cap one key at about 2^32 writes, so the secret should be rotated periodically.
-- The in-memory store is per process: sessions are lost at a restart and not shared between instances. The global cap evicts the oldest-touched session; the eviction scan is O(n) per new save at the cap (a flood needs an anonymous endpoint that writes the session, and sampled eviction is planned before Slice 6d), and the cap can be exceeded by the number of racing saves.
+- The in-memory store is per process: sessions are lost at a restart and not shared between instances. The global cap evicts the oldest-touched session; the eviction scan is O(n) per new save at the cap, and the cap can be exceeded by the number of racing saves. An anonymous flood that writes sessions, such as `GET /api/visits` in the todos example, can fill the cap and then evict real users' sessions, at a cost of about one scan per new session. Sampled eviction is planned before Slice 6c's saved request.
 - Concurrent requests on one session are last-writer-wins. A logout racing another request cannot bring the session back. If a rotate commits before a concurrent logout of the old id, the session lives on under the new id. A `Session` clone used after the filter ran loses its writes silently.
-- A store error or a `TooLarge` session answers 503 (the client sees the server's problem document and no session cookie), and the side effects of the handler stand.
+- A store error or a `TooLarge` session answers 503 (the client sees the server's problem document and no session cookie), and the side effects of the handler stand. A failed `rotate` or save after the handler ran leaves the client without a session.
 - At most 8 same-name cookie values are tried per request, and a `Cookie` header over 8 KiB counts as none.
 - `security.session.secret` and `old-secrets` are refused on the command line, but a placeholder can evade this (the same gap as `security.jwt.secret`). `old-secrets` in one environment variable is split on commas, so use the indexed form for a secret that contains a comma.
 
 Follow-ups from Slice 6b, not yet scheduled:
 - Login and logout endpoints and form login (Slice 6c).
-- CSRF protection (Slice 6d), and sampled eviction in the in-memory store before it.
+- Sampled eviction in the in-memory store, before Slice 6c's saved request, because anonymous session writers already exist.
+- CSRF protection (Slice 6d).
 - Redis and SQL session stores (they must implement `update` and `rotate` as conditional writes).
 
 Notes for Slice 6c:
-- A session restarted after `invalidate()` that then calls `rotate_id()` takes the rotate path, so if the old id was deleted concurrently the freshly minted session is dropped and the cookie cleared; the commit should choose the arm on `state.is_new`.
 - Logout should invalidate by the current session id, and an application should call `rotate_id` only at login.
-- A `Clear` after a lost race can wipe a newer cookie if the browser sees that response last; returning no cookie action instead of `Clear` is an alternative.
 - `SessionSettings::validate` now rejects an idle timeout below one second (such a value used to pass and made every write answer `Clear`).
 - Browser-side ordering of `Max-Age=0` against a `Set-Cookie` of a concurrent rotate needs session lineage (Slice 6c or 6d).
 
@@ -652,7 +652,7 @@ Deferred minors from the Slice 6b reviews:
 - An over-long `Cookie` header is skipped on its own and no test pins it, and `SID=` returning an empty value is untested.
 - Tests are missing for cookie names with a double quote, a comma, a tab or non-ASCII characters, and for paths with other control or non-ASCII characters.
 - There is no test for `Duration::MAX` or for a `max_age` of `None`.
-- The eviction at the cap scans every shard synchronously on each new save. This is a CPU risk only once an anonymous endpoint writes sessions (CSRF tokens in Slice 6d), and sampled eviction should be used before 6d.
+- The eviction at the cap scans every shard synchronously on each new save. Anonymous session writers already exist (`GET /api/visits` in the todos example), so a cookieless flood can fill the cap, cost about one scan per new session and evict real users' sessions; sampled eviction should land before Slice 6c's saved request.
 - Racing saves can exceed the cap; this is documented.
 - Tests are missing for expired entries freeing room under the cap, for `rotate` of an expired old id and for `rotate` onto an existing new id, and no test captures the eviction warning.
 - A failure of the random number generator panics in the request path (the filter does not catch it; the error filter answers 500).
@@ -663,24 +663,24 @@ Deferred minors from the Slice 6b reviews:
 - Tests are missing for wrong types inside `d`, a negative or float `c`, `touched` before `created`, and a 29-byte value.
 - The 8-value cookie cap and the 43-character shape filter are untested.
 - After a backwards clock jump the once-a-minute `maintain` stops until the clock passes the last run plus 60 seconds.
-- The docs did not say what a 503 at commit does to a handler that already ran (side effects stand, its response including `Set-Cookie` is replaced, and a rotate followed by a failed save logs the client out); the guide now says it.
-- An absolute deadline that passes between load and commit saves a dead entry and sends `Max-Age=0` with a value; the filter should return `Clear` without a save.
 - The once-a-minute `maintain` sweep runs inline on a request.
 - The test `filter_order_is_before_security` does not prove the order (`session_filter.rs` pins it); it should be renamed or assert from the security chain.
 - The doc of `SessionAutoConfiguration` said the filter "backs off" for a user `SessionFilter`, but a bare `SessionFilter` bean is not a `dyn Filter`, so the application must also provide it as `dyn Filter`; the docs now say so.
-- In `session_filter` of boot, the `_ =>` arm treats a cookie store without a secret as the memory store silently; it should match explicitly and return an error (the reader already refuses that case).
 - A placeholder can evade the command-line refusal of the secrets (the same gap as the JWT reader); the guide notes it.
 - `old-secrets` in a single environment variable is split on commas; the guide points to the indexed form.
 - The test that the secret is not echoed uses a weak `= 0` needle.
-- `unwrap_or` should be `unwrap_or_else` at `config.rs:1361`.
 - The 503 test does not check that the body is empty, and the application's problem renderer may render a generic problem document; the guide says the filter's own body is empty and the client sees the problem document.
 - `cargo doc -D warnings` fails on a private intra-doc link in `jwks.rs:427`, which is older than this slice.
+- Optional minors from the final review: `max-cookie-bytes` has no upper bound, although browsers drop a cookie above about 4096 bytes and the filter ignores a `Cookie` header over 8 KiB; the server backend looks up any 43-byte cookie value, not only the base64url alphabet; there is no guidance on the `__Host-` cookie name prefix against a sibling subdomain planting a same-name cookie (belongs with Slice 6c); two doc lines are over 100 characters (`crates/oxbloom-boot/src/autoconfigure/mod.rs:75`, `crates/oxbloom-test/src/app.rs:52`); and `SessionSettings::validate` has no unit test for a sub-second idle timeout.
+- The notes for Slice 6c above (logout by the current session id, `rotate_id` only at login, and session lineage for the browser-side ordering of `Max-Age=0`) are still open.
 
 Rulings made during Slice 6b:
 - Plan and subagent execution were approved together; the `SessionStore` trait got a default no-op `maintain` in the filter task; the branch `s6b-sessions` started from `s6a-password-basic`.
 - At most 8 session-cookie values are tried per request (the server backend only values of the 43-character id shape); a real cookie after 8 bogus same-name cookies is ignored.
 - A `TooLarge` error from the seal at commit answers 503 like every `SessionError`.
-- A loaded session is written back with the conditional `update`, and moved with `rotate`; a missing id clears the cookie. This closes the logout race in the trait itself.
+- A loaded session is written back with the conditional `update`, and moved with `rotate`. This closes the logout race in the trait itself. The ruling first said that a missing id answers `Clear`; the final review reversed that part, because an unknown id is never adopted, so a clear protects nothing and can delete a newer cookie (a double-submitted login, or a logout followed by a new login during a slow request). A missing id now stores nothing and leaves the cookie alone.
+- The final review moved the absolute timeout into the filter: stored data past its absolute deadline counts as unknown at load, and the store TTL is the remaining lifetime of the session.
+- The final review moved the gate for sampled eviction to before Slice 6c's saved request; the code change stays deferred.
 - `SessionConfig::from_config` refuses the secrets on the command line by checking the value origin, as the JWT reader does; `security.jwt.secret` is not registered through `ConfigBuilder::secret_key` anywhere.
 - The `security` feature of `oxbloom-boot` also enables `dep:oxbloom-web`, so the gate covers `cargo build -p oxbloom-boot --no-default-features --features security`.
 - Work happens on the branch `s6b-sessions`, started from `s6a-password-basic`.

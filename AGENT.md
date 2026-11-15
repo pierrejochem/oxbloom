@@ -207,7 +207,8 @@ Per slice, or per task that changes public behavior:
 
 ## Planned work (not started, do not describe as available)
 
-Sessions/password login/CSRF/method security/OAuth2 login (security slices 6-9),
+Form login and logout (security Slice 6c), CSRF protection (Slice 6d), session management and
+security headers (Slice 7), method security (Slice 8) and OAuth2 login (Slice 9),
 health and observability, database, jobs/queue/scheduler, React integration, `oxbloom-ai`,
 `oxbloom add`, MVC web style, DI scopes (transient, request). See `docs/ROADMAP-core.md`.
 

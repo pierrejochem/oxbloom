@@ -7,7 +7,7 @@ Oxbloom keeps per-browser state in a session. The crate `oxbloom-security` holds
 oxbloom-boot = { version = "0.1", features = ["security"] }
 ```
 
-The design is in the Slice 6b spec and plan (both are local files under `docs/superpowers`, so this page names them without a link), the decisions are in [ADR 0087](../adr/0087-sessions.md), and every public item has an example in the [API reference](../API.md#47-oxbloom-security). The example `examples/todos` counts visits in a session on `GET /api/visits` (see [Example](14-example.md#example)).
+The design is in the Slice 6b spec and plan (both are local files under `docs/superpowers`, so this page names them without a link), the decisions are in [ADR 0087](../adr/0087-sessions.md), and the public items are described in the [API reference](../API.md#47-oxbloom-security). The example `examples/todos` counts visits in a session on `GET /api/visits` (see [Example](14-example.md#example)).
 
 ## Turning sessions on
 
@@ -57,7 +57,7 @@ Values are JSON. Keep them small: the stateless backend is bounded by the cookie
 With `store = "memory"` (the default), the data lives in a `SessionStore` and the cookie holds only a random id (32 random bytes in unpadded base64url, 43 characters). `InMemorySessionStore` is the store that ships. It keeps the sessions in sharded maps in the process. The consequences:
 
 - Sessions are lost at a restart and are not shared between instances. Behind a load balancer, use sticky routing or the stateless backend.
-- `security.session.max-sessions` (default 100 000) caps the number of sessions. At the cap, a new session evicts the one with the oldest last touch. The eviction scans every shard, so it costs O(n) per new save at the cap. This matters once an anonymous endpoint writes the session: a flood of such requests makes each one scan the store. Sampled eviction is planned before Slice 6d. Racing saves can exceed the cap by their number.
+- `security.session.max-sessions` (default 100 000) caps the number of sessions. At the cap, a new session evicts the one with the oldest last touch. The eviction scans every shard, so it costs O(n) per new save at the cap. Anonymous endpoints that write the session already exist, such as `GET /api/visits` in the todos example: a flood of cookieless requests to one of them fills the cap, makes each further request scan the store (about one scan per new session) and then evicts the sessions of real users. Sampled eviction is planned before Slice 6c's saved request. Racing saves can exceed the cap by their number.
 - The memory cost is the cap times the size of the values of one session. The server side has no size limit per session.
 
 To use another store, register your own bean. It replaces the in-memory store with `store = "memory"` and is ignored with `store = "cookie"`:
@@ -77,12 +77,14 @@ To use another store, register your own bean. It replaces the in-memory store wi
 |---|---|
 | `load(id)` | The data of a live session, or `None`. |
 | `save(id, data, ttl)` | Inserts or replaces. The filter uses it only for a session minted in this request. |
-| `update(id, data, ttl)` | Writes only when the id still exists. `false` means the session was deleted meanwhile, and the filter clears the cookie. |
+| `update(id, data, ttl)` | Writes only when the id still exists. `false` means the session was deleted meanwhile; the filter then stores nothing and leaves the cookie alone. |
 | `rotate(old, new)` | Moves the session to a new id. `false` when the old id is missing. |
 | `delete(id)` | Removes a session. |
 | `maintain()` | Housekeeping. A no-op by default; the filter calls it at most once a minute. |
 
 `update` and `rotate` must be conditional writes, because the filter relies on them so that a slow request cannot bring a logged-out session back. A Redis store uses `SET key value XX` (or a script) for `update` and `RENAMENX` (or a script) for `rotate`. An SQL store uses `UPDATE .. WHERE id = ?` and checks the row count for `update`, and `UPDATE .. SET id = new WHERE id = old AND expires > now` with a row-count check for `rotate`.
+
+The `ttl` the filter passes to `save` and `update` is the remaining lifetime of the session: the idle timeout, cut short by the absolute timeout. The filter also treats loaded data whose creation time plus the absolute timeout has passed as unknown. A store that honours only the TTL, such as a plain Redis `SET .. EX`, therefore never serves a session past its absolute deadline, although it never sees `security.session.absolute-timeout`.
 
 ### Stateless cookie
 
@@ -114,7 +116,7 @@ The stateless backend has these limits:
 
 `SessionFilter` runs at `SESSION_ORDER`, which is `oxbloom_web::order::SECURITY - 1` (-101): one step before the security chain, so authentication can read the session (see [Errors and filter order](09-errors-and-filter-order.md#errors-and-filter-order)). For each request it:
 
-1. Reads the session cookie from the `Cookie` headers. It tries at most 8 values of the session cookie name per request (with the server backend only values of the 43-character id shape), and a `Cookie` header over 8 KiB counts as none. A missing, unknown, expired or undecryptable cookie gives a fresh empty session.
+1. Reads the session cookie from the `Cookie` headers. It tries at most 8 values of the session cookie name per request (with the server backend only values of the 43-character id shape), and a `Cookie` header over 8 KiB counts as none. A missing, unknown, expired or undecryptable cookie gives a fresh empty session, and so does stored data past its absolute timeout.
 2. Puts the `Session` in the request and runs the rest of the chain.
 3. Commits the session, whatever the response status, so a handler that wrote to the session and then answered 404 still gets its cookie.
 
@@ -131,11 +133,11 @@ The cookie is `HttpOnly`, has `Path=/` and a `Max-Age` (the idle timeout, cut sh
 
 ### A store error is a 503
 
-A store error, a failed seal or a `TooLarge` session at load or commit answers 503, and the client gets no session cookie. The filter's own body is empty, and the error filter of the web crate renders it, so the client sees the server's problem document. The filter logs a fixed line at `error` without an id, a value or the error text. A handler that already ran keeps its side effects, but its response, with its `Set-Cookie` headers, is replaced by the 503. The filter never starts an empty session in silence, because that would log a user out without telling anyone.
+A store error at load or commit, or a failed seal or a `TooLarge` session at commit, answers 503, and the client gets no session cookie. The filter's own body is empty, and the error filter of the web crate renders it, so the client sees the server's problem document. The filter logs a fixed line at `error` without an id, a value or the error text. A handler that already ran keeps its side effects, but its response, with its `Set-Cookie` headers, is replaced by the 503. So a failed `rotate` or save after the handler ran leaves the client without a session: a rotate followed by a failed save logs the client out, while the handler's side effects stand. The filter never starts an empty session in silence, because that would log a user out without telling anyone.
 
 ### Concurrency
 
-- A logout that races another request on the same session cannot bring the session back: a loaded session is written back only with `update` and moved only with `rotate`, and a missing id clears the cookie instead.
+- A logout that races another request on the same session cannot bring the session back: a loaded session is written back only with `update` and moved only with `rotate`, and when the id is missing by then, the filter stores nothing and leaves the cookie alone. It does not clear the cookie, because the dead id is never adopted anyway, and a clear could delete a newer cookie that a later response gave the browser, such as a new login.
 - If a `rotate` commits before a concurrent logout of the old id, the session lives on under the new id, so a logout of the old id does not end it. A logout should invalidate by the current id, and `rotate_id` should be called only at login.
 - Concurrent requests on one session are last-writer-wins. Each loads a copy and writes the whole session back, so one request's change can overwrite another's. Keep counters and lists that need exactness outside the session.
 - A `Session` clone used after the filter ran loses its writes silently.
@@ -184,15 +186,15 @@ let filter = SessionFilter::new(SessionBackend::Server(Arc::new(store)), setting
 let app = oxbloom_web::App::new().filter(filter);
 ```
 
-`SessionFilter::new` validates the settings and fails with `SessionError::InvalidSettings`. `SessionSettings` has builder setters for every key except the secrets. `SessionConfig::from_config` reads the keys from a `Config` for code that wires the filter itself.
+`SessionFilter::new` validates the settings and fails with `SessionError::InvalidSettings`. `SessionSettings` has builder setters for the cookie, lifetime and cap keys. `store`, `secret` and `old-secrets` have none, because they choose and key the backend, which you build yourself. `SessionConfig::from_config` reads the keys from a `Config` for code that wires the filter itself.
 
 ## Limits
 
-- There is no CSRF protection yet. The cookie is `HttpOnly` and `SameSite=Lax`, which does not stop every cross-site request. CSRF tokens come with Slice 6d. Do not build state-changing endpoints on sessions for browsers before that.
+- There is no CSRF protection yet; CSRF tokens come with Slice 6d. Until then `SameSite=Lax` is the only mitigation, and it does not stop every cross-site request. `HttpOnly` only keeps scripts from reading the cookie. Do not build state-changing endpoints on sessions for browsers before that.
 - There is no login or logout endpoint (Slice 6c). An application that builds its own should call `rotate_id` at login and `invalidate` at logout.
 - A stateless cookie cannot be revoked on the server; a copy stays valid until its expiry.
 - The in-memory store is per process: sessions are lost at a restart and not shared between instances.
-- At the cap, the in-memory store evicts the oldest-touched session and scans every shard for it, which is O(n) per new save at the cap. A flood needs an anonymous endpoint that writes the session; sampled eviction is planned before Slice 6d. The cap can be exceeded by the number of racing saves.
+- At the cap, the in-memory store evicts the oldest-touched session and scans every shard for it, which is O(n) per new save at the cap. An anonymous flood that writes sessions, such as `GET /api/visits` in the todos example, can fill the cap and then evict real users' sessions, at about one scan per new session; sampled eviction is planned before Slice 6c's saved request. The cap can be exceeded by the number of racing saves.
 - Concurrent requests on one session are last-writer-wins.
-- A store error answers 503 and the side effects of the handler stand.
+- A store error answers 503 and the side effects of the handler stand. A failed `rotate` or save after the handler ran leaves the client without a session.
 - Random nonces cap one key of the stateless backend at about 2^32 writes: rotate the secret periodically.

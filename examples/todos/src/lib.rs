@@ -6,7 +6,7 @@
 //! | `api.rs` | `#[controller("/api/todos")]` with `#[post("")]`, `#[get]`, `#[put]`, `#[patch]`, `#[delete]`, path parameters, a query filter, `Json<T>` answers, `Request::json` bodies, status codes, a `SecurityCustomizer`, and `GET /api/visits`, a counter kept in the session |
 //! | `cleanup.rs` | `#[scheduling]` with one `#[scheduled(fixed_delay = "1m")]` method that removes done todos older than `todos.cleanup.max-age` through a `#[retryable]` store call, run by boot's `tasks` feature |
 //! | `build.rs` | `oxbloom_actuator::build::emit()`, which feeds the build facts of `/actuator/info` |
-//! | `application.toml` | `server.port`, `todos.cleanup.max-age`, the `logging.level` table (`root`, and `todos` for the handlers' events) the demo HTTP Basic users and the `security.session` section |
+//! | `application.toml` | `server.port`, `todos.cleanup.max-age`, the `logging.level` table (`root`, and `todos` for the handlers' events), the demo HTTP Basic users and the `security.session` section |
 //!
 //! The handlers log with `tracing::info!` at target `todos`; boot installs the
 //! logging subscriber, so the events show on the console. `main.rs` adds the
