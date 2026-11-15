@@ -11,6 +11,8 @@ jwks = ["dep:reqwest", "dep:rustls"]
 
 [dependencies]
 async-trait = "0.1.92"
+# Session ids (random bytes) and their log fingerprints (SHA-256); `aws-lc-sys` only, no `ring`.
+aws-lc-rs = { version = "1.18.2", default-features = false, features = ["aws-lc-sys"] }
 base64 = "0.23.1"
 # Argon2id password hashing; the OS RNG salts come from `getrandom`, with no `ring`.
 argon2 = { version = "0.6.0", default-features = false, features = ["alloc", "getrandom", "password-hash"] }
@@ -36,4 +38,4 @@ rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs"
 rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 tokio-rustls = { version = "0.26.6", default-features = false }
 tempfile = "3.27.0"
-tokio = { version = "1.54.1", features = ["rt", "macros", "test-util", "net", "io-util", "sync"] }
+tokio = { version = "1.54.1", features = ["rt", "rt-multi-thread", "macros", "test-util", "net", "io-util", "sync"] }

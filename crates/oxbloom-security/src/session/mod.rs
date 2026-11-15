@@ -1,4 +1,5 @@
-//! Server-side sessions: settings, errors and the cookie that carries the session id.
+//! Sessions: the per-request [`Session`] handle, the [`SessionStore`] trait with its in-memory
+//! default, settings, errors and the cookie that carries the session id.
 //!
 //! Session ids, values, keys and cookie values never appear in an error text or in `Debug`
 //! output.
@@ -18,7 +19,13 @@
 
 mod cookie;
 mod error;
+mod handle;
+mod memory;
 mod settings;
+mod store;
 
 pub use error::SessionError;
+pub use handle::Session;
+pub use memory::InMemorySessionStore;
 pub use settings::{SameSite, SecureMode, SessionSettings};
+pub use store::{SessionData, SessionStore};

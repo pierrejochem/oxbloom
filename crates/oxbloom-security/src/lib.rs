@@ -138,7 +138,10 @@ pub use password_config::{Argon2Settings, HttpBasicSettings, PasswordSettings, u
 pub use provider::{AuthenticationProvider, ProviderManager};
 #[cfg(feature = "jwks")]
 pub use reqwest_fetcher::ReqwestJwksFetcher;
-pub use session::{SameSite, SecureMode, SessionError, SessionSettings};
+pub use session::{
+    InMemorySessionStore, SameSite, SecureMode, Session, SessionData, SessionError,
+    SessionSettings, SessionStore,
+};
 pub use user::{
     InMemoryUserDetailsService, UserDetails, UserDetailsError, UserDetailsService, UserStoreError,
 };
