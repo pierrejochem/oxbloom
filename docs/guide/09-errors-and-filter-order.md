@@ -14,6 +14,7 @@ Every `Filter` has a slot, a plain `i32`. A lower number runs first (it is the o
 | `NEGOTIATION` | -250 | built in with the feature `json`; answers 406 |
 | `BODY_LIMIT` | -200 | built in; answers 413 |
 | `COMPRESSION` | -150 | `CompressionFilter`; outside security |
+| `SESSION_ORDER` | -101 | `SessionFilter`; the constant is `oxbloom_security::SESSION_ORDER`, one step before `SECURITY` |
 | `SECURITY` | -100 | `SecurityFilterChain` |
 | `DEFAULT` | 0 | every filter that declares no slot |
 

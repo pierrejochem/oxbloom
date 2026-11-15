@@ -561,7 +561,7 @@ Delivered:
 - `AuthenticationRequest::UsernamePassword`, `AuthenticationError::{AccountDisabled, AccountLocked}` and `SecurityBuildError::{HttpBasicWithoutProvider, InvalidRealm}`.
 - In `oxbloom-boot` (feature `security`): `PasswordEncoderAutoConfiguration` (encoder, in-memory user store from `security.users`, DAO provider; ten property metadata entries including the two `security.http-basic.*` keys), HTTP Basic in `SecurityAutoConfiguration` when `security.http-basic.enabled = true`, and analyzer texts for the two new build errors.
 - `examples/todos`: `GET /api/admin/stats` behind HTTP Basic with two demo users, tests and README notes.
-- ADR 0086, the guide chapter 19 (the roadmap chapter is now 20) and the API section.
+- ADR 0086, the guide chapter 19 (the roadmap chapter is now 21) and the API section.
 
 Gate numbers at the end of Slice 6a: `cargo test --workspace --all-features` 2821 passed, 0 failed, 8 ignored (2700 before Slice 6a); `cargo test -p oxbloom-boot` per feature: none 460, `security` 460, `web` 460, `logging` 480, `ssl` 460, `actuator` 473, `tasks` 484, all features 518, each with 0 failed and 1 ignored (the probe); `make check-examples` 59 (54 before); clippy `-D warnings` and `cargo fmt --check` clean; the boot stack probes are unchanged at 238 KB (237 overflows) and 239 KB with all features (238 overflows); the `cargo build -p oxbloom-boot` builds for `tasks`, `tasks,logging`, `tasks,ssl`, `tasks,security`, `tasks,actuator`, `security`, `security,logging`, `security,web` and `web`, each with default features off, pass, and the `--no-default-features --features tasks` doc tests (113) pass; `cargo tree -i ring --workspace --all-features` finds no `ring`.
 
@@ -576,7 +576,7 @@ Limits that users must know (also in the guide):
 - The timing of an unknown user is equalised with a dummy hash, but a user with a malformed stored hash answers faster (a narrow difference).
 
 Follow-ups from Slice 6a, not yet scheduled:
-- Form login, sessions and logout (Slice 6b).
+- Form login and logout (Slice 6c); sessions are done in Slice 6b.
 - Login rate limiting, a limit on concurrent logins and lockout counters.
 - A database-backed `UserDetailsService`.
 - Re-encoding a stale hash after a successful login.
@@ -612,6 +612,78 @@ Rulings made during Slice 6a:
 - Basic is opt-in through `security.http-basic.enabled`, because configured users must not open a route to passwords on their own.
 - Every failed login gets the same 401 and the same challenge, also for a disabled or locked account; the reason is only in the `debug` log.
 - Work happens on the branch `s6a-password-basic`, started from `main` after the local merge of C9a and C9b.
+
+### Security Slice 6b: Sessions (`oxbloom-security`) — done
+Done on 2026-11-15; the design is the Slice 6b spec `2026-11-15-sessions-design.md` and the plan is `2026-11-15-sessions.md` (both local files under `docs/superpowers`, named here without a link), usage is in the guide chapter `docs/guide/20-sessions.md` and `docs/API.md` (section 4.7, the sessions subsection, and `SessionAutoConfiguration`), and decisions are in ADR 0087. Login and logout endpoints are Slice 6c and CSRF protection is Slice 6d, so Slice 6b is only the session layer.
+
+Delivered:
+- In `oxbloom-security`: `Session` (`get`, `set`, `remove`, `invalidate`, `rotate_id`, `is_new`, `id`), `RequestSessionExt`, the `SessionStore` trait (`load`, `save`, `update`, `rotate`, `delete`, `maintain`) with `SessionData` and the sharded `InMemorySessionStore` (cap, oldest-touched eviction), `CookieSessionBackend` (AES-256-GCM through `aws-lc-rs`, key from HKDF-SHA256 over the whole secret with an empty salt and the info `oxbloom session cookie v1`, cookie name as associated data, random 96-bit nonce per write, `old-secrets` for rotation), `SessionBackend`, `SessionFilter` at `SESSION_ORDER` (-101), `SessionSettings`, `SameSite`, `SecureMode`, `SessionError` and `SessionConfig`.
+- The trait gained `update` (write only when the id still exists) and `maintain`, and `rotate` returns `Result<bool>`, so a request that was already running cannot bring a logged-out session back.
+- In `oxbloom-boot` (feature `security`, which now also enables `dep:oxbloom-web`): `SessionAutoConfiguration`, which runs after the password encoder and before the security chain, only when the table `security.session` exists, with ten property metadata entries. A user `dyn SessionStore` bean replaces the in-memory store with `store = "memory"`, a user `SessionFilter` bean steps the configured one aside (it must also be provided as `dyn Filter`), and one optional `Arc<dyn Clock>` bean feeds the filter, the store and the cookie backend.
+- `examples/todos`: `GET /api/visits` counts visits in a session (`store = "memory"`), open to anonymous users, with a test and README notes.
+- ADR 0087, the guide chapter 20 (the roadmap chapter is now 21) and the API section.
+
+Gate numbers at the end of Slice 6b: to be filled by the controller after the final gate.
+
+Limits that users must know (also in the guide):
+- There is no CSRF protection yet: the cookie is `HttpOnly` and `SameSite=Lax` only, until Slice 6d. There is no login or logout endpoint until Slice 6c.
+- A stateless cookie cannot be revoked on the server: a copy stays valid until its expiry. With the stateless backend `Session::id()` is random on every request.
+- Random nonces cap one key at about 2^32 writes, so the secret should be rotated periodically.
+- The in-memory store is per process: sessions are lost at a restart and not shared between instances. The global cap evicts the oldest-touched session; the eviction scan is O(n) per new save at the cap (a flood needs an anonymous endpoint that writes the session, and sampled eviction is planned before Slice 6d), and the cap can be exceeded by the number of racing saves.
+- Concurrent requests on one session are last-writer-wins. A logout racing another request cannot bring the session back. If a rotate commits before a concurrent logout of the old id, the session lives on under the new id. A `Session` clone used after the filter ran loses its writes silently.
+- A store error or a `TooLarge` session answers 503 (the client sees the server's problem document and no session cookie), and the side effects of the handler stand.
+- At most 8 same-name cookie values are tried per request, and a `Cookie` header over 8 KiB counts as none.
+- `security.session.secret` and `old-secrets` are refused on the command line, but a placeholder can evade this (the same gap as `security.jwt.secret`). `old-secrets` in one environment variable is split on commas, so use the indexed form for a secret that contains a comma.
+
+Follow-ups from Slice 6b, not yet scheduled:
+- Login and logout endpoints and form login (Slice 6c).
+- CSRF protection (Slice 6d), and sampled eviction in the in-memory store before it.
+- Redis and SQL session stores (they must implement `update` and `rotate` as conditional writes).
+
+Notes for Slice 6c:
+- A session restarted after `invalidate()` that then calls `rotate_id()` takes the rotate path, so if the old id was deleted concurrently the freshly minted session is dropped and the cookie cleared; the commit should choose the arm on `state.is_new`.
+- Logout should invalidate by the current session id, and an application should call `rotate_id` only at login.
+- A `Clear` after a lost race can wipe a newer cookie if the browser sees that response last; returning no cookie action instead of `Clear` is an alternative.
+- `SessionSettings::validate` now rejects an idle timeout below one second (such a value used to pass and made every write answer `Clear`).
+- Browser-side ordering of `Max-Age=0` against a `Set-Cookie` of a concurrent rotate needs session lineage (Slice 6c or 6d).
+
+Deferred minors from the Slice 6b reviews:
+- `cookie.rs` returns an empty `Set-Cookie` value as a fallback when the builder is misused, and a `debug_assert` for that case is missing.
+- An over-long `Cookie` header is skipped on its own and no test pins it, and `SID=` returning an empty value is untested.
+- Tests are missing for cookie names with a double quote, a comma, a tab or non-ASCII characters, and for paths with other control or non-ASCII characters.
+- There is no test for `Duration::MAX` or for a `max_age` of `None`.
+- The eviction at the cap scans every shard synchronously on each new save. This is a CPU risk only once an anonymous endpoint writes sessions (CSRF tokens in Slice 6d), and sampled eviction should be used before 6d.
+- Racing saves can exceed the cap; this is documented.
+- Tests are missing for expired entries freeing room under the cap, for `rotate` of an expired old id and for `rotate` onto an existing new id, and no test captures the eviction warning.
+- A failure of the random number generator panics in the request path (the filter does not catch it; the error filter answers 500).
+- The docs should advise rotating the secret periodically because of random 96-bit nonces (about 2^32 writes per key); the guide and ADR 0087 now do.
+- The format version is not part of the associated data; it is already authenticated inside the sealed payload, so this is fine.
+- `TooLarge` counts only the cookie value, not the name and the attributes.
+- `open` parses the JSON payload twice.
+- Tests are missing for wrong types inside `d`, a negative or float `c`, `touched` before `created`, and a 29-byte value.
+- The 8-value cookie cap and the 43-character shape filter are untested.
+- After a backwards clock jump the once-a-minute `maintain` stops until the clock passes the last run plus 60 seconds.
+- The docs did not say what a 503 at commit does to a handler that already ran (side effects stand, its response including `Set-Cookie` is replaced, and a rotate followed by a failed save logs the client out); the guide now says it.
+- An absolute deadline that passes between load and commit saves a dead entry and sends `Max-Age=0` with a value; the filter should return `Clear` without a save.
+- The once-a-minute `maintain` sweep runs inline on a request.
+- The test `filter_order_is_before_security` does not prove the order (`session_filter.rs` pins it); it should be renamed or assert from the security chain.
+- The doc of `SessionAutoConfiguration` said the filter "backs off" for a user `SessionFilter`, but a bare `SessionFilter` bean is not a `dyn Filter`, so the application must also provide it as `dyn Filter`; the docs now say so.
+- In `session_filter` of boot, the `_ =>` arm treats a cookie store without a secret as the memory store silently; it should match explicitly and return an error (the reader already refuses that case).
+- A placeholder can evade the command-line refusal of the secrets (the same gap as the JWT reader); the guide notes it.
+- `old-secrets` in a single environment variable is split on commas; the guide points to the indexed form.
+- The test that the secret is not echoed uses a weak `= 0` needle.
+- `unwrap_or` should be `unwrap_or_else` at `config.rs:1361`.
+- The 503 test does not check that the body is empty, and the application's problem renderer may render a generic problem document; the guide says the filter's own body is empty and the client sees the problem document.
+- `cargo doc -D warnings` fails on a private intra-doc link in `jwks.rs:427`, which is older than this slice.
+
+Rulings made during Slice 6b:
+- Plan and subagent execution were approved together; the `SessionStore` trait got a default no-op `maintain` in the filter task; the branch `s6b-sessions` started from `s6a-password-basic`.
+- At most 8 session-cookie values are tried per request (the server backend only values of the 43-character id shape); a real cookie after 8 bogus same-name cookies is ignored.
+- A `TooLarge` error from the seal at commit answers 503 like every `SessionError`.
+- A loaded session is written back with the conditional `update`, and moved with `rotate`; a missing id clears the cookie. This closes the logout race in the trait itself.
+- `SessionConfig::from_config` refuses the secrets on the command line by checking the value origin, as the JWT reader does; `security.jwt.secret` is not registered through `ConfigBuilder::secret_key` anywhere.
+- The `security` feature of `oxbloom-boot` also enables `dep:oxbloom-web`, so the gate covers `cargo build -p oxbloom-boot --no-default-features --features security`.
+- Work happens on the branch `s6b-sessions`, started from `s6a-password-basic`.
 
 ### C10: Test support (`oxbloom-test`)
 
@@ -666,7 +738,7 @@ Deferred minors from the C10b reviews:
 
 1. **C2 Configuration v2.** Smallest dependencies, fixes open defects, and every other slice reads config.
 2. **C1 DI v2** (done). Required by C3, C4, C8 and C10.
-3. **Security Slice 6** (`PasswordEncoder`, `UserDetailsService`, Basic, form login and sessions): 6a (password encoding, user details, HTTP Basic) is done, 6b (form login and sessions) is open. It needs beans with lifecycle and typed config, so it comes after C1 and C2.
+3. **Security Slice 6** (`PasswordEncoder`, `UserDetailsService`, Basic, form login and sessions): 6a (password encoding, user details, HTTP Basic) and 6b (sessions) are done, 6c (login and logout) and 6d (CSRF) are open. It needs beans with lifecycle and typed config, so it comes after C1 and C2.
 4. **C3 Application lifecycle** with `FailureAnalyzer` (done: C3a and C3b).
 5. **C5 Logging** (C5a and C5b done), then **C6 Web server properties, errors and JSON** (C6a, C6b-1 and C6b-2 done).
 6. **C4 Conditions and auto-configuration** (C4a, the mechanism, and C4b, auto-configuring the existing wiring with property metadata, done).

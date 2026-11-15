@@ -24,7 +24,7 @@ use std::sync::Arc;
 use http::{HeaderValue, StatusCode, header};
 use oxbloom_boot::SecurityCustomizer;
 use oxbloom_di::component;
-use oxbloom_security::HttpSecurity;
+use oxbloom_security::{HttpSecurity, RequestSessionExt};
 use oxbloom_web::{HttpError, IntoResponse, Json, Request, Response, controller};
 use serde::{Deserialize, Serialize};
 
@@ -55,6 +55,12 @@ struct TodoChanges {
 struct Stats {
     total: usize,
     done: usize,
+}
+
+/// The body of `GET /api/visits`.
+#[derive(Debug, Serialize)]
+struct Visits {
+    visits: u64,
 }
 
 /// A 404 as an `HttpError`; the error filter renders it as problem+json.
@@ -122,6 +128,51 @@ impl AdminController {
             done,
         })
         .into_response()
+    }
+}
+
+/// The visit counter for `/api/visits`: one route that keeps its count in the session.
+///
+/// # Examples
+///
+/// ```
+/// use std::sync::Arc;
+/// use oxbloom_web::{App, HttpMethod, Request};
+/// use todos::api::VisitController;
+///
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// // Without a session filter the route answers 503; the application's
+/// // `security.session` section adds the filter.
+/// let app = App::new().routes(Arc::new(VisitController).routes())?;
+/// let res = app.handle(Request::new(HttpMethod::Get, "/api/visits")).await;
+/// assert_eq!(res.status(), 503);
+/// # Ok(())
+/// # }
+/// ```
+#[component]
+pub struct VisitController;
+
+#[controller("/api/visits")]
+impl VisitController {
+    /// `GET /api/visits`: adds one to the counter in the session and answers
+    /// `{"visits":n}`. The first request of a session answers 1. Without the session
+    /// filter (no `security.session` section) the answer is 503.
+    #[get("")]
+    async fn count(&self, req: Request) -> Response {
+        let Some(session) = req.session() else {
+            return HttpError::new(StatusCode::SERVICE_UNAVAILABLE)
+                .detail("sessions are not configured")
+                .into_response();
+        };
+        let visits = match session.get::<u64>("visits") {
+            Ok(count) => count.unwrap_or(0).saturating_add(1),
+            Err(_) => 1,
+        };
+        if session.set("visits", &visits).is_err() {
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+        Json(&Visits { visits }).into_response()
     }
 }
 
@@ -279,6 +330,7 @@ impl TodoController {
 
 /// The security rules. `/api/todos/**` is open so `curl` works out of the box,
 /// and so are the actuator's health probes (`GET /actuator/health/**`).
+/// `GET /api/visits` is open as well: it counts in the session, which needs no login.
 /// `GET /api/admin/stats` needs the role `ADMIN`, through HTTP Basic (see the
 /// README). Every other path, including unknown ones and the other actuator
 /// endpoints, needs an authenticated request: any user of HTTP Basic, including
@@ -316,6 +368,8 @@ impl SecurityCustomizer for PublicPaths {
             a.path("/api/todos/**")
                 .permit_all()
                 .get("/actuator/health/**")
+                .permit_all()
+                .get("/api/visits")
                 .permit_all()
                 .get("/api/admin/stats")
                 .has_role("ADMIN")

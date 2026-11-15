@@ -129,3 +129,11 @@ roles = ["ADMIN"]
 [security.users.viewer]
 password = "{argon2}$argon2id$v=19$m=19456,t=2,p=1$fBLpZKqG5tOuCf+Krks/zQ$hkOLCeXrKiVoR1MxwIGtt0fD7SeIGfKImKLjKYhe+rw"
 roles = ["USER"]
+
+# Sessions for `GET /api/visits`, which counts the requests of one browser in a session. The
+# section turns the session filter on. `store = "memory"` keeps the sessions in this process
+# (they are lost at a restart and not shared between instances). The other keys have their
+# defaults: the cookie `OXBLOOM_SESSION` is HttpOnly and `SameSite=Lax`, `Secure` follows the
+# request scheme, and a session ends after 30 minutes unused or 8 hours in total.
+[security.session]
+store = "memory"

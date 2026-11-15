@@ -30,6 +30,27 @@ curl http://127.0.0.1:8081/api/admin/stats                        # 401 with a B
 
 Basic sends the password with every request, so use it over TLS only.
 
+## Sessions
+
+`GET /api/visits` counts the requests of one browser in a session and answers
+`{"visits":n}`. The route is open to anonymous users (the rules of `PublicPaths` permit it),
+and `application.toml` turns the session filter on with `[security.session]` and
+`store = "memory"`. The first answer sets the cookie `OXBLOOM_SESSION`, which is `HttpOnly` and
+`SameSite=Lax`; a request that sends the cookie back gets the next number, and a request without
+it starts at 1.
+
+```text
+curl -i -c jar.txt http://127.0.0.1:8081/api/visits    # {"visits":1} and Set-Cookie
+curl -b jar.txt -c jar.txt http://127.0.0.1:8081/api/visits    # {"visits":2}
+curl http://127.0.0.1:8081/api/visits                  # {"visits":1}, a new session
+```
+
+The in-memory store lives in this process, so a restart ends every session and a second instance
+would not know them. The other stores are described in the guide chapter on sessions. Sessions have
+no CSRF protection yet (Slice 6d), and this example has no login or logout endpoint (Slice 6c).
+For the stateless backend set `store = "cookie"` and `security.session.secret` (at least 32 bytes)
+in an environment variable or a file that is not committed.
+
 ## Actuator
 
 The health probes are open, because the security rules of the example permit
