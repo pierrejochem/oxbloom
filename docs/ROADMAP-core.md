@@ -563,7 +563,7 @@ Delivered:
 - `examples/todos`: `GET /api/admin/stats` behind HTTP Basic with two demo users, tests and README notes.
 - ADR 0086, the guide chapter 19 (the roadmap chapter is now 20) and the API section.
 
-Gate numbers at the end of Slice 6a: to be filled by the controller after the final gate.
+Gate numbers at the end of Slice 6a: `cargo test --workspace --all-features` 2821 passed, 0 failed, 8 ignored (2700 before Slice 6a); `cargo test -p oxbloom-boot` per feature: none 460, `security` 460, `web` 460, `logging` 480, `ssl` 460, `actuator` 473, `tasks` 484, all features 518, each with 0 failed and 1 ignored (the probe); `make check-examples` 59 (54 before); clippy `-D warnings` and `cargo fmt --check` clean; the boot stack probes are unchanged at 238 KB (237 overflows) and 239 KB with all features (238 overflows); the `cargo build -p oxbloom-boot` builds for `tasks`, `tasks,logging`, `tasks,ssl`, `tasks,security`, `tasks,actuator`, `security`, `security,logging`, `security,web` and `web`, each with default features off, pass, and the `--no-default-features --features tasks` doc tests (113) pass; `cargo tree -i ring --workspace --all-features` finds no `ring`.
 
 Limits that users must know (also in the guide):
 - The enums `AuthenticationRequest`, `AuthenticationError` and `SecurityBuildError` are not `#[non_exhaustive]`, so the added variants are a semver-breaking change.
@@ -602,6 +602,10 @@ Deferred minors from the Slice 6a reviews:
 - The "not echoed" test covers only the above-bound value, and every Argon2 parameter rejection is reported on `memory-kib`.
 - In the example, the `stats()` test helper returns an opaque tuple and `tests/basic.rs` hand-rolls Base64.
 - The semaphore around `DaoAuthenticationProvider::verify` (a limit on concurrent hashes) stays deferred.
+- The check that rejects a realm with control characters is written twice, in `password_config.rs` and in `HttpSecurity::http_basic`, so the two can drift apart.
+- `docs/guide/06-conditions-and-auto-configuration.md` (line 131) still says `oxbloom-boot` ships three auto-configurations; it leaves out `RequestLog`, `Ssl`, `Actuator`, `Tasks`, `Retry` and `Password`, and "without either feature" ignores `tasks`.
+- The guide chapter 19 and `docs/API.md` say only "`{argon2}` plus a PHC string" for a configured password and do not mention the startup range check on the cost parameters.
+- The example README says any authenticated user can read `/actuator/info` and `/actuator/loggers`; loggers answers 404 in that configuration, and if it were mounted, the `viewer` could change log levels because the rule asks for no role. A comment in `examples/todos/tests/api.rs` (around line 382) is stale, and no test checks that `viewer` gets 200 from `/actuator/info`.
 
 Rulings made during Slice 6a:
 - Argon2 comes from the RustCrypto `argon2` crate, which is pure Rust, so the dependency tree stays free of `ring`.
