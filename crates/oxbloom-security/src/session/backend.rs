@@ -58,7 +58,7 @@ pub enum SessionBackend {
 }
 
 /// What the filter does with the session cookie after the request.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub(crate) enum CookieAction {
     /// Leave the cookie alone.
     None,
@@ -125,6 +125,13 @@ impl SessionBackend {
     /// Writes the session back after the request and tells the filter what to do with the
     /// cookie. The rules are those documented on [`SessionState`].
     ///
+    /// A session loaded from the store is written with the conditional
+    /// [`SessionStore::update`] and moved with [`SessionStore::rotate`]; only a session minted
+    /// in this request is written with [`SessionStore::save`]. When the stored session is gone
+    /// by commit time, because a concurrent request invalidated it or it expired, nothing is
+    /// stored and the cookie is cleared, so a slow request can never bring a logged-out session
+    /// back. A session whose absolute deadline has passed is cleared without a write too.
+    ///
     /// # Errors
     ///
     /// [`SessionError::Store`] when the store cannot be written, and the errors of
@@ -156,39 +163,18 @@ impl SessionBackend {
         if !write {
             return Ok(CookieAction::None);
         }
+        let max_age = max_age(state.data.created(), now, settings);
+        if max_age < Duration::from_secs(1) {
+            // The absolute deadline has passed: the session is over, so nothing is written.
+            return Ok(CookieAction::Clear);
+        }
         // Sealing and saving never update the touch time themselves.
         state.data.touch(now);
-        let max_age = max_age(state.data.created(), now, settings);
         let value = match self {
             Self::Server(store) => {
-                if let Some(previous) = state.previous_id.as_deref() {
-                    if state.rotated {
-                        store.rotate(previous, &state.id).await?;
-                        tracing::debug!(
-                            target: "oxbloom::security",
-                            from = %id_fingerprint(previous),
-                            to = %id_fingerprint(&state.id),
-                            "the session id was rotated"
-                        );
-                    } else {
-                        // Invalidated, then started anew: the old session goes.
-                        store.delete(previous).await?;
-                        tracing::debug!(
-                            target: "oxbloom::security",
-                            session = %id_fingerprint(previous),
-                            "the session was invalidated"
-                        );
-                    }
-                } else if state.is_new {
-                    tracing::debug!(
-                        target: "oxbloom::security",
-                        session = %id_fingerprint(&state.id),
-                        "a session was created"
-                    );
+                if !Self::write_server(&**store, &state, settings.idle_timeout).await? {
+                    return Ok(CookieAction::Clear);
                 }
-                store
-                    .save(&state.id, &state.data, settings.idle_timeout)
-                    .await?;
                 state.id
             }
             Self::Cookie(backend) => backend.seal(&state.data)?,
@@ -196,10 +182,84 @@ impl SessionBackend {
         Ok(CookieAction::Set { value, max_age })
     }
 
+    /// Writes a server session. Returns `false`, having stored nothing, when the session this
+    /// request loaded no longer exists in the store.
+    async fn write_server(
+        store: &dyn SessionStore,
+        state: &SessionState,
+        ttl: Duration,
+    ) -> Result<bool, SessionError> {
+        let lost = |id: &str| {
+            tracing::debug!(
+                target: "oxbloom::security",
+                session = %id_fingerprint(id),
+                "the session ended during the request; its cookie is cleared"
+            );
+            Ok(false)
+        };
+        match (state.previous_id.as_deref(), state.rotated) {
+            (Some(previous), true) => {
+                // Move first: after a concurrent logout there is nothing to move, and nothing
+                // may be stored under the new id.
+                if !store.rotate(previous, &state.id).await? {
+                    return lost(previous);
+                }
+                tracing::debug!(
+                    target: "oxbloom::security",
+                    from = %id_fingerprint(previous),
+                    to = %id_fingerprint(&state.id),
+                    "the session id was rotated"
+                );
+                if !store.update(&state.id, &state.data, ttl).await? {
+                    return lost(&state.id);
+                }
+            }
+            (Some(previous), false) => {
+                // Invalidated, then started anew: the old session goes, the new one was minted
+                // in this request.
+                store.delete(previous).await?;
+                tracing::debug!(
+                    target: "oxbloom::security",
+                    session = %id_fingerprint(previous),
+                    "the session was invalidated"
+                );
+                store.save(&state.id, &state.data, ttl).await?;
+            }
+            (None, _) if state.is_new => {
+                tracing::debug!(
+                    target: "oxbloom::security",
+                    session = %id_fingerprint(&state.id),
+                    "a session was created"
+                );
+                store.save(&state.id, &state.data, ttl).await?;
+            }
+            (None, _) => {
+                if !store.update(&state.id, &state.data, ttl).await? {
+                    return lost(&state.id);
+                }
+            }
+        }
+        Ok(true)
+    }
+
     /// Periodic housekeeping of the server store; nothing for the cookie backend.
     pub(crate) async fn maintain(&self) {
         if let Self::Server(store) = self {
             store.maintain().await;
+        }
+    }
+}
+
+impl fmt::Debug for CookieAction {
+    /// Prints the action without the cookie value.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::None => f.write_str("None"),
+            Self::Set { max_age, .. } => f
+                .debug_struct("Set")
+                .field("max_age", max_age)
+                .finish_non_exhaustive(),
+            Self::Clear => f.write_str("Clear"),
         }
     }
 }
@@ -219,6 +279,45 @@ mod tests {
 
     fn at(secs: u64) -> SystemTime {
         SystemTime::UNIX_EPOCH + Duration::from_secs(secs)
+    }
+
+    #[tokio::test]
+    async fn a_passed_absolute_deadline_clears_without_a_write() {
+        use oxbloom_core::Clock;
+
+        use super::super::memory::InMemorySessionStore;
+        use super::super::store::SessionData;
+
+        struct Fixed(SystemTime);
+        impl Clock for Fixed {
+            fn now(&self) -> SystemTime {
+                self.0
+            }
+        }
+
+        let settings = SessionSettings::default()
+            .idle_timeout(Duration::from_secs(100))
+            .absolute_timeout(Duration::from_secs(1000));
+        // Loaded while alive at 990 s, committed at 1001 s, after the absolute deadline.
+        let store = Arc::new(InMemorySessionStore::new(
+            &settings,
+            Arc::new(Fixed(at(990))),
+        ));
+        let mut data = SessionData::new(at(0));
+        data.values_mut()
+            .insert("k".to_owned(), serde_json::json!(1));
+        store
+            .save("id", &data, settings.idle_timeout)
+            .await
+            .unwrap();
+        let mut state = SessionState::loaded("id".to_owned(), data, at(990));
+        state.dirty = true;
+
+        let backend = SessionBackend::Server(store.clone());
+        let action = backend.commit(state, at(1001), &settings).await.unwrap();
+        assert_eq!(action, CookieAction::Clear);
+        let stored = store.load("id").await.unwrap().unwrap();
+        assert_eq!(stored.touched(), at(0), "nothing was written");
     }
 
     #[test]

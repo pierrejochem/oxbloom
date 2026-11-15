@@ -196,6 +196,17 @@ impl fmt::Debug for SessionData {
 /// value in an error or a log line; a log line may carry the fingerprint of an id at most.
 /// Redis or SQL stores plug in by implementing this trait.
 ///
+/// # Conditional writes
+///
+/// The session filter writes a session it loaded with [`update`](Self::update) and moves it
+/// with [`rotate`](Self::rotate), never with [`save`](Self::save). Both must be conditional and
+/// atomic: they write only while the id still exists and is live, and report `false`
+/// otherwise. A request that loaded a session before a concurrent logout deleted it then cannot
+/// bring the session back. A Redis store needs a conditional command (such as `SET .. XX` or a
+/// script) and a SQL store an `UPDATE .. WHERE id = ?` that checks the affected row count; a
+/// read followed by a separate write is not enough. Only a session minted during the request
+/// is written with `save`.
+///
 /// # Examples
 ///
 /// ```
@@ -218,25 +229,44 @@ impl fmt::Debug for SessionData {
 ///         self.0.lock().unwrap().insert(id.to_owned(), data.clone());
 ///         Ok(())
 ///     }
+///     async fn update(&self, id: &str, data: &SessionData, _ttl: Duration) -> Result<bool, SessionError> {
+///         // Check and write under one lock, so a concurrent delete cannot be undone.
+///         match self.0.lock().unwrap().get_mut(id) {
+///             Some(stored) => {
+///                 *stored = data.clone();
+///                 Ok(true)
+///             }
+///             None => Ok(false),
+///         }
+///     }
 ///     async fn delete(&self, id: &str) -> Result<(), SessionError> {
 ///         self.0.lock().unwrap().remove(id);
 ///         Ok(())
 ///     }
-///     async fn rotate(&self, old: &str, new: &str) -> Result<(), SessionError> {
+///     async fn rotate(&self, old: &str, new: &str) -> Result<bool, SessionError> {
 ///         let mut map = self.0.lock().unwrap();
-///         if let Some(data) = map.remove(old) {
-///             map.insert(new.to_owned(), data);
+///         match map.remove(old) {
+///             Some(data) => {
+///                 map.insert(new.to_owned(), data);
+///                 Ok(true)
+///             }
+///             None => Ok(false),
 ///         }
-///         Ok(())
 ///     }
 /// }
 ///
 /// # tokio_test_block_on(async {
 /// let store = MapStore::default();
 /// store.save("id", &SessionData::new(SystemTime::now()), Duration::from_secs(60)).await?;
-/// store.rotate("id", "id2").await?;
+/// assert!(store.update("id", &SessionData::new(SystemTime::now()), Duration::from_secs(60)).await?);
+/// assert!(store.rotate("id", "id2").await?);
 /// assert!(store.load("id").await?.is_none());
 /// assert!(store.load("id2").await?.is_some());
+/// // After a delete, neither a conditional update nor a rotation brings the session back.
+/// store.delete("id2").await?;
+/// assert!(!store.update("id2", &SessionData::new(SystemTime::now()), Duration::from_secs(60)).await?);
+/// assert!(!store.rotate("id2", "id3").await?);
+/// assert!(store.load("id3").await?.is_none());
 /// store.maintain().await;
 /// # Ok::<(), SessionError>(())
 /// # }).unwrap();
@@ -261,6 +291,20 @@ pub trait SessionStore: Send + Sync {
     /// [`SessionError::Store`] when the store cannot be written.
     async fn save(&self, id: &str, data: &SessionData, ttl: Duration) -> Result<(), SessionError>;
 
+    /// Replaces the data stored under `id` and restarts its `ttl`, but only when `id` still
+    /// exists and is live; returns `false` and stores nothing otherwise. The check and the write
+    /// must be one atomic step (see the trait documentation on conditional writes).
+    ///
+    /// # Errors
+    ///
+    /// [`SessionError::Store`] when the store cannot be written.
+    async fn update(
+        &self,
+        id: &str,
+        data: &SessionData,
+        ttl: Duration,
+    ) -> Result<bool, SessionError>;
+
     /// Removes the session stored under `id`. An unknown id is not an error.
     ///
     /// # Errors
@@ -268,13 +312,15 @@ pub trait SessionStore: Send + Sync {
     /// [`SessionError::Store`] when the store cannot be written.
     async fn delete(&self, id: &str) -> Result<(), SessionError>;
 
-    /// Moves the session from `old` to `new` and removes `old`, keeping its creation time.
-    /// An unknown `old` is not an error and stores nothing.
+    /// Moves the session from `old` to `new` and removes `old`, keeping its creation time, and
+    /// returns `true`. When `old` no longer exists or has expired, it moves and creates nothing
+    /// and returns `false`; that is not an error. The move must be atomic with respect to a
+    /// concurrent [`delete`](Self::delete) of `old`.
     ///
     /// # Errors
     ///
     /// [`SessionError::Store`] when the store cannot be written.
-    async fn rotate(&self, old: &str, new: &str) -> Result<(), SessionError>;
+    async fn rotate(&self, old: &str, new: &str) -> Result<bool, SessionError>;
 
     /// Periodic housekeeping, such as removing expired sessions. The session filter calls it
     /// at most once a minute. The default does nothing.

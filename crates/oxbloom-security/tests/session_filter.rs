@@ -96,7 +96,20 @@ impl SessionStore for CountingStore {
         self.inner.delete(id).await
     }
 
-    async fn rotate(&self, old: &str, new: &str) -> Result<(), SessionError> {
+    async fn update(
+        &self,
+        id: &str,
+        data: &SessionData,
+        ttl: Duration,
+    ) -> Result<bool, SessionError> {
+        if self.fail_save {
+            return Err(SessionError::Store);
+        }
+        self.saves.fetch_add(1, Ordering::SeqCst);
+        self.inner.update(id, data, ttl).await
+    }
+
+    async fn rotate(&self, old: &str, new: &str) -> Result<bool, SessionError> {
         self.inner.rotate(old, new).await
     }
 
@@ -806,6 +819,119 @@ async fn maintain_runs_at_most_once_a_minute() {
     h.clock.advance(Duration::from_secs(31));
     h.get("/none").await;
     assert_eq!(store.maintains.load(Ordering::SeqCst), 2);
+}
+
+/// Holds a request inside its handler until the test releases it.
+#[derive(Default)]
+struct Gate {
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+}
+
+/// What the held request does with its session once released.
+#[derive(Clone, Copy, Debug)]
+enum Late {
+    Write,
+    Read,
+    Rotate,
+}
+
+/// A server-backend harness with a `/held/{write|read|rotate}` route that waits at `gate`.
+fn race_harness() -> (Harness, Arc<Gate>) {
+    let clock = ManualClock::new();
+    let store = Arc::new(CountingStore::new(
+        &SessionSettings::default(),
+        clock.clone(),
+    ));
+    let mut h = Harness::with_store(store, clock);
+    let gate = Arc::new(Gate::default());
+    for (path, late) in [
+        ("/held/write", Late::Write),
+        ("/held/read", Late::Read),
+        ("/held/rotate", Late::Rotate),
+    ] {
+        let gate = gate.clone();
+        h.app = h
+            .app
+            .route(Route::new(HttpMethod::Get, path, move |req: Request| {
+                let gate = gate.clone();
+                async move {
+                    let session = req.session().unwrap();
+                    gate.entered.notify_one();
+                    gate.release.notified().await;
+                    match late {
+                        Late::Write => session.set("v", "late").unwrap(),
+                        Late::Read => drop(session.get::<String>("v")),
+                        Late::Rotate => session.rotate_id(),
+                    }
+                    "late"
+                }
+            }))
+            .unwrap();
+    }
+    (h, gate)
+}
+
+/// Runs request A on `path` with cookie `s`, holds it in its handler while request B on the
+/// same cookie logs out, then lets A finish. Returns A's response.
+async fn logout_during(h: &Harness, gate: &Gate, path: &str, s: &str) -> Response {
+    let cookie = format!("{NAME}={s}");
+    let mut a = Request::new(HttpMethod::Get, path);
+    a.headers.insert(header::COOKIE, cookie.parse().unwrap());
+    let mut b = Request::new(HttpMethod::Get, "/invalidate");
+    b.headers.insert(header::COOKIE, cookie.parse().unwrap());
+    let logout = async {
+        gate.entered.notified().await;
+        let res = h.app.handle(b).await;
+        assert_eq!(session_cookie(&res).unwrap().1, Some(0), "B logged out");
+        gate.release.notify_one();
+    };
+    let (res, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(h.app.handle(a), logout)
+    })
+    .await
+    .expect("no hang");
+    res
+}
+
+// The race tests apply to the server backend only: the cookie backend keeps no server state,
+// and its documented limit is that a copy of an old cookie stays valid until it expires.
+
+#[tokio::test]
+async fn a_late_commit_does_not_resurrect_a_logged_out_session() {
+    for (path, wait) in [("/held/write", 0), ("/held/read", 90)] {
+        let (h, gate) = race_harness();
+        h.get("/write/before").await;
+        let s = h.cookie().unwrap();
+        // For the plain read, make its 60 s touch due so that it would write.
+        h.clock.advance(Duration::from_secs(wait));
+
+        let res = logout_during(&h, &gate, path, &s).await;
+        let store = h.store.as_ref().unwrap();
+        assert!(store.inner.is_empty(), "{path}: S stays deleted");
+        assert!(store.inner.load(&s).await.unwrap().is_none(), "{path}");
+        assert_eq!(
+            session_cookie(&res),
+            Some((String::new(), Some(0))),
+            "{path}: A clears the cookie instead of setting S"
+        );
+
+        h.set_cookie(Some(s));
+        assert_eq!(body(&h.get("/read").await), "", "{path}: S is empty");
+        assert!(store.inner.is_empty(), "{path}");
+    }
+}
+
+#[tokio::test]
+async fn a_late_rotate_does_not_store_data_under_a_new_id() {
+    let (h, gate) = race_harness();
+    h.get("/write/before").await;
+    let s = h.cookie().unwrap();
+
+    let res = logout_during(&h, &gate, "/held/rotate", &s).await;
+    let store = h.store.as_ref().unwrap();
+    assert!(store.inner.is_empty(), "nothing is stored under any id");
+    assert_eq!(session_cookie(&res), Some((String::new(), Some(0))));
 }
 
 // --- store failures ---

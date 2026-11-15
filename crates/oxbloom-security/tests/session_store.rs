@@ -123,14 +123,82 @@ async fn rotate_moves_data_and_deletes_old() {
     let data = data_with(&clock, "k", json!("v"));
     store.save("old", &data, IDLE).await.unwrap();
 
-    store.rotate("old", "new").await.unwrap();
+    assert!(store.rotate("old", "new").await.unwrap());
     assert_eq!(store.load("old").await.unwrap(), None);
     assert_eq!(store.load("new").await.unwrap(), Some(data));
     assert_eq!(store.len(), 1);
+}
 
-    // Rotating an unknown id is a no-op.
-    store.rotate("gone", "other").await.unwrap();
+#[tokio::test]
+async fn rotate_of_a_missing_old_id_returns_false_and_creates_nothing() {
+    let (store, clock) = store_with(&settings());
+    assert!(!store.rotate("gone", "other").await.unwrap());
     assert_eq!(store.load("other").await.unwrap(), None);
+    assert!(store.is_empty());
+
+    // A deleted old id, as after a concurrent logout.
+    store
+        .save("old", &data_with(&clock, "k", json!(1)), IDLE)
+        .await
+        .unwrap();
+    store.delete("old").await.unwrap();
+    assert!(!store.rotate("old", "new").await.unwrap());
+    assert_eq!(store.load("new").await.unwrap(), None);
+    assert!(store.is_empty());
+
+    // An expired old id.
+    store
+        .save("old", &data_with(&clock, "k", json!(1)), IDLE)
+        .await
+        .unwrap();
+    clock.advance(IDLE);
+    assert!(!store.rotate("old", "new").await.unwrap());
+    assert_eq!(store.load("new").await.unwrap(), None);
+    assert!(store.is_empty());
+}
+
+#[tokio::test]
+async fn update_replaces_a_live_session() {
+    let (store, clock) = store_with(&settings());
+    store
+        .save("id", &data_with(&clock, "k", json!(1)), IDLE)
+        .await
+        .unwrap();
+    clock.advance(Duration::from_secs(8));
+    let mut changed = data_with(&clock, "k", json!(2));
+    changed.touch(clock.now());
+    assert!(store.update("id", &changed, IDLE).await.unwrap());
+    assert_eq!(store.load("id").await.unwrap(), Some(changed));
+
+    // The new TTL counts from the update.
+    clock.advance(Duration::from_secs(8));
+    assert!(store.load("id").await.unwrap().is_some());
+    assert_eq!(store.len(), 1);
+}
+
+#[tokio::test]
+async fn update_on_a_deleted_id_returns_false_and_stores_nothing() {
+    let (store, clock) = store_with(&settings());
+    let data = data_with(&clock, "k", json!(1));
+    assert!(!store.update("never", &data, IDLE).await.unwrap());
+    assert!(store.is_empty());
+
+    store.save("id", &data, IDLE).await.unwrap();
+    store.delete("id").await.unwrap();
+    assert!(!store.update("id", &data, IDLE).await.unwrap());
+    assert_eq!(store.load("id").await.unwrap(), None);
+    assert!(store.is_empty());
+}
+
+#[tokio::test]
+async fn update_on_an_expired_id_returns_false() {
+    let (store, clock) = store_with(&settings());
+    let data = data_with(&clock, "k", json!(1));
+    store.save("id", &data, IDLE).await.unwrap();
+    clock.advance(IDLE);
+    assert!(!store.update("id", &data, IDLE).await.unwrap());
+    assert_eq!(store.load("id").await.unwrap(), None);
+    assert_eq!(store.len(), 0, "the expired entry is removed, not revived");
 }
 
 #[tokio::test]
@@ -146,7 +214,7 @@ async fn rotate_keeps_created() {
     touched.touch(clock.now());
     store.save("old", &touched, IDLE).await.unwrap();
     clock.advance(Duration::from_secs(8));
-    store.rotate("old", "new").await.unwrap();
+    assert!(store.rotate("old", "new").await.unwrap());
     let loaded = store.load("new").await.unwrap().expect("rotated");
     assert_eq!(loaded.created(), created);
 
@@ -291,7 +359,7 @@ async fn assert_never_expires(settings: &SessionSettings, ttl: Duration) {
     store.sweep();
     assert_eq!(store.load("id").await.unwrap(), Some(data.clone()));
 
-    store.rotate("id", "id2").await.unwrap();
+    assert!(store.rotate("id", "id2").await.unwrap());
     clock.advance(Duration::from_secs(24 * 60 * 60));
     store.sweep();
     assert_eq!(store.load("id2").await.unwrap(), Some(data));

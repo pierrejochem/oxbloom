@@ -281,6 +281,33 @@ impl SessionStore for InMemorySessionStore {
         Ok(())
     }
 
+    async fn update(
+        &self,
+        id: &str,
+        data: &SessionData,
+        ttl: Duration,
+    ) -> Result<bool, SessionError> {
+        let now = self.clock.now();
+        let idle = now.checked_add(ttl);
+        let absolute = data.created().checked_add(self.absolute_timeout);
+        // The check and the write happen under one shard lock, so a concurrent delete either
+        // runs first (and this writes nothing) or runs after (and removes this write).
+        let mut map = lock(self.shard(id));
+        match map.get_mut(id) {
+            Some(entry) if entry.is_live(now) => {
+                entry.data = data.clone();
+                entry.expires = earliest(idle, absolute);
+                Ok(true)
+            }
+            Some(_) => {
+                map.remove(id);
+                self.count.fetch_sub(1, Ordering::Relaxed);
+                Ok(false)
+            }
+            None => Ok(false),
+        }
+    }
+
     async fn delete(&self, id: &str) -> Result<(), SessionError> {
         let mut map = lock(self.shard(id));
         if map.remove(id).is_some() {
@@ -289,24 +316,26 @@ impl SessionStore for InMemorySessionStore {
         Ok(())
     }
 
-    async fn rotate(&self, old: &str, new: &str) -> Result<(), SessionError> {
+    async fn rotate(&self, old: &str, new: &str) -> Result<bool, SessionError> {
         let now = self.clock.now();
+        // Taking `old` out under its shard lock is the atomic step: after a concurrent delete
+        // there is nothing to take, and nothing is created under `new`.
         let entry = {
             let mut map = lock(self.shard(old));
             let Some(entry) = map.remove(old) else {
-                return Ok(());
+                return Ok(false);
             };
             self.count.fetch_sub(1, Ordering::Relaxed);
             entry
         };
         if !entry.is_live(now) {
-            return Ok(());
+            return Ok(false);
         }
         let mut map = lock(self.shard(new));
         if map.insert(new.to_owned(), entry).is_none() {
             self.count.fetch_add(1, Ordering::Relaxed);
         }
-        Ok(())
+        Ok(true)
     }
 
     async fn maintain(&self) {

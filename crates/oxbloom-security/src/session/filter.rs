@@ -47,6 +47,14 @@ const MAINTAIN_INTERVAL: Duration = Duration::from_secs(60);
 ///    cookie expired with `Max-Age=0`. An untouched session is written back to extend its idle
 ///    timeout only when its last touch is more than a minute old. An empty, untouched session
 ///    is never stored and sets no cookie.
+///
+///    A session loaded from the store is written back only with the conditional
+///    [`SessionStore::update`](crate::SessionStore::update) and moved only with
+///    [`SessionStore::rotate`](crate::SessionStore::rotate). When the stored session is gone by
+///    then, because a concurrent request logged out or it expired, nothing is stored and the
+///    cookie is cleared: a slow request in flight during a logout cannot bring the session
+///    back, under the old id or a new one. A session past its absolute timeout is cleared
+///    without a write as well.
 /// 4. The session `Set-Cookie` is appended, never replacing a `Set-Cookie` of the handler, and
 ///    every `Set-Cookie` is marked sensitive. `Cache-Control: no-store` is added with it unless
 ///    the response already has a `Cache-Control` header.
