@@ -554,7 +554,7 @@ Rulings made during C9b:
 - Work happens on the branch `c9b-retry`, which started from `c9a-tasks` because C9a was not merged to `main` yet.
 
 ### Security Slice 6a: Password encoding, user details and HTTP Basic (`oxbloom-security`) — done
-Done on 2026-11-14; the design is the Slice 6a spec `2026-11-14-password-basic-design.md` and the plan is `2026-11-14-password-basic.md` (both local files under `docs/superpowers`, named here without a link), usage is in the guide chapter `docs/guide/19-password-login.md` and `docs/API.md` (section 4.7, the password login subsection, and `PasswordEncoderAutoConfiguration`), and decisions are in ADR 0086. Slice 6b (form login, sessions, logout) is open.
+Done on 2026-11-14; the design is the Slice 6a spec `2026-11-14-password-basic-design.md` and the plan is `2026-11-14-password-basic.md` (both local files under `docs/superpowers`, named here without a link), usage is in the guide chapter `docs/guide/19-password-login.md` and `docs/API.md` (section 4.7, the password login subsection, and `PasswordEncoderAutoConfiguration`), and decisions are in ADR 0086. Sessions are done in Slice 6b, form login and logout are Slice 6c, and CSRF tokens are Slice 6d.
 
 Delivered:
 - In `oxbloom-security`: `PasswordEncoder`, `Argon2PasswordEncoder` (Argon2id, OWASP minimum by default, PHC strings) and `DelegatingPasswordEncoder` (`{id}hash`, only `argon2` today); `UserDetails`, `UserDetailsService`, `InMemoryUserDetailsService`; `DaoAuthenticationProvider` with a dummy-hash verification for unknown users and hashing in `spawn_blocking`; `HttpSecurity::http_basic` and `password_provider`; the settings readers `PasswordSettings`, `Argon2Settings`, `HttpBasicSettings` and `users_from_config`.
