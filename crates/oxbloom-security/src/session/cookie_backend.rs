@@ -567,22 +567,27 @@ mod tests {
 
     #[test]
     fn unknown_version_and_malformed_payload_give_none() {
-        let b = backend(SECRET);
-        let unknown = br#"{"v":2,"c":1,"t":1,"d":{}}"#.to_vec();
-        let no_version = br#"{"c":1,"t":1,"d":{}}"#.to_vec();
-        let not_json = b"not json".to_vec();
-        let wrong_shape = br#"{"v":1,"c":"x","t":1,"d":{}}"#.to_vec();
-        let good = br#"{"v":1,"c":1,"t":1,"d":{}}"#.to_vec();
-        for plain in [unknown, no_version, not_json, wrong_shape] {
-            let value = b.encrypt(plain).unwrap();
-            assert_eq!(b.open(&value), None);
-        }
-        // The same path with a well-formed payload does open (its timeouts lie far in the
-        // past, so the clock is set before them).
-        let settings = SessionSettings::default();
+        // The clock stands at the epoch and every payload is created and touched 1 ns later,
+        // so no case can be rejected as expired: each one fails only for the reason it names.
         let early = Arc::new(ManualClock(Mutex::new(SystemTime::UNIX_EPOCH)));
-        let b = backend_with(SECRET, &[], &settings, early);
-        assert!(b.open(&b.encrypt(good).unwrap()).is_some());
+        let b = backend_with(SECRET, &[], &SessionSettings::default(), early);
+
+        // The well-formed payload opens, which shows the clock does not mask the cases below.
+        let good = br#"{"v":1,"c":1,"t":1,"d":{}}"#;
+        assert!(b.open(&b.encrypt(good.to_vec()).unwrap()).is_some());
+
+        let cases: [(&str, &[u8]); 6] = [
+            ("unknown version", br#"{"v":2,"c":1,"t":1,"d":{}}"#),
+            ("missing version", br#"{"c":1,"t":1,"d":{}}"#),
+            ("not json", b"not json"),
+            ("wrong type in c", br#"{"v":1,"c":"x","t":1,"d":{}}"#),
+            ("wrong type in d", br#"{"v":1,"c":1,"t":1,"d":[]}"#),
+            ("missing d", br#"{"v":1,"c":1,"t":1}"#),
+        ];
+        for (name, plain) in cases {
+            let value = b.encrypt(plain.to_vec()).unwrap();
+            assert_eq!(b.open(&value), None, "the {name} case opened");
+        }
     }
 
     #[test]
