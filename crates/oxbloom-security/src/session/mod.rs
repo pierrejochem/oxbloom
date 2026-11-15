@@ -18,16 +18,20 @@
 //! assert!(settings.validate().is_ok());
 //! ```
 
+mod backend;
 mod cookie;
 mod cookie_backend;
 mod error;
+mod filter;
 mod handle;
 mod memory;
 mod settings;
 mod store;
 
+pub use backend::SessionBackend;
 pub use cookie_backend::CookieSessionBackend;
 pub use error::SessionError;
+pub use filter::{RequestSessionExt, SESSION_ORDER, SessionFilter};
 pub use handle::Session;
 pub use memory::InMemorySessionStore;
 pub use settings::{SameSite, SecureMode, SessionSettings};

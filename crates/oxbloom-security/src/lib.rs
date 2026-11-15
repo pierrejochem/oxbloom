@@ -139,8 +139,9 @@ pub use provider::{AuthenticationProvider, ProviderManager};
 #[cfg(feature = "jwks")]
 pub use reqwest_fetcher::ReqwestJwksFetcher;
 pub use session::{
-    CookieSessionBackend, InMemorySessionStore, SameSite, SecureMode, Session, SessionData,
-    SessionError, SessionSettings, SessionStore,
+    CookieSessionBackend, InMemorySessionStore, RequestSessionExt, SESSION_ORDER, SameSite,
+    SecureMode, Session, SessionBackend, SessionData, SessionError, SessionFilter, SessionSettings,
+    SessionStore,
 };
 pub use user::{
     InMemoryUserDetailsService, UserDetails, UserDetailsError, UserDetailsService, UserStoreError,

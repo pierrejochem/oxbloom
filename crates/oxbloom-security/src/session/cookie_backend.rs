@@ -216,7 +216,6 @@ impl CookieSessionBackend {
     ///
     /// Panics when the system random number generator fails, because no safe nonce can be
     /// made without it.
-    #[allow(dead_code, reason = "the session filter, added next, is the caller")]
     pub(crate) fn seal(&self, data: &SessionData) -> Result<String, SessionError> {
         let payload = PayloadOut {
             v: VERSION,
@@ -255,7 +254,6 @@ impl CookieSessionBackend {
     /// under every key, carries an unknown version or a malformed payload, or whose idle or
     /// absolute timeout has passed. The failure is logged at `debug` with a fixed reason word
     /// and without the value.
-    #[allow(dead_code, reason = "the session filter, added next, is the caller")]
     pub(crate) fn open(&self, value: &str) -> Option<SessionData> {
         let Ok(sealed) = URL_SAFE_NO_PAD.decode(value) else {
             return rejected("encoding");

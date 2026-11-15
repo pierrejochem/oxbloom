@@ -17,7 +17,6 @@ fn is_cookie_octet(b: u8) -> bool {
 
 /// Returns every value of the cookie `name` in header order. A header over 8 KiB is skipped
 /// and a value with a byte outside the cookie octets is dropped.
-#[allow(dead_code)] // Used by the session filter in a later task.
 pub(crate) fn parse_cookie_header(values: &[&HeaderValue], name: &str) -> Vec<String> {
     let mut found = Vec::new();
     for header in values {
@@ -40,7 +39,6 @@ pub(crate) fn parse_cookie_header(values: &[&HeaderValue], name: &str) -> Vec<St
 
 /// Builds a `Set-Cookie` value. Pass `Some(Duration::ZERO)` and an empty value to clear the
 /// cookie. The caller must have validated `settings` and passes a value of cookie octets.
-#[allow(dead_code)] // Used by the session filter in a later task.
 pub(crate) fn build_set_cookie(
     settings: &SessionSettings,
     value: &str,

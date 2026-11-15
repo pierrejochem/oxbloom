@@ -28,7 +28,6 @@ pub(crate) fn new_session_id() -> String {
 
 /// The first 8 hex characters of the SHA-256 of `id`: the only form of an id a log line may
 /// carry.
-#[allow(dead_code, reason = "the session filter, added next, is the caller")]
 pub(crate) fn id_fingerprint(id: &str) -> String {
     let hash = digest(&SHA256, id.as_bytes());
     hash.as_ref()[..4]
@@ -100,7 +99,6 @@ impl SessionState {
 
     /// Whether this is a new session that was never written to and holds nothing. Such a
     /// session is never stored and sets no cookie.
-    #[allow(dead_code, reason = "the session filter, added next, is the caller")]
     pub(crate) fn is_empty_untouched(&self) -> bool {
         self.is_new
             && self.data.is_empty()
@@ -145,7 +143,12 @@ impl Default for SessionState {
 ///
 /// `Debug` prints `Session { .. }`, never the id or a value.
 ///
-/// A `Session` is created by the session filter; handlers read it from the request.
+/// A `Session` is created by the [`SessionFilter`](crate::SessionFilter); handlers read it from
+/// the request with [`RequestSessionExt::session`](crate::RequestSessionExt::session).
+///
+/// The filter takes the state out of the handle when the rest of the chain has answered. A
+/// clone kept past that point, for example moved into a spawned task, then holds an empty,
+/// detached placeholder: what it reads is empty and what it writes is lost silently.
 ///
 /// # Examples
 ///
@@ -165,7 +168,6 @@ pub struct Session {
 
 impl Session {
     /// Wraps a state in a new handle.
-    #[allow(dead_code, reason = "the session filter, added next, is the caller")]
     pub(crate) fn from_state(state: SessionState) -> Self {
         Self {
             state: Arc::new(Mutex::new(state)),
@@ -173,7 +175,6 @@ impl Session {
     }
 
     /// Takes the state out of the handle, leaving a dead placeholder behind.
-    #[allow(dead_code, reason = "the session filter, added next, is the caller")]
     pub(crate) fn take_state(&self) -> SessionState {
         std::mem::take(&mut *self.lock())
     }

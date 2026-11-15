@@ -38,4 +38,6 @@ rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs"
 rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 tokio-rustls = { version = "0.26.6", default-features = false }
 tempfile = "3.27.0"
+# Log capture in `tests/session_filter.rs`.
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["std", "fmt"] }
 tokio = { version = "1.54.1", features = ["rt", "rt-multi-thread", "macros", "test-util", "net", "io-util", "sync"] }
