@@ -624,7 +624,7 @@ Delivered:
 - `examples/todos`: `GET /api/visits` counts visits in a session (`store = "memory"`), open to anonymous users, with a test and README notes.
 - ADR 0087, the guide chapter 20 (the roadmap chapter is now 21) and the API section.
 
-Gate numbers at the end of Slice 6b: to be filled by the controller after the final gate.
+Gate numbers at the end of Slice 6b: `cargo test --workspace --all-features --no-fail-fast` 2993 passed, 0 failed, 8 ignored (2821 before Slice 6b); `cargo test -p oxbloom-boot` per feature: none 475, `security` 475, `web` 475, `logging` 495, `ssl` 475, `actuator` 488, `tasks` 499, all features 533, each with 0 failed and 1 ignored (the probe); `make check-examples` 61 (59 before); clippy `-D warnings` and `cargo fmt --check` clean; the boot stack probes are unchanged at 238 KB (237 overflows) and 239 KB with all features (238 overflows); the `cargo build -p oxbloom-boot` builds for `tasks`, `tasks,logging`, `tasks,ssl`, `tasks,security`, `tasks,actuator`, `security`, `security,logging`, `security,web` and `web`, each with default features off, pass, and the `--no-default-features --features tasks` doc tests (114) pass; `cargo tree -i ring --workspace --all-features` finds no `ring`. One flaky test showed up in the gate and is not part of this slice: `repeat_warning_comes_after_24_hours_not_before` in `crates/oxbloom-ssl/tests/validity.rs` (from C7, commit fa7d072) failed in one of two full runs and in about 2 of 9 runs on its own, and passed in the other runs; the slice does not touch `oxbloom-ssl`.
 
 Limits that users must know (also in the guide):
 - There is no CSRF protection yet: until Slice 6d, `SameSite=Lax` is the only mitigation. `HttpOnly` keeps scripts from reading the cookie and does nothing against cross-site requests. There is no login or logout endpoint until Slice 6c.
@@ -648,6 +648,7 @@ Notes for Slice 6c:
 - Browser-side ordering of `Max-Age=0` against a `Set-Cookie` of a concurrent rotate needs session lineage (Slice 6c or 6d).
 
 Deferred minors from the Slice 6b reviews:
+- The test `repeat_warning_comes_after_24_hours_not_before` in `crates/oxbloom-ssl/tests/validity.rs` is flaky (a timing wait on the reload task; it failed in about 2 of 9 solo runs): fix it in its own change, because it can fail a full-workspace gate at random.
 - `cookie.rs` returns an empty `Set-Cookie` value as a fallback when the builder is misused, and a `debug_assert` for that case is missing.
 - An over-long `Cookie` header is skipped on its own and no test pins it, and `SID=` returning an empty value is untested.
 - Tests are missing for cookie names with a double quote, a comma, a tab or non-ASCII characters, and for paths with other control or non-ASCII characters.
