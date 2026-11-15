@@ -1,5 +1,6 @@
 //! Sessions: the per-request [`Session`] handle, the [`SessionStore`] trait with its in-memory
-//! default, settings, errors and the cookie that carries the session id.
+//! default, the stateless [`CookieSessionBackend`], settings, errors and the cookie that carries
+//! the session.
 //!
 //! Session ids, values, keys and cookie values never appear in an error text or in `Debug`
 //! output.
@@ -18,12 +19,14 @@
 //! ```
 
 mod cookie;
+mod cookie_backend;
 mod error;
 mod handle;
 mod memory;
 mod settings;
 mod store;
 
+pub use cookie_backend::CookieSessionBackend;
 pub use error::SessionError;
 pub use handle::Session;
 pub use memory::InMemorySessionStore;
