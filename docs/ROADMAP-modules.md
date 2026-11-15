@@ -31,9 +31,9 @@ Spring Boot splits one feature into many modules: the feature itself, its `-test
 | `cache` | `oxbloom-cache`: cache abstraction with in-memory and Redis backends | M5 |
 | `mongodb`, `data-mongodb`, `cassandra`, `data-cassandra`, `couchbase`, `data-couchbase`, `elasticsearch`, `data-elasticsearch`, `neo4j`, `data-neo4j`, `ldap`, `data-ldap`, `hazelcast` | one crate per store on demand, after `oxbloom-data` and `oxbloom-redis` have settled the pattern | later, on demand |
 | `amqp`, `amqp-rabbitmq`, `rabbitmq`, `kafka`, `jms`, `activemq`, `artemis`, `pulsar`, `integration` | `oxbloom-messaging` with Kafka and AMQP adapters first (candidates: `rdkafka`, `lapin`); feeds the planned `queue` and `worker` crates | M6 |
-| `security`, `security-oauth2-resource-server` | done: `oxbloom-security` (Slice 5, and Slice 6a: password encoding, user details, HTTP Basic); form login with sessions is Slice 6b | 5 and 6a done, 6b open |
+| `security`, `security-oauth2-resource-server` | done: `oxbloom-security` (Slice 5, and Slice 6a: password encoding, user details, HTTP Basic, and Slice 6b: sessions with an in-memory store and a stateless encrypted cookie); login and logout are Slice 6c and CSRF is Slice 6d | 5, 6a and 6b done, 6c and 6d open |
 | `security-oauth2-client`, `security-oauth2-authorization-server`, `security-saml2`, `security-test` | security Slice 9 (OAuth2 login and client); authorization server and SAML2 later; test helpers go to `oxbloom-test` | planned |
-| `session`, `session-jdbc`, `session-data-redis` | security Slice 6b and 7 (form login with sessions, CSRF) with Redis and SQL stores | planned |
+| `session`, `session-jdbc`, `session-data-redis` | done: `oxbloom-security` (security Slice 6b: the session filter, an in-memory store, a stateless cookie backend); Redis and SQL stores and CSRF (Slices 6d and 7) are open | 6b done, stores planned |
 | `mustache`, `freemarker`, `thymeleaf`, `groovy-templates` | `oxbloom-templates`: server-side rendering (candidates: `minijinja`, `askama`) | M7 |
 | `websocket`, `rsocket` | `oxbloom-websocket` (candidate: `tokio-tungstenite`); RSocket skipped | M8 |
 | `graphql` | `oxbloom-graphql` (candidate: `async-graphql`) | M8 |
@@ -59,7 +59,7 @@ Core slices C1 (DI v2), C3 (application lifecycle), C4 (auto-configuration) and 
 9. **M9 `oxbloom-batch`, `oxbloom-mail`.**
 10. Store-specific crates only on demand.
 
-Security Slice 6a is done; Slices 6b to 9 interleave: sessions need Redis or SQL stores (after M3 or M5), OAuth2 login needs `oxbloom-http-client` (after M1).
+Security Slices 6a and 6b are done; Slices 6c to 9 interleave: sessions need Redis or SQL stores (after M3 or M5), OAuth2 login needs `oxbloom-http-client` (after M1).
 
 ## What each crate follows
 

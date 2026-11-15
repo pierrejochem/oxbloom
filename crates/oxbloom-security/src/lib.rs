@@ -102,6 +102,7 @@ mod password_config;
 mod provider;
 #[cfg(feature = "jwks")]
 mod reqwest_fetcher;
+mod session;
 mod user;
 
 pub use authentication::{
@@ -137,6 +138,12 @@ pub use password_config::{Argon2Settings, HttpBasicSettings, PasswordSettings, u
 pub use provider::{AuthenticationProvider, ProviderManager};
 #[cfg(feature = "jwks")]
 pub use reqwest_fetcher::ReqwestJwksFetcher;
+pub use session::{
+    CookieSessionBackend, InMemorySessionStore, RequestSessionExt, SESSION_OLD_SECRETS_KEY,
+    SESSION_ORDER, SESSION_SECRET_KEY, SameSite, SecureMode, Session, SessionBackend,
+    SessionConfig, SessionData, SessionError, SessionFilter, SessionSettings, SessionStore,
+    StoreKind,
+};
 pub use user::{
     InMemoryUserDetailsService, UserDetails, UserDetailsError, UserDetailsService, UserStoreError,
 };

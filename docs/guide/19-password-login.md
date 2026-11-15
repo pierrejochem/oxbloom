@@ -1,6 +1,6 @@
 # Password login
 
-Oxbloom can authenticate a user by username and password. The crate `oxbloom-security` holds the password encoder, the user types, the `DaoAuthenticationProvider` and the `HttpSecurity` methods for HTTP Basic, and the feature `security` of `oxbloom-boot` wires them from configuration. This is security Slice 6a. Form login with sessions is Slice 6b and is not built yet.
+Oxbloom can authenticate a user by username and password. The crate `oxbloom-security` holds the password encoder, the user types, the `DaoAuthenticationProvider` and the `HttpSecurity` methods for HTTP Basic, and the feature `security` of `oxbloom-boot` wires them from configuration. This is security Slice 6a. Sessions are Slice 6b and are done (see [Sessions](20-sessions.md#sessions)); form login and logout are Slice 6c and CSRF tokens are Slice 6d, and neither is built yet.
 
 ```toml
 # Cargo.toml
@@ -171,7 +171,7 @@ The DAO provider then uses it with the configured encoder.
 - Timing of an unknown user is equalised with a dummy hash, but a user with a malformed stored hash answers faster. The difference is narrow and needs control of the user store.
 - Basic sends the password with every request. Use it over TLS (see [SSL bundles](16-ssl-bundles.md#ssl-bundles)).
 - The raw password is not zeroized after use.
-- Form login, sessions, logout and remember-me are Slice 6b.
+- Sessions exist since Slice 6b (see [Sessions](20-sessions.md#sessions)). Form login and logout are Slice 6c, CSRF tokens are Slice 6d, and remember-me is not planned yet.
 
 ### Semver
 

@@ -13,7 +13,7 @@ Only what is implemented and tested is documented as available. Anything else is
 | `oxbloom-web` | Router, request/response, Hyper server, filters | `App`, `Router`, `RouterConfig`, `Route`, `Request`, `Response`, `IntoResponse`, `Controller`, `RouteError`, `Filter`, `Next`, `Ordered`, `order` (with `order::CORS`, `order::NEGOTIATION` and `order::COMPRESSION`), `RequestLogFilter`, `CorsConfig`, `CorsFilter`, `CorsError`, `CompressionConfig`, `CompressionLevel`, `CompressionFilter`, `codecs`, `StaticResources`, `ResourceSource`, `DiskResources`, `EmbeddedResources`, `Resource`, `ResourceError`, `Json` and `JsonBody` (feature `json`), `HttpError`, `ErrorValue`, `ErrorAttributes`, `RequestInfo`, `ErrorRenderer`, `ProblemRenderer`, `ClientInfo`, `Scheme`, `ForwardedConfig`, `ForwardStrategy`, `TrustedProxies`, `ProxyParseError`, `App::serve_tls` (feature `tls`) |
 | `oxbloom-di` | Singleton dependency injection: traits, collections, lifecycle, lazy beans, bean factories, profiles, conditions and groups | `ContainerBuilder`, `Container`, `Resolver`, `Component`, `Configuration`, `Lifecycle`, `ShutdownReport`, `DestroyFailure`, `Inject`, `BeanFn`, `TryBeanFn`, `DiError`, `ErrorSource`, `Environment`, `ConditionContext`, `ConditionOutcome`, `Conditions`, `ConditionReport`, `ConditionRecord` |
 | `oxbloom-config` | Typed config: TOML + imports, profiles, env and CLI sources, placeholders, origins | `Config`, `ConfigBuilder`, `Secret`, `ConfigError`, `Origin`, `DataSize`, `ConfigWarning` |
-| `oxbloom-security` | Filter-chain security, JWT resource server, password login with HTTP Basic | `HttpSecurity`, `PasswordEncoder`, `Argon2PasswordEncoder`, `DelegatingPasswordEncoder`, `UserDetails`, `UserDetailsService`, `InMemoryUserDetailsService`, `DaoAuthenticationProvider`, `SecurityFilterChain`, `JwtDecoderBuilder`, `JwksSource`, `Authentication`, `jwt_decoder_from_config`, `jwks_ssl_bundle`, `ReqwestJwksFetcher` with `with_tls` (feature `jwks`) |
+| `oxbloom-security` | Filter-chain security, JWT resource server, password login with HTTP Basic, sessions | `HttpSecurity`, `PasswordEncoder`, `Argon2PasswordEncoder`, `DelegatingPasswordEncoder`, `UserDetails`, `UserDetailsService`, `InMemoryUserDetailsService`, `DaoAuthenticationProvider`, `SecurityFilterChain`, `JwtDecoderBuilder`, `JwksSource`, `Authentication`, `jwt_decoder_from_config`, `jwks_ssl_bundle`, `Session`, `SessionFilter`, `SessionStore`, `CookieSessionBackend`, `ReqwestJwksFetcher` with `with_tls` (feature `jwks`) |
 | `oxbloom-boot` | Application entry point: lifecycle events, runners, services, signals, exit codes, banner, failure analysis, auto-configuration and the conditions report | `OxbloomApplication`, `OxbloomApplicationBuilder`, `ApplicationArguments`, `RunListener`, `ApplicationRunner`, `CommandLineRunner`, `Service`, `ExitCodeGenerator`, `ShutdownHandle`, `StartupError`, `StartupPhase`, `ServiceError`, `RunnerError`, `ExitStatus`, `Banner`, `FailureAnalysis`, `FailureAnalyzer`, `AutoConfiguration`, `AutoConfigurations`, `ConfigRef`, `auto_configuration`, `Conditions`, `Configuration`, `PropertyMetadata`, `boot_properties`, `WebServer`, `BindError`, `WebServerAutoConfiguration` and `RequestLogAutoConfiguration` (feature `web`), `auto_configurations` (feature `security` or `web`), `JwtDecoderAutoConfiguration`, `PasswordEncoderAutoConfiguration`, `SecurityAutoConfiguration` and `SecurityCustomizer` (feature `security`), `WebServer::with_ssl` and `SslAutoConfiguration` (feature `ssl`), `ActuatorAutoConfiguration` (feature `actuator`), `TasksAutoConfiguration`, `RetryAutoConfiguration` and `SchedulerService` (feature `tasks`), `OxbloomApplicationBuilder::logging` (feature `logging`), `async_trait` |
 | `oxbloom-logging` | `tracing` subscriber from the `logging.*` keys: levels, groups, console format and color, rotating file output, JSON lines, runtime change | `Level`, `ParseLevelError`, `ConsoleFormat`, `ConsoleColor`, `FileRotation`, `FileFormat`, `JsonField`, `LoggingError`, `LoggingSystem`, `PROPERTIES` |
 | `oxbloom-test` | Test support (dev-dependency): run an application context through the real boot lifecycle, captured output, temporary config directories, controllable clocks, a test client and whole applications on port 0 | `ContextRunner`, `ContextView`, `FailureView`, `Captured`, `Log`, `TempConfigDir`, `FixedClock`, `ManualClock`, `TestClient`, `TestResponse`, `TestApp` and `RunningApp` (feature `web`), `TestClient::connect_tls` and `RunningApp::client_tls` (feature `tls`) |
@@ -3148,8 +3148,48 @@ let chain = HttpSecurity::new()
 - Semver: `AuthenticationRequest::UsernamePassword`, `AuthenticationError::AccountDisabled` and `AccountLocked`, and `SecurityBuildError::HttpBasicWithoutProvider` and `InvalidRealm` were added to enums that are not `#[non_exhaustive]`. A `match` without a wildcard arm stops compiling.
 - Limits: no rate limiting or lockout counters, no database store, no re-encoding of a stale hash on login, no zeroizing of the raw password. `matches` verifies with the cost stored in the hash, so each concurrent login uses that memory (19 MiB by default); the unknown-user dummy hash uses the configured cost, so equal timing holds only while stored hashes use the configured parameters. Anonymous requests are bounded only by the blocking pool of tokio (512 threads by default), so the worst case is about 512 x 19 MiB, roughly 9.5 GiB at the default cost. A login limit or a semaphore around the hash is deferred. A user with a malformed stored hash answers faster than other users.
 
-Roadmap: slice 6b (form login with sessions and logout), 7 (CSRF, session management,
-security headers), 8 (method security), 9 (OAuth2 login and client). Not implemented: sessions, form login, CSRF,
+#### Sessions: `Session`, `SessionFilter`, `SessionStore`, `CookieSessionBackend` (slice 6b)
+
+Guide: [Sessions](guide/20-sessions.md). Decisions: [ADR 0087](adr/0087-sessions.md).
+
+```rust
+use std::sync::Arc;
+use oxbloom_core::SystemClock;
+use oxbloom_security::{
+    InMemorySessionStore, RequestSessionExt, SessionBackend, SessionFilter, SessionSettings,
+};
+use oxbloom_web::{App, HttpMethod, Request, Route};
+
+let settings = SessionSettings::default();
+let store = InMemorySessionStore::new(&settings, Arc::new(SystemClock));
+let filter = SessionFilter::new(SessionBackend::Server(Arc::new(store)), settings)?;
+
+let app = App::new()
+    .filter(filter)
+    .route(Route::new(HttpMethod::Get, "/visit", |req: Request| async move {
+        let session = req.session().expect("the session filter ran");
+        let visits = session.get::<u32>("visits").ok().flatten().unwrap_or(0) + 1;
+        session.set("visits", &visits).ok();
+        visits.to_string()
+    }))?;
+```
+
+- `Session` (a cheap clone around shared state): `get::<T>(key) -> Result<Option<T>, SessionError>`, `set(key, &value) -> Result<(), SessionError>`, `remove(key)`, `invalidate()`, `rotate_id()`, `is_new()` and `id()`. Values are JSON. The filter commits once after the chain; a clone used after that loses its writes silently. With the stateless backend `id()` is random on every request.
+- `RequestSessionExt::session(&self) -> Option<Session>` on `Request`; `None` when no session filter ran.
+- `SessionStore` (async trait): `load(id) -> Result<Option<SessionData>, SessionError>`, `save(id, &data, ttl)` (insert or replace, for a session minted in this request), `update(id, &data, ttl) -> Result<bool, SessionError>` (writes only when the id still exists; `false` means the session was deleted meanwhile, and the filter then stores nothing and leaves the cookie alone), `rotate(old, new) -> Result<bool, SessionError>` (`false` when the old id is missing), `delete(id)` and `maintain()` (default no-op, called at most once a minute). A Redis store uses a conditional write (`SET .. XX` or a script) for `update` and `RENAMENX` or a script for `rotate`; an SQL store uses `UPDATE .. WHERE id = ?` with a row-count check, and for `rotate` `UPDATE .. SET id = new WHERE id = old AND expires > now` with a row-count check.
+- `SessionData`: `new(now)`, `from_parts`, `values()`, `values_mut()`, `created()`, `touched()`, `touch(now)` and `is_empty()`.
+- `InMemorySessionStore::new(&settings, clock)` with `len()`, `is_empty()` and `sweep()`. Per process; `max_sessions` caps it and a new session at the cap evicts the oldest-touched one (an O(n) scan per new save at the cap; the cap can be exceeded by the number of racing saves).
+- `CookieSessionBackend::new(&Secret<String>, &[Secret<String>], &settings, clock) -> Result<_, SessionError>`: AES-256-GCM through `aws-lc-rs`, key from HKDF-SHA256 over the whole secret with an empty salt and the info `oxbloom session cookie v1`, the cookie name as associated data, a random 96-bit nonce per write, a secret of at least 32 bytes, old secrets for rotation. Rotate the secret periodically: random nonces cap one key at about 2^32 writes. A copy of a cookie stays valid until its expiry; there is no server-side revocation.
+- `SessionBackend`: `Server(Arc<dyn SessionStore>)` or `Cookie(Arc<CookieSessionBackend>)`.
+- `SessionFilter::new(backend, settings) -> Result<_, SessionError>` (validates the settings) and `with_clock(clock)`. Order `SESSION_ORDER` = `oxbloom_web::order::SECURITY - 1` (-101). It tries at most 8 same-name cookie values per request (the server backend only values of the 43-character id shape); a `Cookie` header over 8 KiB counts as none; an empty untouched session is never stored and sets no cookie; an untouched session is saved again only when its last touch is more than 60 seconds old; `Cache-Control: no-store` is added with the cookie unless the handler set one; existing `Set-Cookie` headers are kept; a store error or `TooLarge` answers 503 with no session cookie and the side effects of the handler stand. A loaded session is written only with `update` and moved only with `rotate`, so a logout that races another request cannot bring the session back; the request that loses the race stores nothing and leaves the cookie alone, because the dead id is never adopted and a clear could delete a newer cookie; stored data past its creation time plus the absolute timeout counts as unknown at load, and the `ttl` given to `save` and `update` is the remaining lifetime of the session (the idle timeout, cut short by the absolute deadline), so a store that honours only the TTL never serves a session past its absolute deadline; if a rotate commits before a concurrent logout of the old id, the session lives on under the new id; concurrent requests on one session are last-writer-wins.
+- `SessionSettings` (builder setters `cookie_name`, `path`, `secure`, `same_site`, `idle_timeout`, `absolute_timeout`, `max_sessions`, `max_cookie_bytes`, and `validate()`), `SameSite` (`Lax`, `Strict`, `None`), `SecureMode` (`Auto`, `Always`, `Never`; `Auto` follows the request scheme, including a forwarded `https`) and `SessionError` (`Store`, `Codec`, `TooLarge`, `InvalidSettings`, `Serialization`; the texts never hold an id, a value or a key).
+- `SessionConfig::from_config(&Config)` with `StoreKind` (`Memory`, `Cookie`) and the constants `SESSION_SECRET_KEY` and `SESSION_OLD_SECRETS_KEY`. Keys: `security.session.store` (`memory`), `.cookie-name` (`OXBLOOM_SESSION`), `.secure` (`auto`), `.same-site` (`lax`; `none` needs `secure = "always"`), `.idle-timeout` (`30m`, at least one second and at most `absolute-timeout`), `.absolute-timeout` (`8h`, positive), `.max-sessions` (`100000`, at least 1), `.max-cookie-bytes` (`3072`, at least 256), `.secret` (at least 32 bytes, required with `store = "cookie"`) and `.old-secrets` (each at least 32 bytes). `secret` and `old-secrets` are refused on the command line (a placeholder can evade this, as for `security.jwt.secret`); `old-secrets` in one environment variable is split on commas, so use the indexed form for a secret that contains a comma.
+- Boot: `SessionAutoConfiguration` (feature `security`). It runs only when the table `security.session` exists, after `PasswordEncoderAutoConfiguration` and before `SecurityAutoConfiguration`. A user `dyn SessionStore` bean replaces the in-memory store with `store = "memory"` and is ignored with `store = "cookie"`; a user `SessionFilter` bean steps the configured one aside but must also be provided as `dyn Filter`; one optional `Arc<dyn Clock>` bean feeds the filter, the store and the cookie backend. The feature `security` of `oxbloom-boot` now also enables `dep:oxbloom-web`.
+- Semver: the trait `SessionStore` has `update` and `maintain`, and `rotate` returns `Result<bool>`.
+- Limits: no CSRF protection yet (until slice 6d, `SameSite=Lax` is the only mitigation; `HttpOnly` only keeps scripts from reading the cookie), no login or logout endpoint (slice 6c), the in-memory store is per process and not shared between instances.
+
+Roadmap: slice 6c (login and logout), 6d (CSRF), 7 (session management,
+security headers), 8 (method security), 9 (OAuth2 login and client). Not implemented: form login and logout endpoints, CSRF,
 method security, OAuth2 login, opaque-token introspection, several chains per app, login rate limiting, database user stores.
 
 ### 4.8 `oxbloom-boot`
@@ -3654,8 +3694,8 @@ assert!(PropertyMetadata::to_json(&list).starts_with("[{\"key\":"));
 #### `auto_configurations()` (features `security` or `web`)
 
 `pub fn auto_configurations() -> AutoConfigurations`. The list of the built-in auto-configurations
-for the enabled features, in dependency order: `JwtDecoderAutoConfiguration`, `PasswordEncoderAutoConfiguration` and
-`SecurityAutoConfiguration` with `security`, `SslAutoConfiguration` with `ssl`,
+for the enabled features, in dependency order: `JwtDecoderAutoConfiguration`, `PasswordEncoderAutoConfiguration`,
+`SessionAutoConfiguration` and `SecurityAutoConfiguration` with `security`, `SslAutoConfiguration` with `ssl`,
 `ActuatorAutoConfiguration` with `actuator`, then
 `RequestLogAutoConfiguration` and `WebServerAutoConfiguration` with `web`, and last
 `TasksAutoConfiguration` and then `RetryAutoConfiguration` with `tasks`. Without
@@ -3664,7 +3704,7 @@ either feature the function does not exist. Remove one entry with `exclude::<A>(
 ```rust
 use oxbloom_boot::auto_configurations;
 
-// 3 with `security` only, 2 with `web` only, 5 with both.
+// 4 with `security` only, 2 with `web` only, 6 with both.
 assert!(auto_configurations().len() >= 1);
 ```
 
@@ -3776,6 +3816,29 @@ let keys: Vec<_> = OxbloomApplication::builder()
     .collect();
 assert!(keys.contains(&"security.http-basic.enabled"));
 assert!(keys.contains(&"security.users.<name>.password"));
+```
+
+#### `SessionAutoConfiguration` (feature `security`)
+
+Registers a `SessionFilter`, provided as `dyn Filter`, from the `security.session` keys. The group runs only when the table
+`security.session` exists (`on_property`), so an application that never configures sessions gets no filter. It runs after
+`PasswordEncoderAutoConfiguration` and before `SecurityAutoConfiguration`, and the bean has `on_missing_bean::<SessionFilter>()`.
+`store = "memory"` uses the application's `dyn SessionStore` bean when there is one and otherwise an `InMemorySessionStore`;
+`store = "cookie"` builds a `CookieSessionBackend` from `security.session.secret` and `old-secrets` and ignores a `dyn SessionStore`
+bean. An optional `Arc<dyn Clock>` bean replaces the system clock in the filter, the store and the backend. A bad value, an unknown
+key, a cookie store without a secret, a short secret or a secret on the command line fails the build with a `ConfigError` that names
+the key, never the value. The metadata lists ten keys, the ones in the table of the guide chapter [Sessions](guide/20-sessions.md).
+
+```rust
+use oxbloom_boot::{OxbloomApplication, SessionAutoConfiguration};
+
+let keys: Vec<_> = OxbloomApplication::builder()
+    .auto_configuration::<SessionAutoConfiguration>()
+    .property_metadata()
+    .iter()
+    .map(|p| p.key)
+    .collect();
+assert!(keys.contains(&"security.session.store"));
 ```
 
 #### `WebServerAutoConfiguration` (feature `web`)
@@ -6303,7 +6366,7 @@ Compile-fail tests use `trybuild` (`tests/ui/*.rs` with `.stderr` snapshots). Re
 
 ## Not implemented
 
-Sessions, form login, CSRF, method security, OAuth2 login, login rate limiting, database user stores, database, jobs and queue, metrics and
+Form login and logout endpoints, CSRF, method security, OAuth2 login, login rate limiting, Redis and SQL session stores, database user stores, database, jobs and queue, metrics and
 other observability beyond the actuator, React integration, `oxbloom-ai`, `oxbloom add`, MVC web style. In
 boot: analysis of failures after startup, a report format other than text. In DI: transient and request scopes,
 injection of single configuration properties, qualifiers by name, async lifecycle hooks and

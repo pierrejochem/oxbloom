@@ -1,6 +1,6 @@
 # Security
 
-`oxbloom-security` is a Spring-Security-style layer for `oxbloom-web`: a `SecurityFilterChain` filter reads `Authorization: Bearer <token>`, authenticates it, then authorizes the request against ordered rules. Bearer JWTs (resource server) and password login with HTTP Basic are implemented; the Basic part has its own chapter, [Password login](19-password-login.md#password-login).
+`oxbloom-security` is a Spring-Security-style layer for `oxbloom-web`: a `SecurityFilterChain` filter reads `Authorization: Bearer <token>`, authenticates it, then authorizes the request against ordered rules. Bearer JWTs (resource server), password login with HTTP Basic and sessions are implemented; Basic has its own chapter, [Password login](19-password-login.md#password-login), and sessions have [Sessions](20-sessions.md#sessions).
 
 ```rust
 let chain = HttpSecurity::new()
@@ -21,7 +21,8 @@ let app = App::new().filter(chain);  // handlers read `req.authentication()` (tr
 - A `HEAD` request is authorized as `GET`: a `get(..)` rule also governs `HEAD`, and rules are tried in order with both views, so an earlier `get(..)` rule shadows a later `head(..)` rule and vice versa.
 - Responses: anonymous or bad token is 401 with `WWW-Authenticate: Bearer` (plus `error="invalid_token"` when a token failed), authenticated but not allowed is 403, and a key-source outage (`ProviderUnavailable`) is 503 with no challenge. The answers are `application/problem+json` bodies with the headers kept (see [Errors and filter order](09-errors-and-filter-order.md#errors-and-filter-order)). A malformed `Authorization` header (several headers, a value that is not valid text, `Bearer` without a token, whitespace inside the token) is answered 401 by the chain itself (`error="invalid_request"` with a bearer provider; in a chain with HTTP Basic and no bearer provider, the Basic challenge only) and bypasses a custom `entry_point`. Another scheme is treated as anonymous, and `Basic` is too unless `http_basic` is on (see [Password login](19-password-login.md#http-basic)); so is every `Authorization` header when neither a bearer provider nor HTTP Basic is set up. Errors, responses and the `Debug` output of the security types never contain tokens, keys or claim values; `JwksSource` prints its URI without userinfo or query string. The server marks `Authorization`, `Proxy-Authorization` and `Cookie` header values sensitive (and the chain marks `Authorization` sensitive again, also for hand-built requests), so `Debug` of a `Request` or its headers shows `Sensitive` for them. Other headers, including custom credential headers, and the query and body are printed as sent.
 - If `oauth2_resource_server` is called while another bearer provider is registered, the first bearer provider wins.
-- Not implemented (deliberate cuts): sessions and form login, CSRF, method security, security headers, OAuth2 login, opaque-token introspection, several chains per app.
+- Sessions (slice 6b) are a separate filter at `SESSION_ORDER` (-101) that runs before the chain; see [Sessions](20-sessions.md#sessions). There is no CSRF protection yet.
+- Not implemented (deliberate cuts): form login and logout endpoints (slice 6c), CSRF (slice 6d), method security, security headers, OAuth2 login, opaque-token introspection, several chains per app.
 
 ## JWT
 

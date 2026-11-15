@@ -15,6 +15,7 @@
     refresh: '<path d="M20 11a8 8 0 0 0-14-4L4 9"/><path d="M4 4v5h5"/><path d="M4 13a8 8 0 0 0 14 4l2-2"/><path d="M20 20v-5h-5"/>',
     branch: '<circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="9" r="2"/><path d="M6 7v10M18 11c0 4-6 3-12 6"/>',
     file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/>',
+    lock: '<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
     key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M16 7l3 3M14 9l2 2"/>',
     shield: '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/>',
     alert: '<path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18h0"/>',
@@ -57,7 +58,7 @@
     ["06-conditions", "branch"], ["07-logging", "file"], ["08-security", "shield"],
     ["09-errors", "alert"], ["10-json", "braces"], ["11-cors", "globe"],
     ["12-compression", "archive"], ["13-static", "folder"], ["14-example", "code"],
-    ["15-http", "network"], ["16-ssl", "shield"], ["17-actuator", "activity"], ["18-tasks", "clock"], ["19-password", "key"], ["20-roadmap", "map"], ["API", "book"], ["ROADMAP-core", "map"],
+    ["15-http", "network"], ["16-ssl", "shield"], ["17-actuator", "activity"], ["18-tasks", "clock"], ["19-password", "key"], ["20-sessions", "lock"], ["21-roadmap", "map"], ["API", "book"], ["ROADMAP-core", "map"],
     ["ROADMAP-modules", "map"],
   ];
   function iconFor(href) {
