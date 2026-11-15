@@ -287,7 +287,9 @@ pub trait SessionStore: Send + Sync {
     async fn load(&self, id: &str) -> Result<Option<SessionData>, SessionError>;
 
     /// Stores `data` under `id`, replacing what was there. The session expires when it is
-    /// not saved again within `ttl`, and in any case at its absolute timeout.
+    /// not saved again within `ttl`. The session filter passes the remaining lifetime of the
+    /// session as `ttl`, which never runs past its absolute timeout, and treats a loaded session
+    /// past its absolute timeout as unknown, so a store that honours only the TTL is enough.
     ///
     /// # Errors
     ///

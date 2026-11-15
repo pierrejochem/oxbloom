@@ -9,7 +9,7 @@ use super::cookie_backend::CookieSessionBackend;
 use super::error::SessionError;
 use super::handle::{SessionState, id_fingerprint};
 use super::settings::SessionSettings;
-use super::store::SessionStore;
+use super::store::{SessionData, SessionStore};
 
 /// How many values of the session cookie a request may offer before the rest are ignored, so
 /// that a request cannot make the filter run many store lookups or decryptions.
@@ -90,7 +90,9 @@ impl SessionBackend {
     ///
     /// The server backend uses the first value the store knows and otherwise starts a new
     /// session with a freshly minted id; the cookie backend uses the first value that opens and
-    /// otherwise starts a new empty session.
+    /// otherwise starts a new empty session. For both backends, data whose absolute deadline
+    /// (its creation time plus the absolute timeout) has passed counts as unknown, so a store
+    /// that does not enforce the absolute timeout itself never serves a session past it.
     ///
     /// # Errors
     ///
@@ -99,20 +101,22 @@ impl SessionBackend {
         &self,
         cookie_values: &[String],
         now: SystemTime,
+        settings: &SessionSettings,
     ) -> Result<SessionState, SessionError> {
+        let alive = |data: &SessionData| !max_age(data.created(), now, settings).is_zero();
         match self {
             Self::Server(store) => {
                 // Only a value of the shape the server mints can be a stored id.
                 let candidates = cookie_values.iter().filter(|id| id.len() == ID_LEN);
                 for id in candidates.take(MAX_CANDIDATES) {
-                    if let Some(data) = store.load(id).await? {
+                    if let Some(data) = store.load(id).await?.filter(alive) {
                         return Ok(SessionState::loaded(id.clone(), data, now));
                     }
                 }
             }
             Self::Cookie(backend) => {
                 for value in cookie_values.iter().take(MAX_CANDIDATES) {
-                    if let Some(data) = backend.open(value) {
+                    if let Some(data) = backend.open(value).filter(alive) {
                         let fresh = SessionState::fresh(now);
                         return Ok(SessionState::loaded(fresh.id, data, now));
                     }
@@ -129,8 +133,15 @@ impl SessionBackend {
     /// [`SessionStore::update`] and moved with [`SessionStore::rotate`]; only a session minted
     /// in this request is written with [`SessionStore::save`]. When the stored session is gone
     /// by commit time, because a concurrent request invalidated it or it expired, nothing is
-    /// stored and the cookie is cleared, so a slow request can never bring a logged-out session
-    /// back. A session whose absolute deadline has passed is cleared without a write too.
+    /// stored and the cookie is left alone, so a slow request can never bring a logged-out
+    /// session back. The cookie is not cleared in that case: the dead id is never adopted
+    /// anyway, and the browser may already hold a newer cookie from a later response, such as
+    /// a new login, which a clear would delete. A session whose absolute deadline has passed is
+    /// cleared without a write.
+    ///
+    /// The store is given the remaining lifetime of the session as its TTL: the idle timeout,
+    /// cut short by the absolute deadline, so a store that honours only the TTL still drops the
+    /// session at its absolute deadline.
     ///
     /// # Errors
     ///
@@ -172,8 +183,8 @@ impl SessionBackend {
         state.data.touch(now);
         let value = match self {
             Self::Server(store) => {
-                if !Self::write_server(&**store, &state, settings.idle_timeout).await? {
-                    return Ok(CookieAction::Clear);
+                if !Self::write_server(&**store, &state, max_age).await? {
+                    return Ok(CookieAction::None);
                 }
                 state.id
             }
@@ -182,8 +193,9 @@ impl SessionBackend {
         Ok(CookieAction::Set { value, max_age })
     }
 
-    /// Writes a server session. Returns `false`, having stored nothing, when the session this
-    /// request loaded no longer exists in the store.
+    /// Writes a server session with `ttl`, the remaining lifetime of the session. Returns
+    /// `false`, having stored nothing, when the session this request loaded no longer exists in
+    /// the store.
     async fn write_server(
         store: &dyn SessionStore,
         state: &SessionState,
@@ -193,7 +205,7 @@ impl SessionBackend {
             tracing::debug!(
                 target: "oxbloom::security",
                 session = %id_fingerprint(id),
-                "the session ended during the request; its cookie is cleared"
+                "the session ended during the request; nothing was stored"
             );
             Ok(false)
         };
@@ -286,7 +298,6 @@ mod tests {
         use oxbloom_core::Clock;
 
         use super::super::memory::InMemorySessionStore;
-        use super::super::store::SessionData;
 
         struct Fixed(SystemTime);
         impl Clock for Fixed {

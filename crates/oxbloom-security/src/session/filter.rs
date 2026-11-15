@@ -38,7 +38,8 @@ const MAINTAIN_INTERVAL: Duration = Duration::from_secs(60);
 /// 1. Every `Cookie` header is marked sensitive, and the session cookie is read from all of
 ///    them. The first value that decodes is used: for the server backend the first id the store
 ///    knows, for the cookie backend the first value that opens. A missing, unknown, expired or
-///    undecryptable cookie gives a fresh empty session.
+///    undecryptable cookie gives a fresh empty session, and so does a session whose absolute
+///    timeout has passed, even when a store still returns it.
 /// 2. The session goes into the request extensions, where [`RequestSessionExt::session`] finds
 ///    it, and the rest of the chain runs.
 /// 3. The session is committed, whatever the response status: a handler that wrote to the
@@ -52,9 +53,11 @@ const MAINTAIN_INTERVAL: Duration = Duration::from_secs(60);
 ///    [`SessionStore::update`](crate::SessionStore::update) and moved only with
 ///    [`SessionStore::rotate`](crate::SessionStore::rotate). When the stored session is gone by
 ///    then, because a concurrent request logged out or it expired, nothing is stored and the
-///    cookie is cleared: a slow request in flight during a logout cannot bring the session
-///    back, under the old id or a new one. A session past its absolute timeout is cleared
-///    without a write as well.
+///    cookie is left alone: a slow request in flight during a logout cannot bring the session
+///    back, under the old id or a new one, and it cannot delete a newer cookie that a later
+///    response gave the browser. The dead id is never adopted, so leaving it does no harm. A
+///    session past its absolute timeout is cleared without a write. The store is given the
+///    remaining lifetime of the session as its TTL, which never runs past the absolute timeout.
 /// 4. The session `Set-Cookie` is appended, never replacing a `Set-Cookie` of the handler, and
 ///    every `Set-Cookie` is marked sensitive. `Cache-Control: no-store` is added with it unless
 ///    the response already has a `Cache-Control` header.
@@ -245,7 +248,7 @@ impl Filter for SessionFilter {
         };
         let now = self.clock.now();
         self.maintain_if_due(now).await;
-        let Ok(state) = self.backend.load(&candidates, now).await else {
+        let Ok(state) = self.backend.load(&candidates, now, &self.settings).await else {
             tracing::error!(
                 target: "oxbloom::security",
                 "the session could not be loaded; answering 503"

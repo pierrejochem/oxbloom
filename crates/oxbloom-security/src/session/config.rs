@@ -189,7 +189,9 @@ impl SessionConfig {
             Some(_) => return Err(ConfigError::invalid(STORE, "must be `memory` or `cookie`")),
         };
         let defaults = SessionSettings::default();
-        let cookie_name = raw.cookie_name.unwrap_or(defaults.cookie_name.clone());
+        let cookie_name = raw
+            .cookie_name
+            .unwrap_or_else(|| defaults.cookie_name.clone());
         if SessionSettings::default()
             .cookie_name(cookie_name.as_str())
             .validate()

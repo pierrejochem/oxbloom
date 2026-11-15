@@ -323,7 +323,12 @@ impl Session {
         if state.invalidated {
             return;
         }
-        if let Some(stored) = state.stored_id().map(str::to_owned) {
+        // A session minted in this request, also one restarted after `invalidate`, has nothing
+        // stored under its id to move: it only gets a new id. A restarted session keeps its
+        // `previous_id`, so the filter still deletes the old session and saves the new one.
+        if !state.is_new
+            && let Some(stored) = state.stored_id().map(str::to_owned)
+        {
             state.previous_id = Some(stored);
             state.rotated = true;
         }
@@ -525,6 +530,25 @@ mod tests {
         let state = session.take_state();
         assert!(!state.rotated);
         assert_eq!(state.previous_id, None);
+    }
+
+    #[test]
+    fn rotate_after_a_restart_keeps_the_delete_and_save_path() {
+        let session = loaded_session(&[("old", json!("value"))]);
+        let old_id = session.id();
+        session.invalidate();
+        session.set("new", &1u32).unwrap();
+        let restarted = session.id();
+        session.rotate_id();
+        assert_ne!(session.id(), restarted);
+
+        let state = session.take_state();
+        assert!(state.is_new);
+        assert!(
+            !state.rotated,
+            "nothing stored under the restarted id to move"
+        );
+        assert_eq!(state.previous_id.as_deref(), Some(old_id.as_str()));
     }
 
     #[test]

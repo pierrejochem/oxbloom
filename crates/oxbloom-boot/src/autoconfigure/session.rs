@@ -6,8 +6,8 @@ use oxbloom_config::Config;
 use oxbloom_core::{Clock, SystemClock};
 use oxbloom_di::{Conditions, Configuration, ContainerBuilder, DiError, component};
 use oxbloom_security::{
-    CookieSessionBackend, InMemorySessionStore, SessionBackend, SessionConfig, SessionFilter,
-    SessionStore, StoreKind,
+    CookieSessionBackend, InMemorySessionStore, SessionBackend, SessionConfig, SessionError,
+    SessionFilter, SessionStore, StoreKind,
 };
 use oxbloom_web::Filter;
 
@@ -144,8 +144,14 @@ fn session_filter(
             )
             .map_err(DiError::creation_from::<SessionFilter>)?,
         )),
-        // The reader refuses a cookie store without a secret, so this arm is the memory store.
-        _ => SessionBackend::Server(store.unwrap_or_else(|| {
+        // The reader already refuses a cookie store without a secret. Should that ever change,
+        // the boot fails here instead of falling back to the memory store in silence.
+        (StoreKind::Cookie, None) => {
+            return Err(DiError::creation_from::<SessionFilter>(
+                SessionError::InvalidSettings,
+            ));
+        }
+        (StoreKind::Memory, _) => SessionBackend::Server(store.unwrap_or_else(|| {
             Arc::new(InMemorySessionStore::new(&session.settings, clock.clone()))
         })),
     };

@@ -225,6 +225,18 @@ fn routes(app: App) -> App {
     .unwrap()
     .route(Route::new(
         HttpMethod::Get,
+        "/restart-rotate",
+        |req: Request| async move {
+            let session = req.session().unwrap();
+            session.invalidate();
+            session.set("fresh", &1u32).unwrap();
+            session.rotate_id();
+            "restarted and rotated"
+        },
+    ))
+    .unwrap()
+    .route(Route::new(
+        HttpMethod::Get,
         "/rotate-then-invalidate",
         |req: Request| async move {
             let session = req.session().unwrap();
@@ -834,9 +846,11 @@ enum Late {
     Write,
     Read,
     Rotate,
+    RestartRotate,
 }
 
-/// A server-backend harness with a `/held/{write|read|rotate}` route that waits at `gate`.
+/// A server-backend harness with a `/held/{write|read|rotate|restart-rotate}` route that waits
+/// at `gate`.
 fn race_harness() -> (Harness, Arc<Gate>) {
     let clock = ManualClock::new();
     let store = Arc::new(CountingStore::new(
@@ -849,6 +863,7 @@ fn race_harness() -> (Harness, Arc<Gate>) {
         ("/held/write", Late::Write),
         ("/held/read", Late::Read),
         ("/held/rotate", Late::Rotate),
+        ("/held/restart-rotate", Late::RestartRotate),
     ] {
         let gate = gate.clone();
         h.app = h
@@ -863,6 +878,11 @@ fn race_harness() -> (Harness, Arc<Gate>) {
                         Late::Write => session.set("v", "late").unwrap(),
                         Late::Read => drop(session.get::<String>("v")),
                         Late::Rotate => session.rotate_id(),
+                        Late::RestartRotate => {
+                            session.invalidate();
+                            session.set("fresh", &1u32).unwrap();
+                            session.rotate_id();
+                        }
                     }
                     "late"
                 }
@@ -912,8 +932,8 @@ async fn a_late_commit_does_not_resurrect_a_logged_out_session() {
         assert!(store.inner.load(&s).await.unwrap().is_none(), "{path}");
         assert_eq!(
             session_cookie(&res),
-            Some((String::new(), Some(0))),
-            "{path}: A clears the cookie instead of setting S"
+            None,
+            "{path}: A leaves the cookie alone instead of setting S or clearing a newer one"
         );
 
         h.set_cookie(Some(s));
@@ -931,7 +951,238 @@ async fn a_late_rotate_does_not_store_data_under_a_new_id() {
     let res = logout_during(&h, &gate, "/held/rotate", &s).await;
     let store = h.store.as_ref().unwrap();
     assert!(store.inner.is_empty(), "nothing is stored under any id");
-    assert_eq!(session_cookie(&res), Some((String::new(), Some(0))));
+    assert_eq!(
+        session_cookie(&res),
+        None,
+        "a lost rotate leaves the cookie alone"
+    );
+}
+
+#[tokio::test]
+async fn a_restarted_then_rotated_session_survives_a_concurrent_logout() {
+    let (h, gate) = race_harness();
+    h.get("/write/before").await;
+    let s = h.cookie().unwrap();
+
+    // A invalidates S, starts a new session, and rotates it, while B deletes S first.
+    let res = logout_during(&h, &gate, "/held/restart-rotate", &s).await;
+    let (new, max_age) = session_cookie(&res).expect("the restarted session sets its cookie");
+    assert_ne!(new, s);
+    assert_eq!(max_age, Some(1800));
+    let store = h.store.as_ref().unwrap();
+    assert!(
+        store.inner.load(&s).await.unwrap().is_none(),
+        "S stays deleted"
+    );
+    let saved = store
+        .inner
+        .load(&new)
+        .await
+        .unwrap()
+        .expect("the new session was saved");
+    assert_eq!(saved.values().get("fresh"), Some(&serde_json::json!(1)));
+    assert!(saved.values().get("v").is_none(), "nothing of S came back");
+    assert_eq!(store.inner.len(), 1);
+
+    h.set_cookie(Some(new));
+    assert_eq!(body(&h.get("/fresh").await), "1");
+}
+
+#[tokio::test]
+async fn a_restarted_then_rotated_session_deletes_the_old_id_and_saves_the_new_one() {
+    let h = Harness::new(Kind::Server);
+    h.get("/write/old").await;
+    let old = h.cookie().unwrap();
+    let res = h.get("/restart-rotate").await;
+    let (new, _) = session_cookie(&res).expect("a new cookie");
+    assert_ne!(new, old);
+    let store = h.store.as_ref().unwrap();
+    assert!(
+        store.inner.load(&old).await.unwrap().is_none(),
+        "the old id was deleted"
+    );
+    assert_eq!(store.inner.len(), 1);
+    assert_eq!(body(&h.get("/fresh").await), "1");
+    assert_eq!(body(&h.get("/read").await), "", "the old value is gone");
+}
+
+// --- the absolute timeout with a store that knows only TTLs ---
+
+/// A store that ignores the timestamps inside the session and keeps a session only as long as
+/// the TTL it was given, like a plain Redis `SET .. EX`. With `honour_ttl` off it never
+/// expires anything, like the `MapStore` in the trait documentation. It records the latest
+/// expiry any `save` or `update` asked for.
+struct TtlOnlyStore {
+    clock: Arc<ManualClock>,
+    honour_ttl: bool,
+    map: Mutex<std::collections::HashMap<String, (SessionData, SystemTime)>>,
+    latest_expiry: Mutex<Option<SystemTime>>,
+}
+
+impl TtlOnlyStore {
+    fn new(clock: Arc<ManualClock>, honour_ttl: bool) -> Arc<Self> {
+        Arc::new(Self {
+            clock,
+            honour_ttl,
+            map: Mutex::default(),
+            latest_expiry: Mutex::default(),
+        })
+    }
+
+    fn live(&self, expires: SystemTime) -> bool {
+        !self.honour_ttl || self.clock.now() < expires
+    }
+
+    fn record(&self, ttl: Duration) -> SystemTime {
+        let expires = self.clock.now() + ttl;
+        let mut latest = self.latest_expiry.lock().unwrap();
+        *latest = Some(latest.map_or(expires, |l| l.max(expires)));
+        expires
+    }
+}
+
+#[async_trait]
+impl SessionStore for TtlOnlyStore {
+    async fn load(&self, id: &str) -> Result<Option<SessionData>, SessionError> {
+        let map = self.map.lock().unwrap();
+        Ok(map
+            .get(id)
+            .filter(|(_, expires)| self.live(*expires))
+            .map(|(data, _)| data.clone()))
+    }
+
+    async fn save(&self, id: &str, data: &SessionData, ttl: Duration) -> Result<(), SessionError> {
+        let expires = self.record(ttl);
+        self.map
+            .lock()
+            .unwrap()
+            .insert(id.to_owned(), (data.clone(), expires));
+        Ok(())
+    }
+
+    async fn update(
+        &self,
+        id: &str,
+        data: &SessionData,
+        ttl: Duration,
+    ) -> Result<bool, SessionError> {
+        let expires = self.record(ttl);
+        let mut map = self.map.lock().unwrap();
+        match map.get_mut(id) {
+            Some(entry) if self.live(entry.1) => {
+                *entry = (data.clone(), expires);
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    async fn delete(&self, id: &str) -> Result<(), SessionError> {
+        self.map.lock().unwrap().remove(id);
+        Ok(())
+    }
+
+    async fn rotate(&self, old: &str, new: &str) -> Result<bool, SessionError> {
+        let mut map = self.map.lock().unwrap();
+        match map.remove(old) {
+            Some(entry) if self.live(entry.1) => {
+                map.insert(new.to_owned(), entry);
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+}
+
+/// A harness over `store` with a 100 s idle timeout and a 1000 s absolute timeout.
+fn ttl_harness(store: Arc<TtlOnlyStore>) -> Harness {
+    let settings = SessionSettings::default()
+        .idle_timeout(Duration::from_secs(100))
+        .absolute_timeout(Duration::from_secs(1000));
+    let clock = store.clock.clone();
+    let filter = SessionFilter::new(SessionBackend::Server(store), settings)
+        .unwrap()
+        .with_clock(clock.clone());
+    Harness {
+        app: routes(App::new().filter(filter)),
+        clock,
+        store: None,
+        jar: Mutex::new(None),
+    }
+}
+
+/// Keeps a session busy with a read every 90 s, so that each read refreshes it, until shortly
+/// before its absolute deadline at 1000 s. Returns the cookie and the creation time.
+async fn keep_busy_until_the_deadline(h: &Harness) -> (String, SystemTime) {
+    let created = h.clock.now();
+    h.get("/write/v").await;
+    let s = h.cookie().unwrap();
+    for _ in 0..11 {
+        h.clock.advance(Duration::from_secs(90));
+        assert_eq!(
+            body(&h.get("/read").await),
+            "v",
+            "alive before the deadline"
+        );
+    }
+    // Now 990 s after creation, refreshed by the last read.
+    assert_eq!(h.clock.now(), created + Duration::from_secs(990));
+    (s, created)
+}
+
+#[tokio::test]
+async fn a_ttl_only_store_is_never_given_a_ttl_past_the_absolute_deadline() {
+    let clock = ManualClock::new();
+    let store = TtlOnlyStore::new(clock, true);
+    let h = ttl_harness(store.clone());
+    let (s, created) = keep_busy_until_the_deadline(&h).await;
+    let deadline = created + Duration::from_secs(1000);
+    let latest = store
+        .latest_expiry
+        .lock()
+        .unwrap()
+        .expect("the store was written");
+    assert!(
+        latest <= deadline,
+        "the TTL given to the store ran {:?} past the absolute deadline",
+        latest.duration_since(deadline).unwrap_or_default()
+    );
+
+    // Past the deadline the session is gone, also when the client replays the id.
+    h.clock.advance(Duration::from_secs(20));
+    h.set_cookie(Some(s));
+    assert_eq!(
+        body(&h.get("/read").await),
+        "",
+        "not served past the deadline"
+    );
+}
+
+#[tokio::test]
+async fn a_session_past_its_absolute_deadline_is_not_served_from_a_store_without_expiry() {
+    let clock = ManualClock::new();
+    let store = TtlOnlyStore::new(clock, false);
+    let h = ttl_harness(store.clone());
+    let (s, _) = keep_busy_until_the_deadline(&h).await;
+
+    h.clock.advance(Duration::from_secs(20));
+    h.set_cookie(Some(s.clone()));
+    let res = h.get("/read").await;
+    assert_eq!(
+        body(&res),
+        "",
+        "a stored session past the deadline counts as unknown"
+    );
+    assert!(
+        session_cookie(&res).is_none(),
+        "nothing to set for an empty session"
+    );
+
+    // A write starts a new session under a new id instead of reviving the old one.
+    h.set_cookie(Some(s.clone()));
+    let res = h.get("/write/new").await;
+    let (new, _) = session_cookie(&res).expect("a new session");
+    assert_ne!(new, s);
 }
 
 // --- store failures ---
