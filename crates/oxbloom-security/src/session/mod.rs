@@ -19,6 +19,7 @@
 //! ```
 
 mod backend;
+mod config;
 mod cookie;
 mod cookie_backend;
 mod error;
@@ -29,6 +30,7 @@ mod settings;
 mod store;
 
 pub use backend::SessionBackend;
+pub use config::{SESSION_OLD_SECRETS_KEY, SESSION_SECRET_KEY, SessionConfig, StoreKind};
 pub use cookie_backend::CookieSessionBackend;
 pub use error::SessionError;
 pub use filter::{RequestSessionExt, SESSION_ORDER, SessionFilter};

@@ -42,6 +42,17 @@ fn settings_validate_rejects_bad_values() {
 }
 
 #[test]
+fn settings_validate_rejects_a_sub_second_idle_timeout() {
+    // A sub-second idle timeout would make every write answer `Clear`.
+    let d = SessionSettings::default;
+    assert_eq!(
+        d().idle_timeout(Duration::from_millis(999)).validate(),
+        Err(SessionError::InvalidSettings)
+    );
+    assert!(d().idle_timeout(Duration::from_secs(1)).validate().is_ok());
+}
+
+#[test]
 fn same_site_none_needs_secure_always() {
     let none = SessionSettings::default().same_site(SameSite::None);
     assert!(none.clone().validate().is_err());

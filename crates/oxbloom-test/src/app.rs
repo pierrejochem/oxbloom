@@ -11,6 +11,7 @@ use oxbloom_boot::{
 #[cfg(feature = "security")]
 use oxbloom_boot::{
     JwtDecoderAutoConfiguration, PasswordEncoderAutoConfiguration, SecurityAutoConfiguration,
+    SessionAutoConfiguration,
 };
 use oxbloom_config::Config;
 use oxbloom_core::Clock;
@@ -48,7 +49,7 @@ const POLL: Duration = Duration::from_millis(5);
 ///
 /// The presets choose the auto-configurations that run: [`new`](Self::new) none,
 /// [`web`](Self::web) the request log and the web server, `secured` (feature `security`) adds
-/// the JWT decoder and the security chain, and [`full`](Self::full) runs every auto-configuration
+/// the JWT decoder, the password beans, the session filter and the security chain, and [`full`](Self::full) runs every auto-configuration
 /// of the enabled features. [`exclude`](Self::exclude) still works after a preset.
 ///
 /// The limits of `ContextRunner` apply: boot installs its Ctrl-C and SIGTERM handlers while the
@@ -168,12 +169,14 @@ impl TestApp {
     }
 
     /// Creates an application with the secured slice: the [`web`](Self::web) slice plus
-    /// `JwtDecoderAutoConfiguration`, `PasswordEncoderAutoConfiguration` and
-    /// `SecurityAutoConfiguration`. Needs the feature `security`.
+    /// `JwtDecoderAutoConfiguration`, `PasswordEncoderAutoConfiguration`,
+    /// `SessionAutoConfiguration` and `SecurityAutoConfiguration`. Needs the feature
+    /// `security`. The session filter joins only when the `security.session` table exists.
     ///
     /// Without a `SecurityCustomizer`, every request must be authenticated. Put the
-    /// `security.jwt` section in [`config_str`](Self::config_str), because secret keys are
-    /// refused as properties, and move the time of the `exp` check with [`clock`](Self::clock).
+    /// `security.jwt` section (and `security.session.secret`) in
+    /// [`config_str`](Self::config_str), because secret keys are refused as properties, and
+    /// move the time of the `exp` check with [`clock`](Self::clock).
     ///
     /// # Examples
     ///
@@ -207,6 +210,7 @@ impl TestApp {
         TestApp::web()
             .auto_configuration::<JwtDecoderAutoConfiguration>()
             .auto_configuration::<PasswordEncoderAutoConfiguration>()
+            .auto_configuration::<SessionAutoConfiguration>()
             .auto_configuration::<SecurityAutoConfiguration>()
     }
 
@@ -243,8 +247,8 @@ impl TestApp {
 
     /// Sets the property `key` to `value` as a command-line override (`--key=value`).
     ///
-    /// Properties win over every configuration file. A secret such as `security.jwt.secret` is
-    /// refused here as in production; put secrets in [`config_str`](Self::config_str) or a
+    /// Properties win over every configuration file. A secret such as `security.jwt.secret` or
+    /// `security.session.secret` is refused here as in production; put secrets in [`config_str`](Self::config_str) or a
     /// [`TempConfigDir`] instead.
     ///
     /// # Examples

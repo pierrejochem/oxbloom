@@ -111,8 +111,9 @@ impl ContextRunner {
     /// Sets the property `key` to `value` as a command-line override (`--key=value`).
     ///
     /// Properties win over every configuration file. Because they are command-line overrides,
-    /// a secret such as `security.jwt.secret` is refused here as in production; put secrets in
-    /// [`config_str`](Self::config_str) or a [`TempConfigDir`] instead.
+    /// a secret such as `security.jwt.secret` or `security.session.secret` is refused here as in
+    /// production; put secrets in [`config_str`](Self::config_str) or a [`TempConfigDir`]
+    /// instead.
     ///
     /// # Examples
     ///

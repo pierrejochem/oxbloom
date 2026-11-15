@@ -99,7 +99,7 @@ pub struct SessionSettings {
     pub secure: SecureMode,
     /// The cookie `SameSite` attribute.
     pub same_site: SameSite,
-    /// How long a session may sit unused before it expires.
+    /// How long a session may sit unused before it expires. At least one second.
     pub idle_timeout: Duration,
     /// How long a session may live in total, however active it is.
     pub absolute_timeout: Duration,
@@ -123,6 +123,9 @@ impl Default for SessionSettings {
         }
     }
 }
+
+/// The shortest idle timeout: below one second every write would expire at once.
+const MIN_IDLE_TIMEOUT: Duration = Duration::from_secs(1);
 
 fn is_token_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || "!#$%&'*+-.^_`|~".contains(c)
@@ -273,9 +276,9 @@ impl SessionSettings {
     ///
     /// [`SessionError::InvalidSettings`] for an empty or non-token cookie name, a path that is
     /// not a plain path (it must start with `/` and hold no `;`, whitespace or control
-    /// character), `SameSite::None` without `SecureMode::Always`, a zero timeout, an idle
-    /// timeout above the absolute timeout, `max_sessions` of zero or `max_cookie_bytes` below
-    /// 256.
+    /// character), `SameSite::None` without `SecureMode::Always`, an idle timeout below one
+    /// second (every write would expire at once), a zero absolute timeout, an idle timeout above
+    /// the absolute timeout, `max_sessions` of zero or `max_cookie_bytes` below 256.
     ///
     /// # Examples
     ///
@@ -296,7 +299,7 @@ impl SessionSettings {
                 .chars()
                 .any(|c| c == ';' || c.is_whitespace() || c.is_control() || !c.is_ascii());
         let same_site_ok = self.same_site != SameSite::None || self.secure == SecureMode::Always;
-        let timeouts_ok = !self.idle_timeout.is_zero()
+        let timeouts_ok = self.idle_timeout >= MIN_IDLE_TIMEOUT
             && !self.absolute_timeout.is_zero()
             && self.idle_timeout <= self.absolute_timeout;
         if name_ok
