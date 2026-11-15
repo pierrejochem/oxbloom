@@ -130,6 +130,16 @@ fn is_token_char(c: char) -> bool {
 
 impl SessionSettings {
     /// Sets the cookie name.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_security::SessionSettings;
+    ///
+    /// let s = SessionSettings::default().cookie_name("SID");
+    /// assert_eq!(s.cookie_name, "SID");
+    /// assert!(s.validate().is_ok());
+    /// ```
     #[must_use]
     pub fn cookie_name(mut self, name: impl Into<String>) -> Self {
         self.cookie_name = name.into();
@@ -137,6 +147,16 @@ impl SessionSettings {
     }
 
     /// Sets the cookie path.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_security::SessionSettings;
+    ///
+    /// let s = SessionSettings::default().path("/app");
+    /// assert_eq!(s.path, "/app");
+    /// assert!(s.validate().is_ok());
+    /// ```
     #[must_use]
     pub fn path(mut self, path: impl Into<String>) -> Self {
         self.path = path.into();
@@ -144,6 +164,16 @@ impl SessionSettings {
     }
 
     /// Sets when the cookie is `Secure`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_security::{SecureMode, SessionSettings};
+    ///
+    /// let s = SessionSettings::default().secure(SecureMode::Never);
+    /// assert_eq!(s.secure, SecureMode::Never);
+    /// assert!(s.validate().is_ok());
+    /// ```
     #[must_use]
     pub fn secure(mut self, secure: SecureMode) -> Self {
         self.secure = secure;
@@ -151,6 +181,16 @@ impl SessionSettings {
     }
 
     /// Sets the `SameSite` attribute.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_security::{SameSite, SessionSettings};
+    ///
+    /// let s = SessionSettings::default().same_site(SameSite::Strict);
+    /// assert_eq!(s.same_site, SameSite::Strict);
+    /// assert!(s.validate().is_ok());
+    /// ```
     #[must_use]
     pub fn same_site(mut self, same_site: SameSite) -> Self {
         self.same_site = same_site;
@@ -158,6 +198,17 @@ impl SessionSettings {
     }
 
     /// Sets the idle timeout.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use oxbloom_security::SessionSettings;
+    ///
+    /// let s = SessionSettings::default().idle_timeout(Duration::from_secs(60));
+    /// assert_eq!(s.idle_timeout, Duration::from_secs(60));
+    /// assert!(s.validate().is_ok());
+    /// ```
     #[must_use]
     pub fn idle_timeout(mut self, timeout: Duration) -> Self {
         self.idle_timeout = timeout;
@@ -165,6 +216,17 @@ impl SessionSettings {
     }
 
     /// Sets the absolute timeout.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use oxbloom_security::SessionSettings;
+    ///
+    /// let s = SessionSettings::default().absolute_timeout(Duration::from_secs(7200));
+    /// assert_eq!(s.absolute_timeout, Duration::from_secs(7200));
+    /// assert!(s.validate().is_ok());
+    /// ```
     #[must_use]
     pub fn absolute_timeout(mut self, timeout: Duration) -> Self {
         self.absolute_timeout = timeout;
@@ -172,6 +234,16 @@ impl SessionSettings {
     }
 
     /// Sets the session limit.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_security::SessionSettings;
+    ///
+    /// let s = SessionSettings::default().max_sessions(10);
+    /// assert_eq!(s.max_sessions, 10);
+    /// assert!(s.validate().is_ok());
+    /// ```
     #[must_use]
     pub fn max_sessions(mut self, max: usize) -> Self {
         self.max_sessions = max;
@@ -179,6 +251,16 @@ impl SessionSettings {
     }
 
     /// Sets the cookie size limit in bytes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_security::SessionSettings;
+    ///
+    /// let s = SessionSettings::default().max_cookie_bytes(4000);
+    /// assert_eq!(s.max_cookie_bytes, 4000);
+    /// assert!(s.validate().is_ok());
+    /// ```
     #[must_use]
     pub fn max_cookie_bytes(mut self, max: usize) -> Self {
         self.max_cookie_bytes = max;
