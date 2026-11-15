@@ -204,7 +204,9 @@ impl fmt::Debug for SessionData {
 /// otherwise. A request that loaded a session before a concurrent logout deleted it then cannot
 /// bring the session back. A Redis store needs a conditional command (such as `SET .. XX` or a
 /// script) and a SQL store an `UPDATE .. WHERE id = ?` that checks the affected row count; a
-/// read followed by a separate write is not enough. Only a session minted during the request
+/// read followed by a separate write is not enough. For `rotate`, a Redis store can use `RENAMENX`
+/// or a script, and a SQL store `UPDATE .. SET id = new WHERE id = old AND expires > now` with a
+/// check of the affected row count. Only a session minted during the request
 /// is written with `save`.
 ///
 /// # Examples

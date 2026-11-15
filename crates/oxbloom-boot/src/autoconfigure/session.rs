@@ -22,8 +22,10 @@ use crate::metadata::PropertyMetadata;
 /// `security.session` table exists in the configuration (the condition `on_property`), for
 /// example with `[security.session]` in a file, any key under it, or an environment variable
 /// such as `APP_SECURITY__SESSION__STORE`. An application that never configures sessions gets
-/// no filter and pays nothing. The filter backs off when the application registered its own
-/// `SessionFilter`.
+/// no filter and pays nothing. The configured filter steps aside when the application registered
+/// its own `SessionFilter` bean (`on_missing_bean::<SessionFilter>()`); a bare `SessionFilter`
+/// bean is not a `dyn Filter`, so the application must also provide it as `dyn Filter` for it
+/// to run.
 ///
 /// The backend follows `security.session.store`:
 ///
