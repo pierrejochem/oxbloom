@@ -278,3 +278,70 @@ fn session_data_is_empty() {
     data.values_mut().insert("k".to_owned(), json!(1));
     assert!(!data.is_empty());
 }
+
+/// Saves a session, advances the clock by a day in steps, and checks it survives every load,
+/// a sweep and a rotation.
+async fn assert_never_expires(settings: &SessionSettings, ttl: Duration) {
+    let (store, clock) = store_with(settings);
+    let data = data_with(&clock, "k", json!("v"));
+    store.save("id", &data, ttl).await.unwrap();
+    assert_eq!(store.load("id").await.unwrap(), Some(data.clone()));
+
+    clock.advance(Duration::from_secs(24 * 60 * 60));
+    store.sweep();
+    assert_eq!(store.load("id").await.unwrap(), Some(data.clone()));
+
+    store.rotate("id", "id2").await.unwrap();
+    clock.advance(Duration::from_secs(24 * 60 * 60));
+    store.sweep();
+    assert_eq!(store.load("id2").await.unwrap(), Some(data));
+}
+
+#[tokio::test]
+async fn max_durations_mean_no_limit() {
+    // Both timeouts at `Duration::MAX`, passed as the ttl too: no deadline at all.
+    let unlimited = SessionSettings::default()
+        .idle_timeout(Duration::MAX)
+        .absolute_timeout(Duration::MAX);
+    assert_never_expires(&unlimited, Duration::MAX).await;
+}
+
+#[tokio::test]
+async fn max_ttl_leaves_only_the_absolute_timeout() {
+    let settings = SessionSettings::default()
+        .idle_timeout(Duration::MAX)
+        .absolute_timeout(Duration::from_secs(3 * 24 * 60 * 60));
+    assert_never_expires(&settings, Duration::MAX).await;
+
+    // The absolute timeout still applies when the ttl overflows.
+    let (store, clock) = store_with(&settings);
+    store
+        .save("id", &data_with(&clock, "k", json!(1)), Duration::MAX)
+        .await
+        .unwrap();
+    clock.advance(Duration::from_secs(3 * 24 * 60 * 60));
+    assert_eq!(store.load("id").await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn max_absolute_timeout_leaves_only_the_idle_timeout() {
+    let settings = SessionSettings::default()
+        .idle_timeout(Duration::from_secs(2 * 24 * 60 * 60))
+        .absolute_timeout(Duration::MAX);
+    let (store, clock) = store_with(&settings);
+    store
+        .save(
+            "id",
+            &data_with(&clock, "k", json!(1)),
+            settings.idle_timeout,
+        )
+        .await
+        .unwrap();
+    clock.advance(Duration::from_secs(24 * 60 * 60));
+    store.sweep();
+    assert!(store.load("id").await.unwrap().is_some());
+
+    // The idle timeout still applies when the absolute deadline overflows.
+    clock.advance(Duration::from_secs(24 * 60 * 60));
+    assert_eq!(store.load("id").await.unwrap(), None);
+}

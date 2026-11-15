@@ -24,8 +24,24 @@ const WARN_INTERVAL: Duration = Duration::from_secs(60);
 struct Entry {
     data: SessionData,
     /// The earlier of the idle deadline (save time plus ttl) and the absolute deadline
-    /// (creation plus the absolute timeout).
-    expires: SystemTime,
+    /// (creation plus the absolute timeout). A deadline that does not fit in a `SystemTime`,
+    /// such as one from `Duration::MAX`, means no limit; `None` means neither limit applies.
+    expires: Option<SystemTime>,
+}
+
+impl Entry {
+    fn is_live(&self, now: SystemTime) -> bool {
+        self.expires.is_none_or(|expires| expires > now)
+    }
+}
+
+/// The earlier of two optional deadlines, where `None` means no deadline.
+fn earliest(a: Option<SystemTime>, b: Option<SystemTime>) -> Option<SystemTime> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, None) => a,
+        (None, b) => b,
+    }
 }
 
 type Shard = Mutex<HashMap<String, Entry>>;
@@ -158,7 +174,7 @@ impl InMemorySessionStore {
         for shard in &*self.shards {
             let mut map = lock(shard);
             let before = map.len();
-            map.retain(|_, entry| entry.expires > now);
+            map.retain(|_, entry| entry.is_live(now));
             self.count.fetch_sub(before - map.len(), Ordering::Relaxed);
         }
     }
@@ -177,7 +193,7 @@ impl InMemorySessionStore {
         for (index, shard) in self.shards.iter().enumerate() {
             let mut map = lock(shard);
             let before = map.len();
-            map.retain(|_, entry| entry.expires > now);
+            map.retain(|_, entry| entry.is_live(now));
             self.count.fetch_sub(before - map.len(), Ordering::Relaxed);
             for (id, entry) in map.iter() {
                 let touched = entry.data.touched();
@@ -234,7 +250,7 @@ impl SessionStore for InMemorySessionStore {
         let now = self.clock.now();
         let mut map = lock(self.shard(id));
         match map.get(id) {
-            Some(entry) if entry.expires > now => Ok(Some(entry.data.clone())),
+            Some(entry) if entry.is_live(now) => Ok(Some(entry.data.clone())),
             Some(_) => {
                 map.remove(id);
                 self.count.fetch_sub(1, Ordering::Relaxed);
@@ -246,14 +262,12 @@ impl SessionStore for InMemorySessionStore {
 
     async fn save(&self, id: &str, data: &SessionData, ttl: Duration) -> Result<(), SessionError> {
         let now = self.clock.now();
-        let idle = now.checked_add(ttl).unwrap_or(SystemTime::UNIX_EPOCH);
-        let absolute = data
-            .created()
-            .checked_add(self.absolute_timeout)
-            .unwrap_or(SystemTime::UNIX_EPOCH);
+        // An overflowing deadline means no limit, never an immediate expiry.
+        let idle = now.checked_add(ttl);
+        let absolute = data.created().checked_add(self.absolute_timeout);
         let entry = Entry {
             data: data.clone(),
-            expires: idle.min(absolute),
+            expires: earliest(idle, absolute),
         };
 
         let exists = lock(self.shard(id)).contains_key(id);
@@ -285,7 +299,7 @@ impl SessionStore for InMemorySessionStore {
             self.count.fetch_sub(1, Ordering::Relaxed);
             entry
         };
-        if entry.expires <= now {
+        if !entry.is_live(now) {
             return Ok(());
         }
         let mut map = lock(self.shard(new));
