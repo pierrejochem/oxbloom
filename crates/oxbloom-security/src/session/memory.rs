@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::RandomState;
 use std::fmt;
 use std::hash::BuildHasher;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime};
 
@@ -17,6 +17,9 @@ use super::store::{SessionData, SessionStore};
 
 /// The number of independently locked shards.
 const SHARDS: usize = 16;
+
+/// The most entries one eviction visits.
+const SAMPLE: usize = 16;
 
 /// The shortest gap between two eviction warnings.
 const WARN_INTERVAL: Duration = Duration::from_secs(60);
@@ -52,9 +55,12 @@ type Shard = Mutex<HashMap<String, Entry>>;
 /// saved again within the ttl of its last save, and in any case once the absolute timeout of
 /// the settings has passed since its creation. Expired sessions are removed when they are
 /// accessed and by [`sweep`](Self::sweep). When `max_sessions` sessions are stored, saving a
-/// new one evicts the session with the oldest last touch and logs a warning (target
-/// `oxbloom::security`, at most once a minute, without any id). Under concurrent saves of new
-/// sessions the count may overshoot the cap by the number of racing saves.
+/// new one evicts the session with the oldest last touch among a sample of at most 16 entries
+/// (expired entries met while sampling are removed first) and logs a warning (target
+/// `oxbloom::security`, at most once a minute, without any id). The sample keeps the cost of
+/// a write constant however large the store is, but it is not the global oldest: a flood of
+/// new anonymous sessions can still evict real ones. Under concurrent saves of new sessions
+/// the count may overshoot the cap by the number of racing saves.
 ///
 /// Sessions are lost when the process stops and are not shared between instances. `Debug`
 /// shows only the number of sessions and the cap.
@@ -82,6 +88,8 @@ pub struct InMemorySessionStore {
     shards: Box<[Shard]>,
     hasher: RandomState,
     count: AtomicUsize,
+    ticks: AtomicU64,
+    probes: AtomicU64,
     max_sessions: usize,
     absolute_timeout: Duration,
     clock: Arc<dyn Clock>,
@@ -114,6 +122,8 @@ impl InMemorySessionStore {
             shards: (0..SHARDS).map(|_| Mutex::new(HashMap::new())).collect(),
             hasher: RandomState::new(),
             count: AtomicUsize::new(0),
+            ticks: AtomicU64::new(0),
+            probes: AtomicU64::new(0),
             max_sessions: settings.max_sessions,
             absolute_timeout: settings.absolute_timeout,
             clock,
@@ -187,21 +197,44 @@ impl InMemorySessionStore {
         &self.shards[index]
     }
 
-    /// Evicts the session with the oldest last touch, dropping expired sessions on the way.
-    fn evict_oldest(&self, now: SystemTime) {
+    /// Makes room for a new session: removes the expired entries met while sampling, and when
+    /// that is not enough evicts the entry with the oldest last touch among the sampled live
+    /// ones. The sample starts at a random shard and walks the entries in hash order across
+    /// shards until [`SAMPLE`] entries were visited or the store is exhausted, so the cost
+    /// does not depend on the size of the store. Only one shard lock is held at a time, and
+    /// the session being saved (`saving`) is never chosen.
+    fn evict_sampled(&self, now: SystemTime, saving: &str) {
+        let tick = self.ticks.fetch_add(1, Ordering::Relaxed);
+        let start = (self.hasher.hash_one(tick) as usize) % self.shards.len();
+        let mut visited = 0;
         let mut oldest: Option<(usize, String, SystemTime)> = None;
-        for (index, shard) in self.shards.iter().enumerate() {
-            let mut map = lock(shard);
-            let before = map.len();
-            map.retain(|_, entry| entry.is_live(now));
-            self.count.fetch_sub(before - map.len(), Ordering::Relaxed);
+        for offset in 0..self.shards.len() {
+            if visited >= SAMPLE {
+                break;
+            }
+            let index = (start + offset) % self.shards.len();
+            let mut map = lock(&self.shards[index]);
+            let mut expired = Vec::new();
             for (id, entry) in map.iter() {
-                let touched = entry.data.touched();
-                if oldest.as_ref().is_none_or(|(_, _, t)| touched < *t) {
-                    oldest = Some((index, id.clone(), touched));
+                if visited >= SAMPLE {
+                    break;
+                }
+                visited += 1;
+                if !entry.is_live(now) {
+                    expired.push(id.clone());
+                } else if id != saving {
+                    let touched = entry.data.touched();
+                    if oldest.as_ref().is_none_or(|(_, _, t)| touched < *t) {
+                        oldest = Some((index, id.clone(), touched));
+                    }
                 }
             }
+            for id in &expired {
+                map.remove(id);
+            }
+            self.count.fetch_sub(expired.len(), Ordering::Relaxed);
         }
+        self.probes.fetch_add(visited as u64, Ordering::Relaxed);
         if self.len() < self.max_sessions {
             // Expired sessions made room; nothing live is evicted.
             return;
@@ -218,6 +251,24 @@ impl InMemorySessionStore {
         if removed {
             self.warn_evicted(now);
         }
+    }
+
+    /// The number of entries visited by eviction sampling so far. Only for tests.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use oxbloom_core::SystemClock;
+    /// use oxbloom_security::{InMemorySessionStore, SessionSettings};
+    ///
+    /// let store = InMemorySessionStore::new(&SessionSettings::default(), Arc::new(SystemClock));
+    /// assert_eq!(store.eviction_probes(), 0);
+    /// ```
+    #[doc(hidden)]
+    #[must_use]
+    pub fn eviction_probes(&self) -> u64 {
+        self.probes.load(Ordering::Relaxed)
     }
 
     fn warn_evicted(&self, now: SystemTime) {
@@ -272,7 +323,7 @@ impl SessionStore for InMemorySessionStore {
 
         let exists = lock(self.shard(id)).contains_key(id);
         if !exists && self.len() >= self.max_sessions {
-            self.evict_oldest(now);
+            self.evict_sampled(now, id);
         }
         let mut map = lock(self.shard(id));
         if map.insert(id.to_owned(), entry).is_none() {

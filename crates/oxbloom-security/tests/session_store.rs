@@ -268,6 +268,141 @@ async fn cap_evicts_the_oldest_touched() {
 }
 
 #[tokio::test]
+async fn eviction_at_cap_one_works_and_never_evicts_the_saved_id() {
+    let (store, clock) = store_with(&settings().max_sessions(1));
+    store
+        .save("a", &data_with(&clock, "k", json!(1)), IDLE)
+        .await
+        .unwrap();
+    clock.advance(Duration::from_secs(1));
+    store
+        .save("b", &data_with(&clock, "k", json!(2)), IDLE)
+        .await
+        .unwrap();
+    assert_eq!(store.len(), 1);
+    assert_eq!(store.load("a").await.unwrap(), None, "a was evicted");
+    assert!(store.load("b").await.unwrap().is_some(), "b was saved");
+    // Saving the only id again evicts nothing.
+    store
+        .save("b", &data_with(&clock, "k", json!(3)), IDLE)
+        .await
+        .unwrap();
+    assert!(store.load("b").await.unwrap().is_some());
+}
+
+#[tokio::test]
+async fn eviction_visits_at_most_sixteen_entries_per_save() {
+    let (store, clock) = store_with(&settings().max_sessions(2000));
+    for i in 0..2000 {
+        store
+            .save(&format!("old-{i}"), &data_with(&clock, "k", json!(i)), IDLE)
+            .await
+            .unwrap();
+    }
+    assert_eq!(store.len(), 2000);
+    let start = store.eviction_probes();
+    let mut previous = start;
+    for i in 0..100 {
+        store
+            .save(&format!("new-{i}"), &data_with(&clock, "k", json!(i)), IDLE)
+            .await
+            .unwrap();
+        let now = store.eviction_probes();
+        assert!(now - previous <= 16, "save {i} probed {}", now - previous);
+        previous = now;
+    }
+    assert!(previous - start <= 1600);
+    assert!(previous > start, "sampling did run");
+    assert_eq!(store.len(), 2000);
+}
+
+#[tokio::test]
+async fn eviction_prefers_the_oldest_touched_of_the_sample() {
+    let (store, clock) = store_with(&settings().max_sessions(16));
+    // Saved in a scrambled order so that insertion order is not the touch order.
+    for i in [7, 3, 11, 0, 15, 5, 9, 1, 13, 2, 14, 4, 8, 6, 12, 10] {
+        let data = SessionData::new(clock.now() + Duration::from_millis(i));
+        store.save(&format!("s{i}"), &data, IDLE).await.unwrap();
+    }
+    assert_eq!(store.len(), 16);
+    store
+        .save("fresh", &data_with(&clock, "k", json!(0)), IDLE)
+        .await
+        .unwrap();
+    assert_eq!(store.len(), 16);
+    assert_eq!(store.load("s0").await.unwrap(), None, "the oldest went");
+    for i in 1..16 {
+        assert!(
+            store.load(&format!("s{i}")).await.unwrap().is_some(),
+            "s{i}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn expired_entries_are_removed_before_evicting_a_live_one() {
+    let (store, clock) = store_with(&settings().max_sessions(4));
+    for id in ["short-1", "short-2"] {
+        store
+            .save(
+                id,
+                &data_with(&clock, "k", json!(1)),
+                Duration::from_secs(2),
+            )
+            .await
+            .unwrap();
+    }
+    for id in ["long-1", "long-2"] {
+        store
+            .save(id, &data_with(&clock, "k", json!(2)), IDLE)
+            .await
+            .unwrap();
+    }
+    clock.advance(Duration::from_secs(5));
+    store
+        .save("new", &data_with(&clock, "k", json!(3)), IDLE)
+        .await
+        .unwrap();
+    for id in ["long-1", "long-2", "new"] {
+        assert!(store.load(id).await.unwrap().is_some(), "{id} survives");
+    }
+    assert_eq!(store.len(), 3, "the expired entries made room");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn size_stays_at_or_below_cap_plus_racing_saves() {
+    let (store, clock) = store_with(&settings().max_sessions(10));
+    let store = Arc::new(store);
+    for i in 0..10 {
+        store
+            .save(
+                &format!("seed-{i}"),
+                &data_with(&clock, "k", json!(i)),
+                IDLE,
+            )
+            .await
+            .unwrap();
+    }
+    let mut tasks = Vec::new();
+    for i in 0..50 {
+        let store = store.clone();
+        let data = data_with(&clock, "n", json!(i));
+        tasks.push(tokio::spawn(async move {
+            store.save(&format!("race-{i}"), &data, IDLE).await.unwrap();
+        }));
+    }
+    for task in tasks {
+        task.await.unwrap();
+    }
+    assert!(store.len() <= 10 + 50, "len was {}", store.len());
+    store
+        .save("settle", &data_with(&clock, "k", json!(0)), IDLE)
+        .await
+        .unwrap();
+    assert!(store.len() <= 10 + 50);
+}
+
+#[tokio::test]
 async fn sweep_removes_expired() {
     let (store, clock) = store_with(&settings());
     store
