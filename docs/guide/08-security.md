@@ -1,6 +1,6 @@
 # Security
 
-`oxbloom-security` is a Spring-Security-style layer for `oxbloom-web`: a `SecurityFilterChain` filter reads `Authorization: Bearer <token>`, authenticates it, then authorizes the request against ordered rules. Bearer JWTs (resource server), password login with HTTP Basic and sessions are implemented; Basic has its own chapter, [Password login](19-password-login.md#password-login), and sessions have [Sessions](20-sessions.md#sessions).
+`oxbloom-security` is a Spring-Security-style layer for `oxbloom-web`: a `SecurityFilterChain` filter reads `Authorization: Bearer <token>`, authenticates it, then authorizes the request against ordered rules. Bearer JWTs (resource server), password login with HTTP Basic, sessions and form login are implemented; Basic has its own chapter, [Password login](19-password-login.md#password-login), sessions have [Sessions](20-sessions.md#sessions), and form login has [Form login](21-form-login.md#form-login).
 
 ```rust
 let chain = HttpSecurity::new()

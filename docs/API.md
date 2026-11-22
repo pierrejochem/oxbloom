@@ -3808,8 +3808,8 @@ every `dyn AuthenticationProvider` bean with `password_provider`; the default is
 configured users alone never open Basic. With Basic on and no provider bean the build fails with
 `HttpBasicWithoutProvider`. With `security.form-login.enabled = true` it also calls `form_login` with the settings of
 `FormLoginConfig::from_config`; that needs the table `security.session` (without it the startup
-fails with an error that names the key) and a password provider bean (`FormLoginWithoutProvider`
-otherwise). Its metadata lists the ten `security.form-login.*` keys, and the two
+fails with an error that names `security.session`) and a password provider bean (without one the
+build fails with `FormLoginWithoutProvider`, whose text names no key). Its metadata lists the ten `security.form-login.*` keys, and the two
 `security.http-basic.*` keys it reads are in the metadata of `PasswordEncoderAutoConfiguration`.
 
 ```rust

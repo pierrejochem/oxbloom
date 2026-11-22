@@ -29,7 +29,7 @@ An API client does not get this. A request that does not prefer HTML, or that is
 
 ## Turning it on
 
-Form login needs two things: the table `security.session` (the authentication is kept in the session) and at least one password provider bean, which `security.users.*` gives you through the password auto-configuration. Without them the startup fails, and the message names the key.
+Form login needs two things: the table `security.session` (the authentication is kept in the session) and at least one password provider bean, which `security.users.*` gives you through the password auto-configuration. Without the table the startup fails with a message that names `security.session`. Without a password provider the build fails with `SecurityBuildError::FormLoginWithoutProvider`, whose text is "form_login configured without a password provider" and names no key.
 
 In code, `HttpSecurity::form_login` takes a closure over the `FormLogin` settings:
 
