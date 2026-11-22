@@ -5,11 +5,15 @@
 //! the remember-me secret alone. No secret, token or username appears in a log line, an error
 //! text or `Debug` output.
 
+mod autologin;
 mod cookie;
 mod settings;
 mod token;
 
-pub(crate) use cookie::{clear_cookie, issue_cookie};
+pub(crate) use autologin::{
+    AutoLogin, Checked, check_token, invalid_cookie, no_session_error, remember_me_token,
+};
+pub(crate) use cookie::{clear_cookie, issue_cookie, sets_cookie};
 pub use settings::RememberMe;
 pub(crate) use token::TokenCodec;
 

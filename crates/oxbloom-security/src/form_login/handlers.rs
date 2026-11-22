@@ -20,7 +20,11 @@ use super::repository::{
 use super::revalidate::{Revalidated, Revalidation, revalidate};
 use super::settings::FormLogin;
 use crate::csrf::{ensure_token, replace_token, request_passes};
-use crate::remember_me::{RememberMeRuntime, clear_cookie, issue_cookie};
+use crate::dao::authentication_of;
+use crate::remember_me::{
+    AutoLogin, Checked, RememberMeRuntime, check_token, clear_cookie, invalid_cookie, issue_cookie,
+    no_session_error as no_remember_me_session, remember_me_token, sets_cookie,
+};
 use crate::session::CookieScope;
 use crate::{
     Authentication, AuthenticationEntryPoint, AuthenticationError, AuthenticationRequest,
@@ -375,30 +379,10 @@ impl FormLoginHandlers {
             Ok(authentication) => authentication.not_remembered(),
             Err(error) => return self.failure(&error, username_len),
         };
-        // The id of the session the login replaces, read before the rotation removes it.
-        let replaced_id = session.id();
-        // A new id first, so a planted or stolen anonymous id never carries the login.
-        session.rotate_id();
-        // A new token too, so a token known before the login is dead after it.
-        if self.csrf.is_some() {
-            replace_token(&session);
-        }
-        // One read of the clock, so the login time and the revalidation time are the same.
-        let now = self.clock.now();
         let principal = authentication.principal().to_string();
-        if store_authentication(&session, &authentication, now).is_err()
-            || store_principal(&session, &principal, now).is_err()
-        {
-            tracing::error!(
-                target: "oxbloom::security",
-                "the authentication could not be stored in the session"
-            );
-            // A half-written login must not stay: without the principal key the session would
-            // escape the limit and the registry.
-            session.invalidate();
+        if self.establish(&session, &authentication).await.is_err() {
             return redirect(&self.settings.failure_url, "/");
         }
-        self.apply_limit(&principal, &replaced_id).await;
         let cookie = match (&self.remember_me, remember_me) {
             (Some(runtime), true) => self.remember_cookie(runtime, req, &principal).await,
             _ => None,
@@ -442,6 +426,92 @@ impl FormLoginHandlers {
             );
         }
         cookie
+    }
+
+    /// Logs `authentication` in to `session`, for a password login and an auto login alike: a
+    /// new session id, a new CSRF token when the check is on, the authentication, the principal
+    /// key and the revalidation time from one read of the clock, then the session limit. A
+    /// failed write logs one fixed text, invalidates the session and gives `Err`.
+    async fn establish(
+        &self,
+        session: &Session,
+        authentication: &Authentication,
+    ) -> Result<(), ()> {
+        // The id of the session the login replaces, read before the rotation removes it.
+        let replaced_id = session.id();
+        // A new id first, so a planted or stolen anonymous id never carries the login.
+        session.rotate_id();
+        // A new token too, so a token known before the login is dead after it.
+        if self.csrf.is_some() {
+            replace_token(session);
+        }
+        // One read of the clock, so the login time and the revalidation time are the same.
+        let now = self.clock.now();
+        let principal = authentication.principal().to_string();
+        if store_authentication(session, authentication, now).is_err()
+            || store_principal(session, &principal, now).is_err()
+        {
+            tracing::error!(
+                target: "oxbloom::security",
+                "the authentication could not be stored in the session"
+            );
+            // A half-written login must not stay: without the principal key the session would
+            // escape the limit and the registry.
+            session.invalidate();
+            return Err(());
+        }
+        self.apply_limit(&principal, &replaced_id).await;
+        Ok(())
+    }
+
+    /// Logs the request in from its remember-me cookie, when remember-me is on. The chain calls
+    /// this only for a request without a header credential whose session gave no
+    /// authentication. A valid cookie logs in like a password login, through
+    /// [`establish`](Self::establish), with the authentication marked remembered; the cookie is
+    /// not issued again, so its lifetime stays fixed.
+    pub(crate) async fn auto_login(&self, req: &Request) -> AutoLogin {
+        let Some(runtime) = &self.remember_me else {
+            return AutoLogin::Absent;
+        };
+        let Some(token) = remember_me_token(runtime, req) else {
+            return AutoLogin::Absent;
+        };
+        let Some(session) = req.session() else {
+            no_remember_me_session();
+            return AutoLogin::Absent;
+        };
+        let user = match check_token(runtime, &token).await {
+            Checked::Valid(user) => user,
+            Checked::Invalid => {
+                invalid_cookie();
+                return AutoLogin::Invalid;
+            }
+            Checked::Unavailable => return AutoLogin::Unavailable,
+        };
+        // The same authentication a password login of this user builds, then the marker.
+        let authentication = authentication_of(&user).remembered();
+        match self.establish(&session, &authentication).await {
+            Ok(()) => AutoLogin::LoggedIn(authentication),
+            Err(()) => AutoLogin::Unavailable,
+        }
+    }
+
+    /// The `Set-Cookie` that clears the remember-me cookie in the answer to `req`, when
+    /// remember-me is on. Built before the request goes on, because the cookie scope is read
+    /// from the request.
+    pub(crate) fn clearing_cookie(&self, req: &Request) -> Option<HeaderValue> {
+        let runtime = self.remember_me.as_ref()?;
+        Some(clear_cookie(&runtime.settings, &CookieScope::of(req)))
+    }
+
+    /// Appends `cookie`, from [`clearing_cookie`](Self::clearing_cookie), to `res`, unless the
+    /// response already sets the remember-me cookie itself.
+    pub(crate) fn add_clearing_cookie(&self, res: &mut Response, cookie: HeaderValue) {
+        if let Some(runtime) = &self.remember_me
+            && !sets_cookie(res, &runtime.settings.cookie_name)
+        {
+            res.headers_mut().append(header::SET_COOKIE, cookie);
+        }
     }
 
     /// Evicts the oldest sessions of `principal` until `max - 1` others remain. The session being

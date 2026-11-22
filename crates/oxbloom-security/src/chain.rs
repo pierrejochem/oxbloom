@@ -13,6 +13,7 @@ use oxbloom_web::{Filter, Next, Request, Response};
 use crate::csrf::hide_token_header;
 use crate::form_login::FormLoginHandlers;
 use crate::headers::apply_headers;
+use crate::remember_me::AutoLogin;
 use crate::{
     AuthenticationError, AuthenticationRequest, AuthorizationRule, HeadersConfig, ProviderManager,
     RequestMatcher, RequestSecurityExt, RequestSessionExt, SecurityContext,
@@ -368,7 +369,10 @@ impl SecurityFilterChain {
 impl Filter for SecurityFilterChain {
     async fn filter(&self, req: Request, next: Next<'_>) -> Response {
         let scheme = req.scheme();
-        let (mut res, authenticated) = self.run(req, next).await;
+        let (mut res, authenticated, clearing) = self.run(req, next).await;
+        if let (Some(cookie), Some(form)) = (clearing, &self.form_login) {
+            form.add_clearing_cookie(&mut res, cookie);
+        }
         apply_headers(&self.headers, authenticated, scheme, &mut res);
         res
     }
@@ -379,9 +383,10 @@ impl Filter for SecurityFilterChain {
 }
 
 impl SecurityFilterChain {
-    /// The chain proper. Returns the response and whether the request was authenticated, which
-    /// the wrapper needs to decide on `Cache-Control`.
-    async fn run(&self, mut req: Request, next: Next<'_>) -> (Response, bool) {
+    /// The chain proper. Returns the response, whether the request was authenticated, which
+    /// the wrapper needs to decide on `Cache-Control`, and the `Set-Cookie` that clears an
+    /// invalid remember-me cookie, which the wrapper appends.
+    async fn run(&self, mut req: Request, next: Next<'_>) -> (Response, bool, Option<HeaderValue>) {
         // Keep the token out of `Debug` output of the request from here on, also for requests
         // built by hand. Marking a value sensitive does not change its bytes.
         if let header::Entry::Occupied(mut entry) = req.headers.entry(header::AUTHORIZATION) {
@@ -394,18 +399,18 @@ impl SecurityFilterChain {
         // paths, before the authorization rules.
         if let Some(form) = &self.form_login {
             if let Some(res) = form.handle_post(&req, self.manager.as_ref()).await {
-                return (res, false);
+                return (res, false, None);
             }
             if form.token_endpoint_request(&req)
                 && let Some(res) = form.token_endpoint(&req)
             {
-                return (res, false);
+                return (res, false, None);
             }
             if let Some(flags) = form.login_page_request(&req) {
                 req.extensions_mut().insert(SecurityContext::anonymous());
                 let session = req.session();
                 let res = next.run(req).await;
-                return (form.page_fallback(res, flags, session), false);
+                return (form.page_fallback(res, flags, session), false, None);
             }
         }
         let mut context = SecurityContext::anonymous();
@@ -417,7 +422,7 @@ impl SecurityFilterChain {
             ) {
                 Credentials::Anonymous => None,
                 Credentials::Malformed(scheme) => {
-                    return (self.challenges.malformed(scheme), false);
+                    return (self.challenges.malformed(scheme), false, None);
                 }
                 Credentials::Token(token) => {
                     Some(AuthenticationRequest::BearerToken(Secret::new(token)))
@@ -434,23 +439,44 @@ impl SecurityFilterChain {
                     Ok(authentication) => {
                         context = SecurityContext::authenticated(authentication);
                     }
-                    Err(error) => return (self.entry_point.commence(&req, Some(&error)), false),
+                    Err(error) => {
+                        return (self.entry_point.commence(&req, Some(&error)), false, None);
+                    }
                 }
             }
         }
-        // Credentials in the header win; the session is the fallback. The user of a session is
-        // revalidated first, so an ended session is anonymous to the CSRF check and to the
-        // rules. A request the session authenticates must carry the CSRF token when it changes
-        // state.
+        // Credentials in the header win; the session is the fallback, and the remember-me
+        // cookie the last resort. The user of a session is revalidated first, so an ended
+        // session is anonymous to the CSRF check and to the rules. A request with any
+        // `Authorization` header never logs in from the cookie. A request the session
+        // authenticates, also one just logged in from the cookie, must carry the CSRF token when
+        // it changes state.
+        let mut clearing = None;
         if context.authentication().is_none()
             && let Some(form) = &self.form_login
-            && let Some(authentication) = form.restore(&req)
-            && let Some(authentication) = form.revalidate(&req, authentication).await
         {
-            if !form.csrf_passes(&req) {
-                return (empty(StatusCode::FORBIDDEN), true);
+            let restored = match form.restore(&req) {
+                Some(authentication) => form.revalidate(&req, authentication).await,
+                None => None,
+            };
+            let authentication = match restored {
+                Some(authentication) => Some(authentication),
+                None if req.headers.contains_key(header::AUTHORIZATION) => None,
+                None => match form.auto_login(&req).await {
+                    AutoLogin::LoggedIn(authentication) => Some(authentication),
+                    AutoLogin::Invalid => {
+                        clearing = form.clearing_cookie(&req);
+                        None
+                    }
+                    AutoLogin::Unavailable | AutoLogin::Absent => None,
+                },
+            };
+            if let Some(authentication) = authentication {
+                if !form.csrf_passes(&req) {
+                    return (empty(StatusCode::FORBIDDEN), true, None);
+                }
+                context = SecurityContext::authenticated(authentication);
             }
-            context = SecurityContext::authenticated(authentication);
         }
         req.extensions_mut().insert(context);
         let authenticated = req.authentication().is_some();
@@ -461,7 +487,7 @@ impl SecurityFilterChain {
         } else {
             self.entry_point.commence(&req, None)
         };
-        (res, authenticated)
+        (res, authenticated, clearing)
     }
 }
 

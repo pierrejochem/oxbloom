@@ -10,7 +10,7 @@
 use std::time::SystemTime;
 
 use http::{HeaderValue, header};
-use oxbloom_web::Request;
+use oxbloom_web::{Request, Response};
 
 use super::settings::RememberMe;
 use super::token::TokenCodec;
@@ -64,10 +64,23 @@ pub(crate) fn clear_cookie(settings: &RememberMe, scope: &CookieScope) -> Header
 
 /// The first value of the cookie `name` in the `Cookie` headers of `req`. A header over 8 KiB
 /// counts as no cookie and a value with a byte outside the cookie octets is skipped.
-#[allow(dead_code, reason = "used by the auto login of the chain")]
 pub(crate) fn read_cookie(req: &Request, name: &str) -> Option<String> {
     let values: Vec<&HeaderValue> = req.headers.get_all(header::COOKIE).iter().collect();
     parse_cookie_header(&values, name).into_iter().next()
+}
+
+/// Whether `res` already sets the cookie `name`, in which case no clearing cookie is added.
+pub(crate) fn sets_cookie(res: &Response, name: &str) -> bool {
+    res.headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .any(|value| {
+            value
+                .as_bytes()
+                .split(|b| *b == b'=')
+                .next()
+                .is_some_and(|key| key.trim_ascii() == name.as_bytes())
+        })
 }
 
 #[cfg(test)]
@@ -162,5 +175,21 @@ mod tests {
             .append(header::COOKIE, HeaderValue::from_static("R=second"));
         assert_eq!(read_cookie(&req, "R").as_deref(), Some("first"));
         assert_eq!(read_cookie(&req, "S"), None);
+    }
+
+    #[test]
+    fn sets_cookie_matches_the_name_only() {
+        let mut res = Response::new(Default::default());
+        assert!(!sets_cookie(&res, "R"));
+        res.headers_mut()
+            .append(header::SET_COOKIE, HeaderValue::from_static("RR=1; Path=/"));
+        res.headers_mut()
+            .append(header::SET_COOKIE, HeaderValue::from_static("S=R; Path=/"));
+        assert!(!sets_cookie(&res, "R"));
+        res.headers_mut().append(
+            header::SET_COOKIE,
+            HeaderValue::from_static("R=; Max-Age=0"),
+        );
+        assert!(sets_cookie(&res, "R"));
     }
 }
