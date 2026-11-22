@@ -225,3 +225,27 @@ async fn concurrent_saves_and_evictions_stay_consistent() {
     index.evict_oldest("alice", 3, None).await.unwrap();
     assert_eq!(ids(&*index, "alice").await.len(), 3);
 }
+
+#[tokio::test]
+async fn session_past_the_absolute_timeout_is_ignored_while_idle_window_is_open() {
+    let (store, clock) = setup();
+    let index = index(&store);
+    let mut data = SessionData::new(clock.now());
+    data.values_mut().insert(KEY.to_owned(), json!("alice"));
+    // Keep re-saving so the idle deadline always lies ahead.
+    for _ in 0..11 {
+        clock.advance(Duration::from_secs(90));
+        store.save("old", &data, IDLE).await.unwrap();
+    }
+    assert_eq!(ids(&*index, "alice").await, ["old"]);
+    // 990 s after creation: the idle window is open until 1090 s, the absolute timeout ends at 1000 s.
+    clock.advance(Duration::from_secs(11));
+    assert!(ids(&*index, "alice").await.is_empty());
+    put(&store, &clock, "fresh", Some("alice")).await;
+    assert_eq!(
+        index.evict_oldest("alice", 0, Some("fresh")).await.unwrap(),
+        0
+    );
+    assert_eq!(index.delete_of("alice", Some("fresh")).await.unwrap(), 0);
+    assert_eq!(ids(&*index, "alice").await, ["fresh"]);
+}
