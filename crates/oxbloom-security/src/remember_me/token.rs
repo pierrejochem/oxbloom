@@ -48,9 +48,12 @@ impl ParsedToken {
         &self.username
     }
 
-    /// The expiry the token names.
+    /// The expiry the token names. `parse` only accepts an expiry that fits a `SystemTime`; if
+    /// one did not, this gives the epoch, an expired time, instead of panicking.
     pub(crate) fn expires(&self) -> SystemTime {
-        SystemTime::UNIX_EPOCH + Duration::from_secs(self.expires)
+        SystemTime::UNIX_EPOCH
+            .checked_add(Duration::from_secs(self.expires))
+            .unwrap_or(SystemTime::UNIX_EPOCH)
     }
 }
 
@@ -72,11 +75,12 @@ pub(crate) struct TokenCodec {
     reason = "used by the cookie and the auto login of the chain"
 )]
 impl TokenCodec {
-    /// Derives the keys of validated settings.
+    /// Derives the keys of settings that already passed [`RememberMe::validate`].
     ///
     /// # Errors
     ///
-    /// [`SecurityBuildError::InvalidRememberMe`] when the settings have no secret.
+    /// The `Result` is defensive: validated settings always have a secret, and HKDF expanding
+    /// to 32 bytes cannot fail. Either case gives [`SecurityBuildError::InvalidRememberMe`].
     pub(crate) fn new(settings: &RememberMe) -> Result<Self, SecurityBuildError> {
         let current = settings
             .secret
@@ -92,25 +96,28 @@ impl TokenCodec {
         })
     }
 
-    /// The token for this user and expiry, signed with the current key.
+    /// The token for this user and expiry, signed with the current key, or `None` when the
+    /// token would be longer than the 1 KiB that [`parse`](Self::parse) accepts (a username of
+    /// more than about 700 bytes). Every token it returns parses.
     pub(crate) fn encode(
         &self,
         username: &str,
         password_hash: &str,
         expires: SystemTime,
-    ) -> String {
+    ) -> Option<String> {
         let expires = epoch_seconds(expires);
         let tag = hmac::sign(&self.keys[0], &mac_input(username, expires, password_hash));
-        format!(
+        let token = format!(
             "{VERSION}.{}.{expires}.{}",
             URL_SAFE_NO_PAD.encode(username),
             URL_SAFE_NO_PAD.encode(tag.as_ref())
-        )
+        );
+        (token.len() <= MAX_TOKEN_BYTES).then_some(token)
     }
 
     /// Checks the format only: four parts separated by `.`, the version `v1`, a base64url
     /// username that is UTF-8, an expiry of decimal digits without a leading zero that fits a
-    /// `u64`, and a base64url MAC of 32 bytes. A token over 1 KiB is refused unread. Never panics.
+    /// `u64` and, as seconds after the epoch, a `SystemTime`, and a base64url MAC of 32 bytes. A token over 1 KiB is refused unread. Never panics.
     pub(crate) fn parse(&self, token: &str) -> Option<ParsedToken> {
         if token.len() > MAX_TOKEN_BYTES {
             return None;
@@ -128,6 +135,7 @@ impl TokenCodec {
             return None;
         }
         let expires = expires.parse::<u64>().ok()?;
+        SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(expires))?;
         let mac = <[u8; MAC_BYTES]>::try_from(URL_SAFE_NO_PAD.decode(mac).ok()?).ok()?;
         Some(ParsedToken {
             username,
@@ -216,6 +224,18 @@ mod tests {
         TokenCodec::new(&settings).unwrap()
     }
 
+    /// `encode` for tokens the tests know fit.
+    trait Enc {
+        fn enc(&self, username: &str, hash: &str, expires: SystemTime) -> String;
+    }
+
+    impl Enc for TokenCodec {
+        fn enc(&self, username: &str, hash: &str, expires: SystemTime) -> String {
+            self.encode(username, hash, expires)
+                .expect("the token fits")
+        }
+    }
+
     fn codec() -> TokenCodec {
         codec_with(SECRET, &[])
     }
@@ -235,7 +255,7 @@ mod tests {
     #[test]
     fn a_token_round_trips() {
         let c = codec();
-        let token = c.encode("alice", HASH, later());
+        let token = c.enc("alice", HASH, later());
         let p = parts(&token);
         assert_eq!(p.len(), 4);
         assert_eq!(p[0], "v1");
@@ -252,7 +272,7 @@ mod tests {
     #[test]
     fn each_tampered_part_is_rejected() {
         let c = codec();
-        let token = c.encode("alice", HASH, later());
+        let token = c.enc("alice", HASH, later());
         let p = parts(&token);
         let with = |i: usize, v: &str| {
             let mut q = p.clone();
@@ -278,7 +298,7 @@ mod tests {
     #[test]
     fn a_tampered_username_or_expiry_still_parses_but_fails_verification() {
         let c = codec();
-        let p = parts(&c.encode("alice", HASH, later()));
+        let p = parts(&c.enc("alice", HASH, later()));
         let forged = format!("v1.{}.{}.{}", URL_SAFE_NO_PAD.encode("root"), p[2], p[3]);
         let parsed = c.parse(&forged).expect("the format is valid");
         assert!(!c.verify(&parsed, HASH));
@@ -290,19 +310,19 @@ mod tests {
     #[test]
     fn an_expired_token_is_rejected() {
         let c = codec();
-        assert!(!accepted(&c, &c.encode("alice", HASH, at(NOW - 1)), HASH));
-        assert!(!accepted(&c, &c.encode("alice", HASH, at(NOW)), HASH));
-        assert!(accepted(&c, &c.encode("alice", HASH, at(NOW + 1)), HASH));
+        assert!(!accepted(&c, &c.enc("alice", HASH, at(NOW - 1)), HASH));
+        assert!(!accepted(&c, &c.enc("alice", HASH, at(NOW)), HASH));
+        assert!(accepted(&c, &c.enc("alice", HASH, at(NOW + 1)), HASH));
         assert!(!accepted(
             &c,
-            &c.encode("alice", HASH, SystemTime::UNIX_EPOCH),
+            &c.enc("alice", HASH, SystemTime::UNIX_EPOCH),
             HASH
         ));
     }
 
     #[test]
     fn a_token_of_another_key_is_rejected() {
-        let token = codec_with(OTHER, &[]).encode("alice", HASH, later());
+        let token = codec_with(OTHER, &[]).enc("alice", HASH, later());
         assert!(!accepted(&codec(), &token, HASH));
     }
 
@@ -320,10 +340,10 @@ mod tests {
 
     #[test]
     fn an_old_key_is_accepted_after_a_rotation() {
-        let before = codec_with(SECRET, &[]).encode("alice", HASH, later());
+        let before = codec_with(SECRET, &[]).enc("alice", HASH, later());
         let rotated = codec_with(OTHER, &["a-third-remember-me-secret-32-byt", SECRET]);
         assert!(accepted(&rotated, &before, HASH));
-        let after = rotated.encode("alice", HASH, later());
+        let after = rotated.enc("alice", HASH, later());
         assert_ne!(after, before, "new tokens use the current key");
         assert!(accepted(&rotated, &after, HASH));
         assert!(!accepted(&codec(), &after, HASH));
@@ -334,7 +354,7 @@ mod tests {
     #[test]
     fn a_changed_password_hash_is_rejected() {
         let c = codec();
-        let token = c.encode("alice", HASH, later());
+        let token = c.enc("alice", HASH, later());
         assert!(!accepted(
             &c,
             &token,
@@ -356,7 +376,7 @@ mod tests {
             "",
             "v1.x.1.y",
         ] {
-            let token = c.encode(name, HASH, later());
+            let token = c.enc(name, HASH, later());
             assert_eq!(parts(&token).len(), 4, "{name}");
             let parsed = c.parse(&token).expect(name);
             assert_eq!(parsed.username(), name);
@@ -372,13 +392,13 @@ mod tests {
             format!("{}.{}.{}.{}", pa[0], pa[1], pa[2], pb[3])
         };
         // Username against password hash.
-        let a = c.encode("a", "bc", later());
-        let b = c.encode("ab", "c", later());
+        let a = c.enc("a", "bc", later());
+        let b = c.enc("ab", "c", later());
         assert_ne!(parts(&a)[3], parts(&b)[3]);
         assert!(!accepted(&c, &splice(&a, &b), "bc"));
         // Username against expiry.
-        let a = c.encode("a1", HASH, at(NOW + 23));
-        let b = c.encode("a", HASH, at(NOW + 123));
+        let a = c.enc("a1", HASH, at(NOW + 23));
+        let b = c.enc("a", HASH, at(NOW + 123));
         assert_ne!(parts(&a)[3], parts(&b)[3]);
         assert!(!accepted(&c, &splice(&a, &b), HASH));
     }
@@ -397,23 +417,40 @@ mod tests {
     #[test]
     fn a_token_over_one_kib_is_refused() {
         let c = codec();
-        // A username that keeps the token at exactly 1024 bytes parses; one byte more does not.
-        let fixed = "v1...".len() + (NOW + 3600).to_string().len() + 43;
-        let fits = (MAX_TOKEN_BYTES - fixed) / 4 * 3;
-        let token = c.encode(&"u".repeat(fits), HASH, later());
-        assert!(token.len() <= MAX_TOKEN_BYTES);
-        assert!(accepted(&c, &token, HASH));
-        let token = c.encode(&"u".repeat(fits + 3), HASH, later());
-        assert!(token.len() > MAX_TOKEN_BYTES);
-        assert!(c.parse(&token).is_none());
         assert!(c.parse(&"v".repeat(MAX_TOKEN_BYTES + 1)).is_none());
         assert!(c.parse(&"x".repeat(1 << 20)).is_none());
+        // A well-formed token over the limit is refused by its length alone.
+        let user = URL_SAFE_NO_PAD.encode("u".repeat(800));
+        let mac = URL_SAFE_NO_PAD.encode([0u8; 32]);
+        let long = format!("v1.{user}.{}.{mac}", NOW + 3600);
+        assert!(long.len() > MAX_TOKEN_BYTES);
+        assert!(c.parse(&long).is_none());
+    }
+
+    #[test]
+    fn encode_gives_up_exactly_where_parse_would() {
+        let c = codec();
+        // `v1`, three dots, the expiry digits and the 43 MAC characters, then the username in
+        // base64url without padding: ceil(4n / 3) characters for n bytes.
+        let room = MAX_TOKEN_BYTES - ("v1...".len() + (NOW + 3600).to_string().len() + 43);
+        let largest = (0..MAX_TOKEN_BYTES)
+            .take_while(|n| (4 * n).div_ceil(3) <= room)
+            .last()
+            .unwrap();
+        let token = c
+            .encode(&"u".repeat(largest), HASH, later())
+            .expect("the largest username fits");
+        assert!(token.len() <= MAX_TOKEN_BYTES);
+        assert!(accepted(&c, &token, HASH));
+        assert_eq!(c.encode(&"u".repeat(largest + 1), HASH, later()), None);
+        // A multi-byte name counts by bytes.
+        assert_eq!(c.encode(&"é".repeat(largest / 2 + 1), HASH, later()), None);
     }
 
     #[test]
     fn a_malformed_token_never_parses_and_never_panics() {
         let c = codec();
-        let good = parts(&c.encode("alice", HASH, later()));
+        let good = parts(&c.enc("alice", HASH, later()));
         let mac = &good[3];
         let user = &good[1];
         let inputs = [
@@ -445,18 +482,39 @@ mod tests {
         for input in &inputs {
             assert!(c.parse(input).is_none(), "{input}");
         }
-        // The largest expiry still parses.
-        assert!(
-            c.parse(&format!("v1.{user}.18446744073709551615.{mac}"))
-                .is_some()
-        );
         assert!(c.parse(&format!("v1.{user}.0.{mac}")).is_some());
+    }
+
+    #[test]
+    fn an_expiry_beyond_system_time_is_malformed_and_expires_never_panics() {
+        let c = codec();
+        let good = parts(&c.enc("alice", HASH, later()));
+        let (user, mac) = (&good[1], &good[3]);
+        let token = |secs: u64| format!("v1.{user}.{secs}.{mac}");
+        // Beyond what a `SystemTime` holds: malformed, never a panic.
+        let max = u64::try_from(i64::MAX).unwrap();
+        assert!(c.parse(&token(u64::MAX)).is_none());
+        assert!(c.parse(&token(max + 1)).is_none());
+        // The largest accepted expiry reads back without a panic.
+        let parsed = c.parse(&token(max)).expect("the largest expiry parses");
+        assert_eq!(
+            parsed.expires(),
+            SystemTime::UNIX_EPOCH + Duration::from_secs(max)
+        );
+        assert!(!c.verify(&parsed, HASH));
+        // Even a value `parse` would refuse gives the epoch instead of a panic.
+        let raw = ParsedToken {
+            username: String::new(),
+            expires: u64::MAX,
+            mac: [0; MAC_BYTES],
+        };
+        assert_eq!(raw.expires(), SystemTime::UNIX_EPOCH);
     }
 
     #[test]
     fn debug_shows_no_key_or_username() {
         let c = codec();
-        let parsed = c.parse(&c.encode("alice", HASH, later())).unwrap();
+        let parsed = c.parse(&c.enc("alice", HASH, later())).unwrap();
         assert_eq!(format!("{parsed:?}"), "ParsedToken(..)");
         let dbg = format!("{c:?}");
         assert!(dbg.contains("keys: 1") && !dbg.contains(SECRET), "{dbg}");
