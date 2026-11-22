@@ -490,7 +490,12 @@ fn metadata_lists_exactly_the_keys_read() {
         Some(settings.argon2.parallelism.to_string().as_str())
     );
     assert_eq!(default_of("security.users.<name>.password"), None);
-    assert!(SecurityAutoConfiguration::properties().is_empty());
+    // Security lists the `security.form-login` keys only (see `autoconfigure_form_login.rs`).
+    assert!(
+        SecurityAutoConfiguration::properties()
+            .iter()
+            .all(|p| p.key.starts_with("security.form-login."))
+    );
 }
 
 #[tokio::test]

@@ -90,16 +90,20 @@ use crate::autoconfig::AutoConfigurations;
 /// #[cfg(feature = "security")]
 /// {
 ///     use oxbloom_boot::{
-///         JwtDecoderAutoConfiguration, PasswordEncoderAutoConfiguration, SessionAutoConfiguration,
+///         JwtDecoderAutoConfiguration, PasswordEncoderAutoConfiguration, SecurityAutoConfiguration,
+///         SessionAutoConfiguration,
 ///     };
 ///     assert_eq!(keys(all(), "security.jwt."), 8);
 ///     assert_eq!(keys(all().exclude::<JwtDecoderAutoConfiguration>(), "security.jwt."), 0);
 ///     // 8 `security.jwt` keys, 4 `security.password` keys, 2 `security.http-basic` keys,
-///     // 4 `security.users` keys and 10 `security.session` keys.
-///     assert_eq!(keys(all(), "security."), 28);
-///     assert_eq!(keys(all().exclude::<PasswordEncoderAutoConfiguration>(), "security."), 18);
+///     // 4 `security.users` keys, 10 `security.session` keys and 10 `security.form-login` keys
+///     // (listed by `SecurityAutoConfiguration`, so excluding it hides them).
+///     assert_eq!(keys(all(), "security."), 38);
+///     assert_eq!(keys(all().exclude::<PasswordEncoderAutoConfiguration>(), "security."), 28);
 ///     assert_eq!(keys(all(), "security.session."), 10);
-///     assert_eq!(keys(all().exclude::<SessionAutoConfiguration>(), "security."), 18);
+///     assert_eq!(keys(all().exclude::<SessionAutoConfiguration>(), "security."), 28);
+///     assert_eq!(keys(all(), "security.form-login."), 10);
+///     assert_eq!(keys(all().exclude::<SecurityAutoConfiguration>(), "security.form-login."), 0);
 /// }
 /// #[cfg(feature = "web")]
 /// {

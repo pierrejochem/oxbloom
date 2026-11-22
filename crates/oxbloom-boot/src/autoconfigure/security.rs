@@ -5,12 +5,14 @@ use std::sync::Arc;
 use oxbloom_config::Config;
 use oxbloom_di::{Configuration, ContainerBuilder, DiError, component};
 use oxbloom_security::{
-    AuthenticationProvider, HttpBasicSettings, HttpSecurity, JwtDecoder, SecurityFilterChain,
+    AuthenticationProvider, FormLoginConfig, HttpBasicSettings, HttpSecurity, JwtDecoder,
+    SecurityFilterChain, SessionFilter,
 };
 
 use super::jwt::JwtDecoderAutoConfiguration;
 use super::password::PasswordEncoderAutoConfiguration;
 use crate::autoconfig::{AutoConfiguration, ConfigRef};
+use crate::metadata::PropertyMetadata;
 
 /// Contributes rules to the `SecurityFilterChain` that [`SecurityAutoConfiguration`] builds.
 ///
@@ -104,8 +106,20 @@ pub trait SecurityCustomizer: Send + Sync {
 /// `password_provider`. Configured users alone never open Basic. With Basic enabled and no
 /// provider bean the build fails with `SecurityBuildError::HttpBasicWithoutProvider`.
 ///
+/// Form login is off unless `security.form-login.enabled` is `true` (read with
+/// `oxbloom_security::FormLoginConfig::from_config`). Then the chain calls `form_login` with
+/// the configured settings and adds every `dyn AuthenticationProvider` bean as a password
+/// provider, so the user chain needs the same provider beans as Basic does: with none the
+/// build fails with `SecurityBuildError::FormLoginWithoutProvider`. Form login keeps the
+/// `Authentication` in the session, so it needs the session filter of
+/// [`SessionAutoConfiguration`](crate::SessionAutoConfiguration), which exists only when the
+/// `security.session` table is present: without it the startup fails with a `DiError::Creation`
+/// that names `security.session`.
+///
 /// A `SecurityBuildError` fails the build as `DiError::Creation` with that error as source; a
-/// bad `security.http-basic` key fails it the same way with the `ConfigError` naming the key.
+/// bad `security.http-basic` or `security.form-login` key fails it the same way with the
+/// `ConfigError` naming the key. The metadata of this auto-configuration lists the
+/// `security.form-login` keys, so excluding it hides them.
 ///
 /// # Examples
 ///
@@ -177,6 +191,10 @@ impl AutoConfiguration for SecurityAutoConfiguration {
             ConfigRef::of::<PasswordEncoderAutoConfiguration>(),
         ]
     }
+
+    fn properties() -> &'static [PropertyMetadata] {
+        &FORM_LOGIN
+    }
 }
 
 /// The chain from the customizers, or the closed default, plus the decoder when there is one
@@ -186,9 +204,18 @@ fn security_filter_chain(
     customizers: Vec<Arc<dyn SecurityCustomizer>>,
     decoder: Option<Arc<dyn JwtDecoder>>,
     providers: Vec<Arc<dyn AuthenticationProvider>>,
+    session: Option<Arc<SessionFilter>>,
 ) -> Result<SecurityFilterChain, DiError> {
-    let basic = HttpBasicSettings::from_config(&config)
-        .map_err(DiError::creation_from::<SecurityFilterChain>)?;
+    let creation = DiError::creation_from::<SecurityFilterChain>;
+    let basic = HttpBasicSettings::from_config(&config).map_err(creation)?;
+    let form = FormLoginConfig::from_config(&config).map_err(creation)?;
+    if form.is_some() && session.is_none() {
+        // The session filter is registered only when the `security.session` table exists.
+        return Err(DiError::creation_from::<SecurityFilterChain>(
+            FormLoginWithoutSession,
+        ));
+    }
+    let form_enabled = form.is_some();
     let mut http = HttpSecurity::new();
     if customizers.is_empty() {
         // Closed by default: nothing is reachable without authentication.
@@ -203,6 +230,11 @@ fn security_filter_chain(
     if basic.enabled {
         let realm = basic.realm;
         http = http.http_basic(|b| b.realm(realm));
+    }
+    if let Some(form) = form {
+        http = http.form_login(move |_| form);
+    }
+    if basic.enabled || form_enabled {
         for provider in providers {
             http = http.password_provider(provider);
         }
@@ -210,3 +242,87 @@ fn security_filter_chain(
     http.build()
         .map_err(DiError::creation_from::<SecurityFilterChain>)
 }
+
+/// The startup failure of form login without the `security.session` table.
+#[derive(Debug)]
+struct FormLoginWithoutSession;
+
+impl std::fmt::Display for FormLoginWithoutSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(
+            "security.form-login.enabled needs the session filter, which exists only when the \
+             `security.session` table is present (for example `[security.session]` with \
+             `store = \"memory\"`)",
+        )
+    }
+}
+
+impl std::error::Error for FormLoginWithoutSession {}
+
+/// Exactly the keys `FormLoginConfig::from_config` reads (pinned by a test).
+static FORM_LOGIN: [PropertyMetadata; 10] = [
+    PropertyMetadata::new(
+        "security.form-login.default-success-url",
+        "String",
+        Some("/"),
+        "Where a login goes when no request was saved; a local path.",
+    ),
+    PropertyMetadata::new(
+        "security.form-login.enabled",
+        "bool",
+        Some("false"),
+        "Whether the security chain offers form login, logout, the saved request and the \
+         default login page. Needs the `security.session` table and a password provider bean; \
+         without them the startup fails.",
+    ),
+    PropertyMetadata::new(
+        "security.form-login.failure-url",
+        "String",
+        Some("/login?error"),
+        "Where a failed login goes; a local path.",
+    ),
+    PropertyMetadata::new(
+        "security.form-login.login-page",
+        "String",
+        Some("/login"),
+        "The path of the login page; a local path.",
+    ),
+    PropertyMetadata::new(
+        "security.form-login.login-page-enabled",
+        "bool",
+        Some("true"),
+        "Whether the chain serves its default login page at `login-page`.",
+    ),
+    PropertyMetadata::new(
+        "security.form-login.login-processing-url",
+        "String",
+        Some("/login"),
+        "The path the login form posts to; a local path.",
+    ),
+    PropertyMetadata::new(
+        "security.form-login.logout-success-url",
+        "String",
+        Some("/login?logout"),
+        "Where a logout goes; a local path.",
+    ),
+    PropertyMetadata::new(
+        "security.form-login.logout-url",
+        "String",
+        Some("/logout"),
+        "The path that logs out on POST; a local path that differs from the login page and the \
+         login processing url.",
+    ),
+    PropertyMetadata::new(
+        "security.form-login.password-field",
+        "String",
+        Some("password"),
+        "The name of the password field of the login form; letters, digits, `_` and `-`, and \
+         different from the username field.",
+    ),
+    PropertyMetadata::new(
+        "security.form-login.username-field",
+        "String",
+        Some("username"),
+        "The name of the username field of the login form; letters, digits, `_` and `-`.",
+    ),
+];

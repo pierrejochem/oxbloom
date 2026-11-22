@@ -137,3 +137,13 @@ roles = ["USER"]
 # request scheme, and a session ends after 30 minutes unused or 8 hours in total.
 [security.session]
 store = "memory"
+
+# Form login for browsers. `GET /me` is an HTML page behind the login: a browser without a
+# session is redirected to `/login`, which Oxbloom serves as a default page, and comes back to
+# `/me` after the login. The users are the demo users above (`admin` / `changeit`). It needs the
+# `security.session` section and a password provider. All other keys have their defaults:
+# `login-page`, `login-processing-url` and `logout-url` are `/login`, `/login` and `/logout`.
+# There are no CSRF tokens yet: a same-origin check on the two POSTs and the `SameSite=Lax`
+# cookie are the protection for now.
+[security.form-login]
+enabled = true

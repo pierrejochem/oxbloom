@@ -43,6 +43,16 @@ impl FailureAnalyzer for SecurityAnalyzer {
                 "The HTTP Basic realm contains a double quote, a backslash or a control character.",
                 "Use a realm of plain printable text, such as `Oxbloom`.",
             ),
+            SecurityBuildError::FormLoginWithoutProvider => (
+                "`form_login` is configured without a password provider.",
+                "Add one with `password_provider`, for example a `DaoAuthenticationProvider`.",
+            ),
+            SecurityBuildError::InvalidFormLoginUrl => (
+                "A form login URL is not a safe local path, two form login URLs collide, or a form \
+                 field name is not made of ASCII letters, digits, `_` and `-`.",
+                "Use paths that start with a single `/`, a logout URL that differs from the login \
+                 URLs, and plain field names such as `username`.",
+            ),
         };
         Some(FailureAnalysis::new(description, action))
     }
@@ -179,6 +189,24 @@ mod tests {
             SecurityBuildError::InvalidRealm,
             "The HTTP Basic realm contains a double quote, a backslash or a control character.",
             "Use a realm of plain printable text, such as `Oxbloom`.",
+        );
+    }
+
+    #[test]
+    fn form_login_without_provider_text() {
+        check(
+            SecurityBuildError::FormLoginWithoutProvider,
+            "`form_login` is configured without a password provider.",
+            "Add one with `password_provider`, for example a `DaoAuthenticationProvider`.",
+        );
+    }
+
+    #[test]
+    fn invalid_form_login_url_text() {
+        check(
+            SecurityBuildError::InvalidFormLoginUrl,
+            "A form login URL is not a safe local path, two form login URLs collide, or a form field name is not made of ASCII letters, digits, `_` and `-`.",
+            "Use paths that start with a single `/`, a logout URL that differs from the login URLs, and plain field names such as `username`.",
         );
     }
 

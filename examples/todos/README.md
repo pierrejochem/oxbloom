@@ -47,9 +47,31 @@ curl http://127.0.0.1:8081/api/visits                  # {"visits":1}, a new ses
 
 The in-memory store lives in this process, so a restart ends every session and a second instance
 would not know them. The other stores are described in the guide chapter on sessions. Sessions have
-no CSRF protection yet (Slice 6d), and this example has no login or logout endpoint (Slice 6c).
+no CSRF protection yet (Slice 6d); the login flow below is described in its own section.
 For the stateless backend set `store = "cookie"` and `security.session.secret` (at least 32 bytes)
 in an environment variable or a file that is not committed.
+
+## Form login
+
+`GET /me` is an HTML page behind a login. It is not in the open rules of `PublicPaths`, so the last
+rule (`any_request().authenticated()`) applies. `application.toml` has `[security.form-login]`
+with `enabled = true`, which needs the `[security.session]` section and the demo users above.
+A browser that asks for `/me` with `Accept: text/html` and has no session gets a 302 to `/login`,
+which Oxbloom serves as its default login page. After a login with `admin` and `changeit` the
+browser goes back to `/me`, which shows the user name and a button that posts to `/logout`.
+A request without a browser `Accept` header, such as `curl`, still gets 401 and no session.
+
+```text
+curl -i -H 'accept: text/html' http://127.0.0.1:8081/me       # 302 to /login, and a session cookie
+curl -i -c jar.txt -d 'username=admin&password=changeit' http://127.0.0.1:8081/login   # 302 to /
+curl -b jar.txt -H 'accept: text/html' http://127.0.0.1:8081/me   # 200
+curl -i -b jar.txt -X POST http://127.0.0.1:8081/logout       # 302 to /login?logout
+```
+
+There are no CSRF tokens yet (Slice 6d). The two posts are protected by a same-origin check and
+the `SameSite=Lax` cookie, and a request with neither `Origin` nor `Referer` (such as `curl`) is
+allowed. After a login the cookie authenticates every route, and the same-origin check covers only these two posts, so state-changing routes have only `SameSite=Lax` until Slice 6d, which does not stop a same-site attacker such as a sibling subdomain. The in-memory sessions are lost at a restart. The test `tests/login.rs` walks through
+the flow: the redirect, the login, the page, the logout and a wrong password.
 
 ## Actuator
 

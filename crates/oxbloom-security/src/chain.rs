@@ -10,6 +10,7 @@ use oxbloom_config::Secret;
 use oxbloom_core::HttpMethod;
 use oxbloom_web::{Filter, Next, Request, Response};
 
+use crate::form_login::FormLoginHandlers;
 use crate::{
     AuthenticationError, AuthenticationRequest, AuthorizationRule, ProviderManager, RequestMatcher,
     RequestSecurityExt, SecurityContext,
@@ -321,6 +322,7 @@ pub struct SecurityFilterChain {
     entry_point: Arc<dyn AuthenticationEntryPoint>,
     access_denied: Arc<dyn AccessDeniedHandler>,
     challenges: Challenges,
+    form_login: Option<FormLoginHandlers>,
 }
 
 impl SecurityFilterChain {
@@ -330,6 +332,7 @@ impl SecurityFilterChain {
         entry_point: Arc<dyn AuthenticationEntryPoint>,
         access_denied: Arc<dyn AccessDeniedHandler>,
         challenges: Challenges,
+        form_login: Option<FormLoginHandlers>,
     ) -> Self {
         Self {
             manager,
@@ -337,6 +340,7 @@ impl SecurityFilterChain {
             entry_point,
             access_denied,
             challenges,
+            form_login,
         }
     }
 
@@ -362,6 +366,18 @@ impl Filter for SecurityFilterChain {
         // built by hand. Marking a value sensitive does not change its bytes.
         if let header::Entry::Occupied(mut entry) = req.headers.entry(header::AUTHORIZATION) {
             entry.iter_mut().for_each(|v| v.set_sensitive(true));
+        }
+        // Form login answers its two posts itself and serves its page only at the configured
+        // paths, before the authorization rules.
+        if let Some(form) = &self.form_login {
+            if let Some(res) = form.handle_post(&req, self.manager.as_ref()).await {
+                return res;
+            }
+            if let Some(flags) = form.login_page_request(&req) {
+                req.extensions_mut().insert(SecurityContext::anonymous());
+                let res = next.run(req).await;
+                return form.page_fallback(res, flags);
+            }
         }
         let mut context = SecurityContext::anonymous();
         if let Some(manager) = &self.manager {
@@ -390,6 +406,12 @@ impl Filter for SecurityFilterChain {
                     Err(error) => return self.entry_point.commence(&req, Some(&error)),
                 }
             }
+        }
+        // Credentials in the header win; the session is the fallback.
+        if context.authentication().is_none()
+            && let Some(authentication) = self.form_login.as_ref().and_then(|f| f.restore(&req))
+        {
+            context = SecurityContext::authenticated(authentication);
         }
         req.extensions_mut().insert(context);
         if self.authorized(&req) {

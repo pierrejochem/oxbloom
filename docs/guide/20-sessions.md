@@ -1,6 +1,6 @@
 # Sessions
 
-Oxbloom keeps per-browser state in a session. The crate `oxbloom-security` holds the `Session` handle, the `SessionFilter`, two backends and the settings, and the feature `security` of `oxbloom-boot` wires them from the `security.session` keys. This is security Slice 6b. There is no login or logout endpoint yet (Slice 6c) and no CSRF protection (Slice 6d), so read [Limits](#limits) before you build on sessions.
+Oxbloom keeps per-browser state in a session. The crate `oxbloom-security` holds the `Session` handle, the `SessionFilter`, two backends and the settings, and the feature `security` of `oxbloom-boot` wires them from the `security.session` keys. This is security Slice 6b. Form login and logout are Slice 6c (see [Form login](21-form-login.md#form-login)); there is no CSRF protection yet (Slice 6d), so read [Limits](#limits) before you build on sessions.
 
 ```toml
 # Cargo.toml
@@ -57,7 +57,7 @@ Values are JSON. Keep them small: the stateless backend is bounded by the cookie
 With `store = "memory"` (the default), the data lives in a `SessionStore` and the cookie holds only a random id (32 random bytes in unpadded base64url, 43 characters). `InMemorySessionStore` is the store that ships. It keeps the sessions in sharded maps in the process. The consequences:
 
 - Sessions are lost at a restart and are not shared between instances. Behind a load balancer, use sticky routing or the stateless backend.
-- `security.session.max-sessions` (default 100 000) caps the number of sessions. At the cap, a new session evicts the one with the oldest last touch. The eviction scans every shard, so it costs O(n) per new save at the cap. Anonymous endpoints that write the session already exist, such as `GET /api/visits` in the todos example: a flood of cookieless requests to one of them fills the cap, makes each further request scan the store (about one scan per new session) and then evicts the sessions of real users. Sampled eviction is planned before Slice 6c's saved request. Racing saves can exceed the cap by their number.
+- `security.session.max-sessions` (default 100 000) caps the number of sessions. At the cap, a new session removes the expired entries it meets and evicts the oldest-touched entry of a sample of at most 16 entries. The sample starts at a random shard and at a random position within the first 64 entries of it, so the cost per write is constant. Anonymous endpoints that write the session already exist, such as `GET /api/visits` in the todos example, and the saved request of form login writes one for an anonymous `Accept: text/html` request to a protected path. A flood of such requests can still fill the cap and evict the sessions of real users. Racing saves can exceed the cap, and the overshoot persists until expiry or a sweep.
 - The memory cost is the cap times the size of the values of one session. The server side has no size limit per session.
 
 To use another store, register your own bean. It replaces the in-memory store with `store = "memory"` and is ignored with `store = "cookie"`:
@@ -190,11 +190,11 @@ let app = oxbloom_web::App::new().filter(filter);
 
 ## Limits
 
-- There is no CSRF protection yet; CSRF tokens come with Slice 6d. Until then `SameSite=Lax` is the only mitigation, and it does not stop every cross-site request. `HttpOnly` only keeps scripts from reading the cookie. Do not build state-changing endpoints on sessions for browsers before that.
-- There is no login or logout endpoint (Slice 6c). An application that builds its own should call `rotate_id` at login and `invalidate` at logout.
+- There is no CSRF protection yet; CSRF tokens come with Slice 6d. Until then `SameSite=Lax` is the only mitigation, and it does not stop every cross-site request. `HttpOnly` only keeps scripts from reading the cookie. Do not build state-changing endpoints on sessions for browsers before that. Form login turns exactly this on: after a login the cookie authenticates every route, and the same-origin check of Slice 6c covers only the login and logout posts.
+- Form login and logout exist since Slice 6c (see [Form login](21-form-login.md#form-login)). An application that builds its own login should call `rotate_id` at login and `invalidate` at logout. The session keys under the prefix `oxbloom.security.` are reserved for Oxbloom.
 - A stateless cookie cannot be revoked on the server; a copy stays valid until its expiry.
 - The in-memory store is per process: sessions are lost at a restart and not shared between instances.
-- At the cap, the in-memory store evicts the oldest-touched session and scans every shard for it, which is O(n) per new save at the cap. An anonymous flood that writes sessions, such as `GET /api/visits` in the todos example, can fill the cap and then evict real users' sessions, at about one scan per new session; sampled eviction is planned before Slice 6c's saved request. The cap can be exceeded by the number of racing saves.
+- At the cap, the in-memory store evicts the oldest-touched entry of a sample of at most 16 entries (constant cost per write). An anonymous flood that writes sessions, such as `GET /api/visits` in the todos example or `Accept: text/html` requests to protected paths with form login, can still fill the cap and evict real users' sessions. The cap can be exceeded by the number of racing saves, and the overshoot persists until expiry or a sweep.
 - Concurrent requests on one session are last-writer-wins.
 - A store error answers 503 and the side effects of the handler stand. A failed `rotate` or save after the handler ran leaves the client without a session.
 - Random nonces cap one key of the stateless backend at about 2^32 writes: rotate the secret periodically.

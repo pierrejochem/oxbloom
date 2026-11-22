@@ -8,10 +8,11 @@ use oxbloom_core::HttpMethod;
 use crate::chain::{
     ChallengeEntryPoint, Challenges, DefaultAccessDeniedHandler, DefaultEntryPoint,
 };
+use crate::form_login::{FormLoginEntryPoint, FormLoginHandlers};
 use crate::{
     AccessDeniedHandler, AuthenticationEntryPoint, AuthenticationProvider, AuthorizationManager,
-    AuthorizationRule, JwtAuthenticationConverter, JwtAuthenticationProvider, JwtDecoder,
-    ProviderManager, RequestMatcher, SecurityFilterChain,
+    AuthorizationRule, FormLogin, JwtAuthenticationConverter, JwtAuthenticationProvider,
+    JwtDecoder, ProviderManager, RequestMatcher, SecurityFilterChain,
 };
 
 /// Why [`HttpSecurity::build`] refused to build a chain.
@@ -43,6 +44,12 @@ pub enum SecurityBuildError {
     HttpBasicWithoutProvider,
     /// The Basic realm contains a double quote, a backslash or a control character.
     InvalidRealm,
+    /// `form_login` was configured but no `password_provider` was added, so no login could
+    /// succeed.
+    FormLoginWithoutProvider,
+    /// A form login URL is not a safe redirect target, two URLs collide, or a form field name is
+    /// empty or has a character outside ASCII letters, digits, `_` and `-`.
+    InvalidFormLoginUrl,
 }
 
 impl fmt::Display for SecurityBuildError {
@@ -57,6 +64,8 @@ impl fmt::Display for SecurityBuildError {
             Self::InvalidPattern => "invalid matcher pattern",
             Self::HttpBasicWithoutProvider => "http_basic configured without a password provider",
             Self::InvalidRealm => "invalid http basic realm",
+            Self::FormLoginWithoutProvider => "form_login configured without a password provider",
+            Self::InvalidFormLoginUrl => "invalid form login url or field name",
         })
     }
 }
@@ -87,6 +96,7 @@ pub struct HttpSecurity {
     password_provider: bool,
     bearer: bool,
     custom_entry_point: bool,
+    form_login: Option<FormLogin>,
 }
 
 impl Default for HttpSecurity {
@@ -117,6 +127,7 @@ impl HttpSecurity {
             password_provider: false,
             bearer: false,
             custom_entry_point: false,
+            form_login: None,
         }
     }
 
@@ -247,6 +258,70 @@ impl HttpSecurity {
         self
     }
 
+    /// Turns on form login: `POST` to the processing URL logs in with the password providers,
+    /// `POST` to the logout URL logs out, an anonymous browser `GET` is sent to the login page
+    /// and the request it wanted is saved in the session, and the default login page is served
+    /// when the application has no handler for it. See [`FormLogin`] for the settings and their
+    /// defaults.
+    ///
+    /// The chain needs a [`SessionFilter`](crate::SessionFilter) in the same application to
+    /// keep the login: without one every login fails. The login and logout posts pass a
+    /// same-origin check (`Origin`, else `Referer`); a mismatch is a 403. Session keys under the
+    /// prefix `oxbloom.security.` are reserved for Oxbloom.
+    ///
+    /// [`build`](Self::build) fails with [`SecurityBuildError::FormLoginWithoutProvider`] when
+    /// no [`password_provider`](Self::password_provider) was added and with
+    /// [`SecurityBuildError::InvalidFormLoginUrl`] when [`FormLogin::validate`] fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use oxbloom_security::{
+    ///     Argon2PasswordEncoder, DaoAuthenticationProvider, HttpSecurity,
+    ///     InMemoryUserDetailsService, PasswordEncoder, SessionBackend, SessionFilter,
+    ///     SessionSettings, InMemorySessionStore, UserDetails,
+    /// };
+    /// use oxbloom_web::{App, HttpMethod, Request, Route};
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let encoder = Arc::new(Argon2PasswordEncoder::new(8, 1, 1)?);
+    /// let users = InMemoryUserDetailsService::new(vec![
+    ///     UserDetails::new("alice", encoder.encode("s3cret"), []).roles(&["USER"]),
+    /// ])?;
+    /// let chain = HttpSecurity::new()
+    ///     .password_provider(Arc::new(DaoAuthenticationProvider::new(Arc::new(users), encoder)))
+    ///     .form_login(|f| f.default_success_url("/home"))
+    ///     .authorize(|a| a.any_request().authenticated())
+    ///     .build()?;
+    /// let settings = SessionSettings::default();
+    /// let store = InMemorySessionStore::new(&settings, Arc::new(oxbloom_core::SystemClock));
+    /// let sessions = SessionFilter::new(SessionBackend::Server(Arc::new(store)), settings)?;
+    /// let app = App::new()
+    ///     .filter(sessions)
+    ///     .filter(chain)
+    ///     .route(Route::new(HttpMethod::Get, "/home", |_| async { "home" }))?;
+    ///
+    /// // The default login page is served at `/login`.
+    /// assert_eq!(app.handle(Request::new(HttpMethod::Get, "/login")).await.status(), 200);
+    ///
+    /// // A good login answers 302 to the success URL and sets the session cookie.
+    /// let mut login = Request::new(HttpMethod::Post, "/login");
+    /// login.headers.insert("content-type", "application/x-www-form-urlencoded".parse()?);
+    /// login.body = "username=alice&password=s3cret".into();
+    /// let res = app.handle(login).await;
+    /// assert_eq!(res.status(), 302);
+    /// assert_eq!(res.headers()["location"], "/home");
+    /// assert!(res.headers().contains_key("set-cookie"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn form_login(mut self, f: impl FnOnce(FormLogin) -> FormLogin) -> Self {
+        self.form_login = Some(f(FormLogin::default()));
+        self
+    }
+
     /// Configures a JWT resource server: installs a [`JwtAuthenticationProvider`] built from the
     /// [`ResourceServer`]'s decoder and converter as a bearer provider (see
     /// [`bearer_provider`](Self::bearer_provider)). Without a decoder, [`build`](Self::build)
@@ -358,8 +433,11 @@ impl HttpSecurity {
     /// (see [`RequestMatcher::is_valid`]), and
     /// [`SecurityBuildError::ResourceServerWithoutDecoder`] when `oauth2_resource_server` has no
     /// decoder, [`SecurityBuildError::HttpBasicWithoutProvider`] when `http_basic` has no
-    /// `password_provider`, and [`SecurityBuildError::InvalidRealm`] for a realm with `"`, `\` or
-    /// a control character.
+    /// `password_provider`, [`SecurityBuildError::InvalidRealm`] for a realm with `"`, `\` or
+    /// a control character, [`SecurityBuildError::InvalidFormLoginUrl`] when the form login
+    /// settings fail [`FormLogin::validate`], and
+    /// [`SecurityBuildError::FormLoginWithoutProvider`] when `form_login` has no
+    /// `password_provider`.
     ///
     /// # Examples
     ///
@@ -413,6 +491,12 @@ impl HttpSecurity {
                 return Err(SecurityBuildError::HttpBasicWithoutProvider);
             }
         }
+        if let Some(form) = &self.form_login {
+            form.validate()?;
+            if !self.password_provider {
+                return Err(SecurityBuildError::FormLoginWithoutProvider);
+            }
+        }
         let challenges = Challenges {
             basic_realm: self.basic.map(|b| Arc::from(b.realm)),
             bearer: self.bearer,
@@ -423,6 +507,13 @@ impl HttpSecurity {
             } else {
                 self.entry_point
             };
+        let form_login = self.form_login.map(Arc::new);
+        let entry_point: Arc<dyn AuthenticationEntryPoint> = match &form_login {
+            Some(settings) if !self.custom_entry_point => {
+                Arc::new(FormLoginEntryPoint::new(settings.clone(), entry_point))
+            }
+            _ => entry_point,
+        };
         let manager = (!self.providers.is_empty()).then(|| ProviderManager::new(self.providers));
         Ok(SecurityFilterChain::new(
             manager,
@@ -430,6 +521,7 @@ impl HttpSecurity {
             entry_point,
             self.access_denied,
             challenges,
+            form_login.map(FormLoginHandlers::new),
         ))
     }
 }
