@@ -464,12 +464,11 @@ fn metadata_keys_match_config() {
         .unwrap();
     assert_eq!(secret.default, None);
     assert!(secret.description.contains("never printed"));
-    assert!(
-        SecurityAutoConfiguration::properties()
-            .iter()
-            .all(|p| p.key.starts_with("security.form-login.")
-                || p.key.starts_with("security.csrf."))
-    );
+    assert!(SecurityAutoConfiguration::properties().iter().all(|p| {
+        p.key.starts_with("security.form-login.")
+            || p.key.starts_with("security.csrf.")
+            || p.key.starts_with("security.headers.")
+    }));
 }
 
 #[test]

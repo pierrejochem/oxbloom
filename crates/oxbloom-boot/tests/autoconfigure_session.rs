@@ -18,7 +18,7 @@ use oxbloom_config::{Config, ConfigError};
 use oxbloom_di::{ContainerBuilder, DiError};
 use oxbloom_security::{
     Algorithm, HttpSecurity, RequestSessionExt, SessionConfig, SessionData, SessionError,
-    SessionFilter, SessionStore,
+    SessionFilter, SessionManagementProperties, SessionStore,
 };
 use oxbloom_test::{ContextRunner, ManualClock, RunningApp, TestApp};
 use oxbloom_web::{Controller, Filter, HttpMethod, Request, Route};
@@ -405,6 +405,8 @@ fn sample(key: &str) -> String {
         "security.session.max-cookie-bytes" => "4000".to_owned(),
         "security.session.secret" => format!("\"{SECRET}\""),
         "security.session.old-secrets" => format!("[\"{OLD_SECRET}\"]"),
+        "security.session.max-sessions-per-user" => "2".to_owned(),
+        "security.session.revalidate-interval" => "\"1m\"".to_owned(),
         other => panic!("no sample for {other}"),
     };
     format!(
@@ -412,6 +414,12 @@ fn sample(key: &str) -> String {
         key.trim_start_matches("security.session.")
     )
 }
+
+/// The keys of the session metadata that `SessionManagementProperties` reads.
+const MANAGEMENT_KEYS: [&str; 2] = [
+    "security.session.max-sessions-per-user",
+    "security.session.revalidate-interval",
+];
 
 #[test]
 fn metadata_lists_exactly_the_keys_read() {
@@ -425,7 +433,9 @@ fn metadata_lists_exactly_the_keys_read() {
             "security.session.idle-timeout",
             "security.session.max-cookie-bytes",
             "security.session.max-sessions",
+            "security.session.max-sessions-per-user",
             "security.session.old-secrets",
+            "security.session.revalidate-interval",
             "security.session.same-site",
             "security.session.secret",
             "security.session.secure",
@@ -445,8 +455,19 @@ fn metadata_lists_exactly_the_keys_read() {
         format!("{:?}", SessionConfig::from_config(&config).unwrap())
     };
     let base = read("");
+    // The session management keys are read by `SessionManagementProperties`.
+    let management = |body: &str| {
+        let config = Config::from_str(&format!("[security.session]\n{body}")).unwrap();
+        SessionManagementProperties::from_config(&config).unwrap()
+    };
     for key in &keys {
         let body = sample(key);
+        if MANAGEMENT_KEYS.contains(key) {
+            assert_ne!(management(&body), management(""), "{key} is not read");
+            // The 6b reader accepts it and leaves the session settings alone.
+            assert_eq!(read(&body), base, "{key}");
+            continue;
+        }
         if *key == "security.session.store" {
             // The cookie store needs a secret; compared with the secret alone.
             let secret = sample("security.session.secret");

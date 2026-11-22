@@ -3,10 +3,12 @@
 use std::sync::Arc;
 
 use oxbloom_config::Config;
+use oxbloom_core::{Clock, SystemClock};
 use oxbloom_di::{Configuration, ContainerBuilder, DiError, component};
 use oxbloom_security::{
-    AuthenticationProvider, CsrfProperties, FormLoginConfig, HttpBasicSettings, HttpSecurity,
-    JwtDecoder, SecurityFilterChain, SessionFilter,
+    AuthenticationProvider, CsrfProperties, FormLoginConfig, HeadersProperties, HttpBasicSettings,
+    HttpSecurity, JwtDecoder, SecurityFilterChain, SessionFilter, SessionManagementProperties,
+    SessionRegistry, UserDetailsService,
 };
 
 use super::jwt::JwtDecoderAutoConfiguration;
@@ -117,9 +119,10 @@ pub trait SecurityCustomizer: Send + Sync {
 /// that names `security.session`.
 ///
 /// A `SecurityBuildError` fails the build as `DiError::Creation` with that error as source; a
-/// bad `security.http-basic`, `security.form-login` or `security.csrf` key fails it the same
-/// way with the `ConfigError` naming the key. The metadata of this auto-configuration lists the
-/// `security.form-login` and `security.csrf` keys, so excluding it hides them.
+/// bad `security.http-basic`, `security.form-login`, `security.csrf`, `security.headers` or
+/// session management key fails it the same way with the `ConfigError` naming the key. The metadata of this auto-configuration lists the
+/// `security.form-login`, `security.csrf` and `security.headers` keys, so excluding it hides
+/// them.
 ///
 /// CSRF protection follows form login (read with `oxbloom_security::CsrfProperties::from_config`).
 /// With form login on, the chain calls `csrf` with the `security.csrf` settings: the check is on
@@ -131,6 +134,32 @@ pub trait SecurityCustomizer: Send + Sync {
 /// `SecurityBuildError::InvalidCsrfConfig`. The chain is configured after every
 /// `SecurityCustomizer`, as for form login, so the configuration wins over a customizer that
 /// calls `.csrf(..)`.
+///
+/// The security response headers follow `security.headers` (read with
+/// `oxbloom_security::HeadersProperties::from_config`): they are on by default, `off` removes
+/// one header and `enabled = false` removes all of them. The session management keys follow
+/// `security.session` (read with `oxbloom_security::SessionManagementProperties::from_config`):
+///
+/// - `max-sessions-per-user` calls `HttpSecurity::session_limit` with the per-user index of the
+///   session filter (`SessionFilter::principal_sessions`). Without an index (the cookie store,
+///   or a store bean that does not implement `PrincipalSessions`) the startup fails with an
+///   error that names `security.session.max-sessions-per-user`. Without form login the build
+///   fails with `SecurityBuildError::SessionLimitWithoutFormLogin`.
+/// - `revalidate-interval` (default five minutes, `0s` off) calls `HttpSecurity::revalidate`
+///   with the `dyn UserDetailsService` bean. The default applies only with form login and that
+///   bean and stays off without them. A set interval without the bean fails the startup with an
+///   error that names `security.session.revalidate-interval`; a set interval without form login
+///   fails the build with `SecurityBuildError::RevalidateWithoutFormLogin`.
+///
+/// These settings and the optional `dyn Clock` bean (`HttpSecurity::clock`, default the system
+/// clock) are applied before the customizers, so a `SecurityCustomizer` can still change them;
+/// a customizer that calls `headers` starts from the default headers.
+///
+/// A `SessionRegistry` bean is registered, unless the application has one, when there is a
+/// `SessionFilter` bean and `security.session.store` is `memory` (or missing). It is lazy: it is
+/// built from `SessionFilter::principal_sessions` when first asked for, and a store without the
+/// per-user index fails only the request for the registry, never the startup. With the cookie
+/// store there is no registry bean.
 ///
 /// # Examples
 ///
@@ -192,6 +221,11 @@ impl Configuration for SecurityAutoConfiguration {
         builder
             .try_bean(security_filter_chain)
             .on_missing_bean::<SecurityFilterChain>()
+            .try_bean(session_registry)
+            .on_bean::<SessionFilter>()
+            .on_property_value_or_missing("security.session.store", "memory")
+            .on_missing_bean::<SessionRegistry>()
+            .lazy()
     }
 }
 
@@ -209,13 +243,17 @@ impl AutoConfiguration for SecurityAutoConfiguration {
 }
 
 /// The chain from the customizers, or the closed default, plus the decoder when there is one
-/// and HTTP Basic over the provider beans when `security.http-basic.enabled` is `true`.
+/// and HTTP Basic over the provider beans when `security.http-basic.enabled` is `true`. The
+/// headers, the session limit, the revalidation and the clock are set before the customizers,
+/// so a customizer can still change them.
 fn security_filter_chain(
     config: Arc<Config>,
     customizers: Vec<Arc<dyn SecurityCustomizer>>,
     decoder: Option<Arc<dyn JwtDecoder>>,
     providers: Vec<Arc<dyn AuthenticationProvider>>,
     session: Option<Arc<SessionFilter>>,
+    users: Option<Arc<dyn UserDetailsService>>,
+    clock: Option<Arc<dyn Clock>>,
 ) -> Result<SecurityFilterChain, DiError> {
     let creation = DiError::creation_from::<SecurityFilterChain>;
     let basic = HttpBasicSettings::from_config(&config).map_err(creation)?;
@@ -228,7 +266,41 @@ fn security_filter_chain(
     }
     let form_enabled = form.is_some();
     let csrf = CsrfProperties::from_config(&config, form_enabled).map_err(creation)?;
-    let mut http = HttpSecurity::new();
+    let headers = HeadersProperties::from_config(&config).map_err(creation)?;
+    let management = SessionManagementProperties::from_config(&config).map_err(creation)?;
+    let limit = match management.max_sessions_per_user {
+        None => None,
+        Some(max) => match session.as_ref().and_then(|s| s.principal_sessions()) {
+            Some(index) => Some((index, max)),
+            None => {
+                return Err(DiError::creation_from::<SecurityFilterChain>(
+                    SessionManagementError::LimitWithoutIndex,
+                ));
+            }
+        },
+    };
+    // The default interval applies only with form login and a user service; an explicit one
+    // is passed on, so the build reports it when form login is off.
+    let revalidate = match (management.revalidate_interval, users) {
+        (Some(interval), Some(users)) if form_enabled || management.revalidate_explicit => {
+            Some((interval, users))
+        }
+        (Some(_), None) if management.revalidate_explicit => {
+            return Err(DiError::creation_from::<SecurityFilterChain>(
+                SessionManagementError::RevalidateWithoutUserService,
+            ));
+        }
+        _ => None,
+    };
+    let mut http = HttpSecurity::new()
+        .clock(clock.unwrap_or_else(|| Arc::new(SystemClock)))
+        .headers(move |_| headers);
+    if let Some((index, max)) = limit {
+        http = http.session_limit(index, max);
+    }
+    if let Some((interval, users)) = revalidate {
+        http = http.revalidate(interval, users);
+    }
     if customizers.is_empty() {
         // Closed by default: nothing is reachable without authentication.
         http = http.authorize(|a| a.any_request().authenticated());
@@ -259,6 +331,50 @@ fn security_filter_chain(
         .map_err(DiError::creation_from::<SecurityFilterChain>)
 }
 
+/// The registry over the per-user index of the session filter. The bean is lazy: a server
+/// store without the index fails only an application that asks for the registry.
+fn session_registry(session: Arc<SessionFilter>) -> Result<SessionRegistry, DiError> {
+    session
+        .principal_sessions()
+        .map(SessionRegistry::new)
+        .ok_or_else(|| {
+            DiError::creation_from::<SessionRegistry>(SessionManagementError::RegistryWithoutIndex)
+        })
+}
+
+/// The startup failures of the session management keys. The texts are fixed and name the key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SessionManagementError {
+    /// `security.session.max-sessions-per-user` with a backend that has no per-user index.
+    LimitWithoutIndex,
+    /// An explicit `security.session.revalidate-interval` without a `UserDetailsService` bean.
+    RevalidateWithoutUserService,
+    /// The `SessionRegistry` was asked for, but the session store has no per-user index.
+    RegistryWithoutIndex,
+}
+
+impl std::fmt::Display for SessionManagementError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::LimitWithoutIndex => {
+                "security.session.max-sessions-per-user needs a session store that can list the \
+                 sessions of a user, such as the in-memory store; the cookie store and stores \
+                 without that index cannot"
+            }
+            Self::RevalidateWithoutUserService => {
+                "security.session.revalidate-interval needs a `UserDetailsService` bean to load \
+                 the user again, such as the one of the `security.users` section"
+            }
+            Self::RegistryWithoutIndex => {
+                "the `SessionRegistry` needs a session store that can list the sessions of a \
+                 user; the configured session store cannot"
+            }
+        })
+    }
+}
+
+impl std::error::Error for SessionManagementError {}
+
 /// The startup failure of form login without the `security.session` table.
 #[derive(Debug)]
 struct FormLoginWithoutSession;
@@ -275,9 +391,9 @@ impl std::fmt::Display for FormLoginWithoutSession {
 
 impl std::error::Error for FormLoginWithoutSession {}
 
-/// Exactly the keys `FormLoginConfig::from_config` and `CsrfProperties::from_config` read
-/// (pinned by tests), sorted by key.
-static SECURITY: [PropertyMetadata; 14] = [
+/// Exactly the keys `FormLoginConfig::from_config`, `CsrfProperties::from_config` and
+/// `HeadersProperties::from_config` read (pinned by tests), sorted by key.
+static SECURITY: [PropertyMetadata; 23] = [
     PropertyMetadata::new(
         "security.csrf.enabled",
         "bool",
@@ -369,5 +485,62 @@ static SECURITY: [PropertyMetadata; 14] = [
         "String",
         Some("username"),
         "The name of the username field of the login form; letters, digits, `_` and `-`.",
+    ),
+    PropertyMetadata::new(
+        "security.headers.cache-control",
+        "String",
+        Some("no-store"),
+        "The `Cache-Control` value added to a response of an authenticated request (session, \
+         Basic or bearer) that has none; `off` removes it.",
+    ),
+    PropertyMetadata::new(
+        "security.headers.content-type-options",
+        "String",
+        Some("nosniff"),
+        "The `X-Content-Type-Options` value added to every response that has none; `off` \
+         removes it.",
+    ),
+    PropertyMetadata::new(
+        "security.headers.enabled",
+        "bool",
+        Some("true"),
+        "Whether the security chain adds its response headers at all. A header the \
+         application set is never changed.",
+    ),
+    PropertyMetadata::new(
+        "security.headers.frame-options",
+        "String",
+        Some("DENY"),
+        "The `X-Frame-Options` value added to every response that has none; `off` removes it.",
+    ),
+    PropertyMetadata::new(
+        "security.headers.hsts.enabled",
+        "bool",
+        Some("true"),
+        "Whether `Strict-Transport-Security` is added to a response of an HTTPS request.",
+    ),
+    PropertyMetadata::new(
+        "security.headers.hsts.include-subdomains",
+        "bool",
+        Some("true"),
+        "Whether the HSTS header carries `includeSubDomains`.",
+    ),
+    PropertyMetadata::new(
+        "security.headers.hsts.max-age",
+        "Duration",
+        Some("365d"),
+        "The `max-age` of the HSTS header, in whole seconds; at least one second.",
+    ),
+    PropertyMetadata::new(
+        "security.headers.hsts.preload",
+        "bool",
+        Some("false"),
+        "Whether the HSTS header carries `preload`.",
+    ),
+    PropertyMetadata::new(
+        "security.headers.referrer-policy",
+        "String",
+        Some("no-referrer"),
+        "The `Referrer-Policy` value added to every response that has none; `off` removes it.",
     ),
 ];

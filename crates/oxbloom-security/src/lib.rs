@@ -125,7 +125,7 @@ pub use dao::DaoAuthenticationProvider;
 #[cfg(feature = "di")]
 pub use di::SecurityContainerExt;
 pub use form_login::{FormLogin, FormLoginConfig, is_safe_redirect_target};
-pub use headers::{HeadersConfig, HstsConfig};
+pub use headers::{HeadersConfig, HeadersProperties, HstsConfig};
 pub use http_security::{
     AuthorizeBuilder, HttpBasic, HttpSecurity, ResourceServer, RuleBuilder, SecurityBuildError,
 };
@@ -147,8 +147,9 @@ pub use reqwest_fetcher::ReqwestJwksFetcher;
 pub use session::{
     CookieSessionBackend, InMemorySessionStore, PrincipalSessions, RequestSessionExt,
     SESSION_OLD_SECRETS_KEY, SESSION_ORDER, SESSION_SECRET_KEY, SameSite, SecureMode, Session,
-    SessionBackend, SessionConfig, SessionData, SessionError, SessionFilter, SessionRegistry,
-    SessionSettings, SessionStore, SessionSummary, StoreKind,
+    SessionBackend, SessionConfig, SessionData, SessionError, SessionFilter, SessionManagement,
+    SessionManagementProperties, SessionRegistry, SessionSettings, SessionStore, SessionSummary,
+    StoreKind,
 };
 pub use user::{
     InMemoryUserDetailsService, UserDetails, UserDetailsError, UserDetailsService, UserStoreError,

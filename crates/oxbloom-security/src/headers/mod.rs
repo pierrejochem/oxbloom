@@ -7,6 +7,8 @@
 
 mod apply;
 mod config;
+mod properties;
 
 pub(crate) use apply::apply_headers;
 pub use config::{HeadersConfig, HstsConfig};
+pub use properties::HeadersProperties;

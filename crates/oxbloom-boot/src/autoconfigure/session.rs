@@ -48,6 +48,10 @@ use crate::metadata::PropertyMetadata;
 /// source is the `ConfigError` naming the key; no message carries a secret or the configured
 /// value.
 ///
+/// The keys `security.session.max-sessions-per-user` and `security.session.revalidate-interval`
+/// are listed in the metadata of this auto-configuration but applied by
+/// [`SecurityAutoConfiguration`], because they configure the security chain.
+///
 /// # Examples
 ///
 /// ```
@@ -160,8 +164,9 @@ fn session_filter(
         .with_clock(clock))
 }
 
-/// Exactly the keys `SessionConfig::from_config` reads (pinned by a test).
-static SESSION: [PropertyMetadata; 10] = [
+/// Exactly the keys `SessionConfig::from_config` and
+/// `SessionManagementProperties::from_config` read (pinned by tests), sorted by key.
+static SESSION: [PropertyMetadata; 12] = [
     PropertyMetadata::new(
         "security.session.absolute-timeout",
         "Duration",
@@ -196,12 +201,31 @@ static SESSION: [PropertyMetadata; 10] = [
          evicts the one with the oldest last touch.",
     ),
     PropertyMetadata::new(
+        "security.session.max-sessions-per-user",
+        "usize",
+        None,
+        "The most sessions one user may hold; at least 1. A login evicts the user's sessions \
+         with the oldest last use until the new one fits. Needs form login and a store that \
+         can list the sessions of a user (the in-memory store); with the cookie store the \
+         startup fails. Unset means no limit.",
+    ),
+    PropertyMetadata::new(
         "security.session.old-secrets",
         "array of String",
         None,
         "Earlier keys of the cookie store that may still open a cookie, tried in order; each \
          at least 32 bytes. Secrets: their values are never printed, and they are refused on \
          the command line; set them in a file or an environment variable.",
+    ),
+    PropertyMetadata::new(
+        "security.session.revalidate-interval",
+        "Duration",
+        Some("5m"),
+        "How often the user of a form login session is loaded again from the \
+         `UserDetailsService`; a missing, disabled or locked user loses the session, and \
+         changed authorities are stored. At least one second; `0s` turns it off. The default \
+         applies only with form login and a `UserDetailsService` bean; a set interval without \
+         that bean fails the startup.",
     ),
     PropertyMetadata::new(
         "security.session.same-site",

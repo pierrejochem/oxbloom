@@ -170,7 +170,7 @@ impl Default for HeadersConfig {
 }
 
 /// A header value must be visible ASCII, spaces included, and not empty.
-fn value_ok(value: &Option<String>) -> bool {
+pub(super) fn value_ok(value: &Option<String>) -> bool {
     value
         .as_deref()
         .is_none_or(|v| !v.is_empty() && v.bytes().all(|b| (0x20..=0x7e).contains(&b)))

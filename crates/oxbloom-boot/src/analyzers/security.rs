@@ -1,8 +1,10 @@
-//! The security analyzers: security build errors and invalid `security.jwt` keys.
+//! The security analyzers: security build errors, the session management startup failures and
+//! invalid `security.jwt` keys.
 
 use oxbloom_config::ConfigError;
 use oxbloom_security::SecurityBuildError;
 
+use crate::autoconfigure::SessionManagementError;
 use crate::error::StartupError;
 use crate::failure::{FailureAnalysis, FailureAnalyzer};
 
@@ -83,6 +85,38 @@ impl FailureAnalyzer for SecurityAnalyzer {
             SecurityBuildError::InvalidRevalidateInterval => (
                 "The session revalidation interval is zero.",
                 "Use an interval of at least one second, or leave revalidation out to turn it off.",
+            ),
+        };
+        Some(FailureAnalysis::new(description, action))
+    }
+}
+
+/// Recognises a `SessionManagementError` of `SecurityAutoConfiguration` anywhere in the cause
+/// chain.
+pub(crate) struct SessionManagementAnalyzer;
+
+impl FailureAnalyzer for SessionManagementAnalyzer {
+    fn analyze(&self, failure: &StartupError) -> Option<FailureAnalysis> {
+        // Exhaustive on purpose: a new variant must get its own text here.
+        let (description, action) = match failure.find_cause::<SessionManagementError>()? {
+            SessionManagementError::LimitWithoutIndex => (
+                "`security.session.max-sessions-per-user` is set, but the session store cannot \
+                 list the sessions of a user.",
+                "Use the in-memory store (`security.session.store = \"memory\"`) or a store \
+                 that implements `PrincipalSessions`, or remove \
+                 `security.session.max-sessions-per-user`.",
+            ),
+            SessionManagementError::RevalidateWithoutUserService => (
+                "`security.session.revalidate-interval` is set, but there is no \
+                 `UserDetailsService` bean to load the user again.",
+                "Add users under `security.users` or register a `dyn UserDetailsService` bean, or \
+                 set `security.session.revalidate-interval = \"0s\"` to turn revalidation off.",
+            ),
+            SessionManagementError::RegistryWithoutIndex => (
+                "The `SessionRegistry` bean was requested, but the session store cannot list the \
+                 sessions of a user.",
+                "Use the in-memory store (`security.session.store = \"memory\"`) or a store \
+                 that implements `PrincipalSessions`, or do not inject `SessionRegistry`.",
             ),
         };
         Some(FailureAnalysis::new(description, action))
@@ -301,6 +335,47 @@ mod tests {
             SecurityBuildError::InvalidRevalidateInterval,
             "The session revalidation interval is zero.",
             "Use an interval of at least one second, or leave revalidation out to turn it off.",
+        );
+    }
+
+    fn analyze_session(e: SessionManagementError) -> FailureAnalysis {
+        let di = DiError::creation_from::<u8>(e);
+        SessionManagementAnalyzer
+            .analyze(&StartupError::new(StartupPhase::Container, di))
+            .expect("an analysis")
+    }
+
+    #[test]
+    fn session_management_texts_name_the_key() {
+        let a = analyze_session(SessionManagementError::LimitWithoutIndex);
+        assert_eq!(
+            a.description(),
+            "`security.session.max-sessions-per-user` is set, but the session store cannot list the sessions of a user."
+        );
+        assert_eq!(
+            a.action(),
+            Some(
+                "Use the in-memory store (`security.session.store = \"memory\"`) or a store that implements `PrincipalSessions`, or remove `security.session.max-sessions-per-user`."
+            )
+        );
+        let a = analyze_session(SessionManagementError::RevalidateWithoutUserService);
+        assert_eq!(
+            a.description(),
+            "`security.session.revalidate-interval` is set, but there is no `UserDetailsService` bean to load the user again."
+        );
+        assert_eq!(
+            a.action(),
+            Some(
+                "Add users under `security.users` or register a `dyn UserDetailsService` bean, or set `security.session.revalidate-interval = \"0s\"` to turn revalidation off."
+            )
+        );
+        let a = analyze_session(SessionManagementError::RegistryWithoutIndex);
+        assert!(a.description().contains("`SessionRegistry`"));
+        assert!(a.action().unwrap().contains("PrincipalSessions"));
+        assert!(
+            SessionManagementAnalyzer
+                .analyze(&StartupError::new(StartupPhase::Container, std::fmt::Error))
+                .is_none()
         );
     }
 
