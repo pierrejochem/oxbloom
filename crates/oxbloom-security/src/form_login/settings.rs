@@ -61,7 +61,7 @@ impl Default for FormLogin {
     }
 }
 
-fn is_valid_field_name(name: &str) -> bool {
+pub(super) fn is_valid_field_name(name: &str) -> bool {
     !name.is_empty()
         && name
             .chars()

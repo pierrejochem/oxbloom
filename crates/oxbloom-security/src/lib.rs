@@ -121,7 +121,7 @@ pub use config::{
 pub use dao::DaoAuthenticationProvider;
 #[cfg(feature = "di")]
 pub use di::SecurityContainerExt;
-pub use form_login::{FormLogin, is_safe_redirect_target};
+pub use form_login::{FormLogin, FormLoginConfig, is_safe_redirect_target};
 pub use http_security::{
     AuthorizeBuilder, HttpBasic, HttpSecurity, ResourceServer, RuleBuilder, SecurityBuildError,
 };

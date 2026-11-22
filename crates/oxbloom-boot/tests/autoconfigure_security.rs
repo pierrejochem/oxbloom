@@ -464,7 +464,11 @@ fn metadata_keys_match_config() {
         .unwrap();
     assert_eq!(secret.default, None);
     assert!(secret.description.contains("never printed"));
-    assert!(SecurityAutoConfiguration::properties().is_empty());
+    assert!(
+        SecurityAutoConfiguration::properties()
+            .iter()
+            .all(|p| p.key.starts_with("security.form-login."))
+    );
 }
 
 #[test]

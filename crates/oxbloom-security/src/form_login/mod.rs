@@ -14,6 +14,7 @@
 //! assert!(!is_safe_redirect_target("//evil.example"));
 //! ```
 
+mod config;
 mod form;
 mod handlers;
 mod origin;
@@ -22,6 +23,7 @@ mod redirect;
 mod repository;
 mod settings;
 
+pub use config::FormLoginConfig;
 pub(crate) use handlers::{FormLoginEntryPoint, FormLoginHandlers};
 pub use redirect::is_safe_redirect_target;
 pub use settings::FormLogin;
