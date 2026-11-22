@@ -93,6 +93,9 @@ mod config;
 mod dao;
 #[cfg(feature = "di")]
 mod di;
+// The `pub(crate)` helpers inside are consumed by the form login filter.
+#[allow(dead_code)]
+mod form_login;
 mod http_security;
 mod jwks;
 mod jwt;
@@ -120,6 +123,7 @@ pub use config::{
 pub use dao::DaoAuthenticationProvider;
 #[cfg(feature = "di")]
 pub use di::SecurityContainerExt;
+pub use form_login::{FormLogin, is_safe_redirect_target};
 pub use http_security::{
     AuthorizeBuilder, HttpBasic, HttpSecurity, ResourceServer, RuleBuilder, SecurityBuildError,
 };

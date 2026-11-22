@@ -43,6 +43,12 @@ pub enum SecurityBuildError {
     HttpBasicWithoutProvider,
     /// The Basic realm contains a double quote, a backslash or a control character.
     InvalidRealm,
+    /// `form_login` was configured but no `password_provider` was added, so no login could
+    /// succeed.
+    FormLoginWithoutProvider,
+    /// A form login URL is not a safe redirect target, two URLs collide, or a form field name is
+    /// empty or has a character outside ASCII letters, digits, `_` and `-`.
+    InvalidFormLoginUrl,
 }
 
 impl fmt::Display for SecurityBuildError {
@@ -57,6 +63,8 @@ impl fmt::Display for SecurityBuildError {
             Self::InvalidPattern => "invalid matcher pattern",
             Self::HttpBasicWithoutProvider => "http_basic configured without a password provider",
             Self::InvalidRealm => "invalid http basic realm",
+            Self::FormLoginWithoutProvider => "form_login configured without a password provider",
+            Self::InvalidFormLoginUrl => "invalid form login url or field name",
         })
     }
 }
