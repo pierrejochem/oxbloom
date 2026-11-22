@@ -23,6 +23,7 @@ use oxbloom_web::{Controller, HttpMethod, Route};
 const SECRET: &str = "an-example-secret-of-32-bytes!!!";
 const SESSION: &str = "[security.session]\nstore = \"memory\"\n";
 const FORM: &str = "[security.form-login]\nenabled = true\n";
+const CSRF: &str = "[security.csrf]\ntoken-endpoint = \"/csrf\"\n";
 
 fn hash(raw: &str) -> String {
     DelegatingPasswordEncoder::argon2(Argon2PasswordEncoder::new(8, 1, 1).unwrap()).encode(raw)
@@ -70,6 +71,22 @@ impl Jar {
         path: &str,
         body: &str,
     ) -> (StatusCode, String) {
+        let (status, location, _) = self.send_full(app, method, path, body).await;
+        (status, location)
+    }
+
+    async fn send_body(&self, app: &RunningApp, path: &str) -> (StatusCode, String) {
+        let (status, _, text) = self.send_full(app, HttpMethod::Get, path, "").await;
+        (status, text)
+    }
+
+    async fn send_full(
+        &self,
+        app: &RunningApp,
+        method: HttpMethod,
+        path: &str,
+        body: &str,
+    ) -> (StatusCode, String, String) {
         let client = app.client();
         let mut req = match method {
             HttpMethod::Post => client.post(path),
@@ -93,8 +110,18 @@ impl Jar {
         (
             res.status(),
             res.header("location").unwrap_or_default().to_owned(),
+            res.text(),
         )
     }
+}
+
+/// The token of the current session, read from the token endpoint. The jar keeps the cookie
+/// the answer sets, which the cookie backend needs.
+async fn token(jar: &Jar, app: &RunningApp) -> String {
+    let (status, body) = jar.send_body(app, "/csrf").await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    json["token"].as_str().unwrap().to_owned()
 }
 
 async fn flow(toml: String) {
@@ -102,12 +129,13 @@ async fn flow(toml: String) {
     let jar = Jar::default();
     let (status, to) = jar.send(&app, HttpMethod::Get, "/secret", "").await;
     assert_eq!((status, to.as_str()), (StatusCode::FOUND, "/login"));
+    let t = token(&jar, &app).await;
     let (status, to) = jar
         .send(
             &app,
             HttpMethod::Post,
             "/login",
-            "username=alice&password=wrong",
+            &format!("username=alice&password=wrong&_csrf={t}"),
         )
         .await;
     assert_eq!((status, to.as_str()), (StatusCode::FOUND, "/login?error"));
@@ -116,13 +144,16 @@ async fn flow(toml: String) {
             &app,
             HttpMethod::Post,
             "/login",
-            "username=alice&password=wonderland",
+            &format!("username=alice&password=wonderland&_csrf={t}"),
         )
         .await;
     assert_eq!((status, to.as_str()), (StatusCode::FOUND, "/secret"));
     let (status, _) = jar.send(&app, HttpMethod::Get, "/secret", "").await;
     assert_eq!(status, StatusCode::OK);
-    let (status, to) = jar.send(&app, HttpMethod::Post, "/logout", "").await;
+    let t = token(&jar, &app).await;
+    let (status, to) = jar
+        .send(&app, HttpMethod::Post, "/logout", &format!("_csrf={t}"))
+        .await;
     assert_eq!((status, to.as_str()), (StatusCode::FOUND, "/login?logout"));
     let (status, to) = jar.send(&app, HttpMethod::Get, "/secret", "").await;
     assert_eq!((status, to.as_str()), (StatusCode::FOUND, "/login"));
@@ -131,13 +162,13 @@ async fn flow(toml: String) {
 
 #[tokio::test]
 async fn login_flow_over_http() {
-    flow(format!("{FORM}{SESSION}{}", users())).await;
+    flow(format!("{FORM}{SESSION}{CSRF}{}", users())).await;
 }
 
 #[tokio::test]
 async fn works_with_the_cookie_session_backend() {
     flow(format!(
-        "{FORM}[security.session]\nstore = \"cookie\"\nsecret = \"{SECRET}\"\n{}",
+        "{FORM}[security.session]\nstore = \"cookie\"\nsecret = \"{SECRET}\"\n{CSRF}{}",
         users()
     ))
     .await;
@@ -250,6 +281,7 @@ fn metadata_lists_exactly_the_keys_read() {
     let keys: Vec<&str> = SecurityAutoConfiguration::properties()
         .iter()
         .map(|p| p.key)
+        .filter(|k| k.starts_with("security.form-login."))
         .collect();
     assert_eq!(
         keys,

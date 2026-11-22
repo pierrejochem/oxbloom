@@ -31,7 +31,8 @@ async fn start() -> (
 ) {
     let (tx, rx) = oneshot::channel();
     let builder = todos::application(Path::new(env!("CARGO_MANIFEST_DIR")))
-        .args(["--server.port=0"])
+        // The token flow is covered by the boot tests; Task 6 of Slice 6d rewrites this example.
+        .args(["--server.port=0", "--security.csrf.enabled=false"])
         .logging(false)
         .output(std::io::sink())
         .listener(Ready(Mutex::new(Some(tx))));

@@ -6,12 +6,14 @@
 //! line, an error text, a redirect, a URL or `Debug` output.
 
 mod check;
+mod properties;
 mod reader;
 mod settings;
 mod store;
 mod token;
 
 pub(crate) use check::{hide_token_header, request_passes};
+pub use properties::CsrfProperties;
 pub(crate) use reader::submitted_token;
 pub use settings::CsrfConfig;
 pub(crate) use store::{ensure_token, replace_token};

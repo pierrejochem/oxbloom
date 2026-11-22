@@ -467,7 +467,8 @@ fn metadata_keys_match_config() {
     assert!(
         SecurityAutoConfiguration::properties()
             .iter()
-            .all(|p| p.key.starts_with("security.form-login."))
+            .all(|p| p.key.starts_with("security.form-login.")
+                || p.key.starts_with("security.csrf."))
     );
 }
 
