@@ -73,7 +73,7 @@ let http = HttpSecurity::new()
 assert!(http.build().is_ok());
 ```
 
-The keys are in the table at the end. The exact string `off` removes a header, and `enabled = false` removes all of them. A header name or value must be a valid header token (visible ASCII and no control character), and a bad value fails `build` with `SecurityBuildError::InvalidHeadersConfig`, or the startup with an error that names the key. The text never holds the value. The check also runs when the headers are disabled.
+The keys are in the table at the end. The string `off`, in any ASCII case, removes a header, and `enabled = false` removes all of them. A header name or value must be a valid header token (visible ASCII and no control character), and a bad value fails `build` with `SecurityBuildError::InvalidHeadersConfig`, or the startup with an error that names the key. The text never holds the value. The check also runs when the headers are disabled.
 
 ## The sessions of a user
 
