@@ -23,7 +23,22 @@ pub(crate) fn escape_html(s: &str) -> String {
 
 /// Builds the default login page. `error` adds the fixed failure text and `logout` the fixed
 /// logout text; no request value is ever reflected. Every dynamic value is escaped.
-pub(crate) fn login_page(settings: &FormLogin, error: bool, logout: bool) -> Response {
+///
+/// `csrf` is the field name and the token of the session. With `Some` the form holds the hidden
+/// field. The framing protection headers are always added, with or without the field.
+pub(crate) fn login_page(
+    settings: &FormLogin,
+    error: bool,
+    logout: bool,
+    csrf: Option<(&str, &str)>,
+) -> Response {
+    let hidden = csrf.map_or_else(String::new, |(name, token)| {
+        format!(
+            "<input type=\"hidden\" name=\"{}\" value=\"{}\">\n",
+            escape_html(name),
+            escape_html(token)
+        )
+    });
     let mut notices = String::new();
     if error {
         notices.push_str("<p class=\"error\">Invalid username or password.</p>\n");
@@ -38,7 +53,7 @@ pub(crate) fn login_page(settings: &FormLogin, error: bool, logout: bool) -> Res
          <style>body{{font-family:sans-serif;max-width:20em;margin:4em auto}}\
          label,input{{display:block;width:100%;margin:.5em 0}}\
          .error{{color:#b00020}}</style>\n</head>\n<body>\n<h1>Sign in</h1>\n{notices}\
-         <form method=\"post\" action=\"{action}\">\n\
+         <form method=\"post\" action=\"{action}\">\n{hidden}\
          <label for=\"u\">Username</label>\n\
          <input id=\"u\" name=\"{user}\" type=\"text\" autocomplete=\"username\" required>\n\
          <label for=\"p\">Password</label>\n\
@@ -63,9 +78,11 @@ pub(crate) fn login_page(settings: &FormLogin, error: bool, logout: bool) -> Res
     h.insert(
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static(
-            "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'",
+            "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; \
+             frame-ancestors 'none'",
         ),
     );
+    h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
     res
 }
 
@@ -79,7 +96,7 @@ mod tests {
 
     #[test]
     fn headers_are_exact() {
-        let res = login_page(&FormLogin::default(), false, false);
+        let res = login_page(&FormLogin::default(), false, false, None);
         assert_eq!(res.status(), 200);
         let mut names: Vec<_> = res
             .headers()
@@ -93,15 +110,17 @@ mod tests {
                 "cache-control",
                 "content-security-policy",
                 "content-type",
-                "x-content-type-options"
+                "x-content-type-options",
+                "x-frame-options"
             ]
         );
         assert_eq!(res.headers()["cache-control"], "no-store");
         assert_eq!(res.headers()["x-content-type-options"], "nosniff");
         assert_eq!(
             res.headers()["content-security-policy"],
-            "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'"
+            "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'"
         );
+        assert_eq!(res.headers()["x-frame-options"], "DENY");
         assert_eq!(res.headers()["content-type"], "text/html; charset=utf-8");
     }
 
@@ -111,7 +130,7 @@ mod tests {
             .login_processing_url("/in")
             .username_field("u1")
             .password_field("p1");
-        let body = text(&login_page(&s, false, false));
+        let body = text(&login_page(&s, false, false, None));
         assert!(body.contains("action=\"/in\""));
         assert!(body.contains("method=\"post\""));
         assert!(body.contains("name=\"u1\"") && body.contains("name=\"p1\""));
@@ -123,9 +142,9 @@ mod tests {
     #[test]
     fn error_and_logout_add_fixed_texts() {
         let s = FormLogin::default();
-        assert!(text(&login_page(&s, true, false)).contains("Invalid username or password."));
-        assert!(text(&login_page(&s, false, true)).contains("You have been logged out."));
-        let both = text(&login_page(&s, true, true));
+        assert!(text(&login_page(&s, true, false, None)).contains("Invalid username or password."));
+        assert!(text(&login_page(&s, false, true, None)).contains("You have been logged out."));
+        let both = text(&login_page(&s, true, true, None));
         assert!(both.contains("Invalid username") && both.contains("logged out"));
     }
 
@@ -135,7 +154,7 @@ mod tests {
             .login_processing_url("/a\"><script>&'")
             .username_field("<u>")
             .password_field("\"p\"");
-        let body = text(&login_page(&s, false, false));
+        let body = text(&login_page(&s, false, false, None));
         assert!(body.contains("action=\"/a&quot;&gt;&lt;script&gt;&amp;&#39;\""));
         assert!(body.contains("name=\"&lt;u&gt;\""));
         assert!(body.contains("name=\"&quot;p&quot;\""));
@@ -146,5 +165,30 @@ mod tests {
     fn escape_html_covers_the_five_characters() {
         assert_eq!(escape_html("<>&\"'"), "&lt;&gt;&amp;&quot;&#39;");
         assert_eq!(escape_html("plain"), "plain");
+    }
+
+    #[test]
+    fn the_hidden_field_is_in_the_form_and_escaped() {
+        let s = FormLogin::default();
+        let body = text(&login_page(&s, false, false, Some(("_csrf", "abc-_123"))));
+        assert!(body.contains("<input type=\"hidden\" name=\"_csrf\" value=\"abc-_123\">"));
+        let form_start = body.find("<form").unwrap();
+        assert!(body.find("type=\"hidden\"").unwrap() > form_start);
+        let hostile = text(&login_page(&s, false, false, Some(("\"><b>", "'&<"))));
+        assert!(hostile.contains("name=\"&quot;&gt;&lt;b&gt;\" value=\"&#39;&amp;&lt;\""));
+        assert!(!hostile.contains("<b>"));
+    }
+
+    #[test]
+    fn without_csrf_there_is_no_field_but_the_framing_headers_stay() {
+        let res = login_page(&FormLogin::default(), false, false, None);
+        assert!(!text(&res).contains("hidden"));
+        assert_eq!(res.headers()["x-frame-options"], "DENY");
+        assert!(
+            res.headers()["content-security-policy"]
+                .to_str()
+                .unwrap()
+                .ends_with("frame-ancestors 'none'")
+        );
     }
 }

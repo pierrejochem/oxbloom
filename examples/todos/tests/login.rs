@@ -1,5 +1,6 @@
 //! The form login flow of the `/me` page, driven through a `TestClient` against the real
-//! application. The test keeps the cookie by hand, as a browser would.
+//! application. The test keeps the cookie by hand, as a browser would, and sends the CSRF token
+//! it reads from the pages.
 
 use std::net::SocketAddr;
 use std::path::Path;
@@ -49,12 +50,27 @@ fn pair(set_cookie: &str) -> &str {
     set_cookie.split(';').next().unwrap()
 }
 
-/// Posts the login form.
-async fn login(client: &TestClient, user: &str, password: &str) -> oxbloom_test::TestResponse {
+/// The value of the hidden `_csrf` field of a page.
+fn field_token(page: &str) -> String {
+    let marker = "name=\"_csrf\" value=\"";
+    let start = page.find(marker).expect("the page has the hidden field") + marker.len();
+    let end = start + page[start..].find('"').unwrap();
+    page[start..end].to_owned()
+}
+
+/// Posts the login form with the session cookie and the token of the login page.
+async fn login(
+    client: &TestClient,
+    cookie: &str,
+    token: &str,
+    user: &str,
+    password: &str,
+) -> oxbloom_test::TestResponse {
     client
         .post("/login")
         .header("content-type", "application/x-www-form-urlencoded")
-        .body(format!("username={user}&password={password}"))
+        .header("cookie", cookie)
+        .body(format!("_csrf={token}&username={user}&password={password}"))
         .send()
         .await
 }
@@ -91,18 +107,13 @@ async fn the_login_flow_of_the_me_page() {
         .send()
         .await;
     assert_eq!(reply.status(), 200);
-    assert!(
-        reply
-            .text()
-            .contains("<form method=\"post\" action=\"/login\">")
-    );
+    let login_page = reply.text();
+    assert!(login_page.contains("<form method=\"post\" action=\"/login\">"));
+    // The page carries the CSRF token of the session and cannot be framed.
+    let token = field_token(&login_page);
+    assert_eq!(reply.header("x-frame-options"), Some("DENY"));
 
-    // A wrong password goes back to the login page with the error flag.
-    let reply = login(&client, "admin", "wrong").await;
-    assert_eq!(reply.status(), 302);
-    assert_eq!(reply.header("location"), Some("/login?error"));
-
-    // The right password returns to the saved page and rotates the session id.
+    // A login post without the token is refused before the password is looked at.
     let reply = client
         .post("/login")
         .header("content-type", "application/x-www-form-urlencoded")
@@ -110,6 +121,15 @@ async fn the_login_flow_of_the_me_page() {
         .body("username=admin&password=changeit")
         .send()
         .await;
+    assert_eq!(reply.status(), 403);
+
+    // A wrong password goes back to the login page with the error flag.
+    let reply = login(&client, &anonymous, &token, "admin", "wrong").await;
+    assert_eq!(reply.status(), 302);
+    assert_eq!(reply.header("location"), Some("/login?error"));
+
+    // The right password returns to the saved page and rotates the session id.
+    let reply = login(&client, &anonymous, &token, "admin", "changeit").await;
     assert_eq!(reply.status(), 302);
     assert_eq!(reply.header("location"), Some("/me"));
     let set_cookie = reply.header("set-cookie").expect("login sets a new cookie");
@@ -124,12 +144,24 @@ async fn the_login_flow_of_the_me_page() {
         .send()
         .await;
     assert_eq!(reply.status(), 200);
-    assert!(reply.text().contains("admin"));
+    let page = reply.text();
+    assert!(page.contains("admin"));
+    // The login replaced the token, and the page carries the new one.
+    let session_token = field_token(&page);
+    assert_ne!(session_token, token);
 
-    // Logout ends the session.
+    // Logout needs the token, and the form of the page posts it.
     let reply = client
         .post("/logout")
         .header("cookie", &session)
+        .send()
+        .await;
+    assert_eq!(reply.status(), 403);
+    let reply = client
+        .post("/logout")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .header("cookie", &session)
+        .body(format!("_csrf={session_token}"))
         .send()
         .await;
     assert_eq!(reply.status(), 302);

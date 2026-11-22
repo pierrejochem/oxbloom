@@ -11,8 +11,8 @@ use crate::chain::{
 use crate::form_login::{FormLoginEntryPoint, FormLoginHandlers};
 use crate::{
     AccessDeniedHandler, AuthenticationEntryPoint, AuthenticationProvider, AuthorizationManager,
-    AuthorizationRule, FormLogin, JwtAuthenticationConverter, JwtAuthenticationProvider,
-    JwtDecoder, ProviderManager, RequestMatcher, SecurityFilterChain,
+    AuthorizationRule, CsrfConfig, FormLogin, JwtAuthenticationConverter,
+    JwtAuthenticationProvider, JwtDecoder, ProviderManager, RequestMatcher, SecurityFilterChain,
 };
 
 /// Why [`HttpSecurity::build`] refused to build a chain.
@@ -50,6 +50,12 @@ pub enum SecurityBuildError {
     /// A form login URL is not a safe redirect target, two URLs collide, or a form field name is
     /// empty or has a character outside ASCII letters, digits, `_` and `-`.
     InvalidFormLoginUrl,
+    /// CSRF protection is on but form login is not configured, so there is no session flow to
+    /// protect.
+    CsrfWithoutFormLogin,
+    /// A CSRF field or header name is empty or has a character outside ASCII letters, digits,
+    /// `_` and `-`, or the token endpoint is not a safe path or collides with a form login URL.
+    InvalidCsrfConfig,
 }
 
 impl fmt::Display for SecurityBuildError {
@@ -66,6 +72,8 @@ impl fmt::Display for SecurityBuildError {
             Self::InvalidRealm => "invalid http basic realm",
             Self::FormLoginWithoutProvider => "form_login configured without a password provider",
             Self::InvalidFormLoginUrl => "invalid form login url or field name",
+            Self::CsrfWithoutFormLogin => "csrf protection configured without form login",
+            Self::InvalidCsrfConfig => "invalid csrf field name, header name or token endpoint",
         })
     }
 }
@@ -97,6 +105,7 @@ pub struct HttpSecurity {
     bearer: bool,
     custom_entry_point: bool,
     form_login: Option<FormLogin>,
+    csrf: Option<CsrfConfig>,
 }
 
 impl Default for HttpSecurity {
@@ -128,6 +137,7 @@ impl HttpSecurity {
             bearer: false,
             custom_entry_point: false,
             form_login: None,
+            csrf: None,
         }
     }
 
@@ -266,8 +276,9 @@ impl HttpSecurity {
     ///
     /// The chain needs a [`SessionFilter`](crate::SessionFilter) in the same application to
     /// keep the login: without one every login fails. The login and logout posts pass a
-    /// same-origin check (`Origin`, else `Referer`); a mismatch is a 403. Session keys under the
-    /// prefix `oxbloom.security.` are reserved for Oxbloom.
+    /// same-origin check (`Origin`, else `Referer`); a mismatch is a 403. Form login also turns
+    /// on the CSRF check with its defaults; [`csrf`](Self::csrf) tunes or disables it. Session
+    /// keys under the prefix `oxbloom.security.` are reserved for Oxbloom.
     ///
     /// [`build`](Self::build) fails with [`SecurityBuildError::FormLoginWithoutProvider`] when
     /// no [`password_provider`](Self::password_provider) was added and with
@@ -293,6 +304,8 @@ impl HttpSecurity {
     /// let chain = HttpSecurity::new()
     ///     .password_provider(Arc::new(DaoAuthenticationProvider::new(Arc::new(users), encoder)))
     ///     .form_login(|f| f.default_success_url("/home"))
+    ///     // The CSRF check is shown at `csrf`; it is off here to keep the example short.
+    ///     .csrf(|c| c.enabled(false))
     ///     .authorize(|a| a.any_request().authenticated())
     ///     .build()?;
     /// let settings = SessionSettings::default();
@@ -319,6 +332,80 @@ impl HttpSecurity {
     /// ```
     pub fn form_login(mut self, f: impl FnOnce(FormLogin) -> FormLogin) -> Self {
         self.form_login = Some(f(FormLogin::default()));
+        self
+    }
+
+    /// Tunes or turns off the CSRF check of form login. See [`CsrfConfig`] for the settings and
+    /// their defaults. With [`form_login`](Self::form_login) on and this method never called,
+    /// the check is on with the defaults.
+    ///
+    /// The check covers every request that the session authenticates, with every method except
+    /// the safe `GET`, `HEAD`, `OPTIONS` and `TRACE` (any other method, also an unknown one, is
+    /// checked), and also the login and logout posts, which are checked even without a login.
+    /// Such a request must send the token of its session in the header named `header_name` or,
+    /// in an urlencoded form of at most 4 KiB, in the field named `field_name`; read it with
+    /// [`RequestSessionExt::csrf_token`](crate::RequestSessionExt::csrf_token). Requests
+    /// authenticated by `Basic` or a bearer token and anonymous requests are not checked. A
+    /// failed check is a 403 with an empty body and changes nothing.
+    /// A successful login replaces the token.
+    ///
+    /// [`build`](Self::build) fails with [`SecurityBuildError::CsrfWithoutFormLogin`] when this
+    /// method was called without `form_login`, and with
+    /// [`SecurityBuildError::InvalidCsrfConfig`] when [`CsrfConfig::validate`] fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use oxbloom_security::{
+    ///     Argon2PasswordEncoder, DaoAuthenticationProvider, HttpSecurity, InMemorySessionStore,
+    ///     InMemoryUserDetailsService, PasswordEncoder, RequestSessionExt, SessionBackend,
+    ///     SessionFilter, SessionSettings, UserDetails,
+    /// };
+    /// use oxbloom_web::{App, HttpMethod, Request, Route};
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let encoder = Arc::new(Argon2PasswordEncoder::new(8, 1, 1)?);
+    /// let users = InMemoryUserDetailsService::new(vec![
+    ///     UserDetails::new("alice", encoder.encode("s3cret"), []).roles(&["USER"]),
+    /// ])?;
+    /// let chain = HttpSecurity::new()
+    ///     .password_provider(Arc::new(DaoAuthenticationProvider::new(Arc::new(users), encoder)))
+    ///     .form_login(|f| f)
+    ///     .csrf(|c| c.header_name("X-XSRF-TOKEN"))
+    ///     .authorize(|a| a.get("/token").permit_all().any_request().authenticated())
+    ///     .build()?;
+    /// let settings = SessionSettings::default();
+    /// let store = InMemorySessionStore::new(&settings, Arc::new(oxbloom_core::SystemClock));
+    /// let sessions = SessionFilter::new(SessionBackend::Server(Arc::new(store)), settings)?;
+    /// let app = App::new()
+    ///     .filter(sessions)
+    ///     .filter(chain)
+    ///     .route(Route::new(HttpMethod::Get, "/token", |req: Request| async move {
+    ///         req.csrf_token().map(|t| t.as_str().to_owned()).unwrap_or_default()
+    ///     }))?;
+    ///
+    /// // A login post without the token is refused before the password is checked.
+    /// let mut login = Request::new(HttpMethod::Post, "/login");
+    /// login.headers.insert("content-type", "application/x-www-form-urlencoded".parse()?);
+    /// login.body = "username=alice&password=s3cret".into();
+    /// assert_eq!(app.handle(login).await.status(), 403);
+    ///
+    /// // The token of the session, sent back in the form, lets the login through.
+    /// let res = app.handle(Request::new(HttpMethod::Get, "/token")).await;
+    /// let cookie = res.headers()["set-cookie"].to_str()?.split(';').next().unwrap().to_owned();
+    /// let token = String::from_utf8(res.body().to_vec())?;
+    /// let mut login = Request::new(HttpMethod::Post, "/login");
+    /// login.headers.insert("content-type", "application/x-www-form-urlencoded".parse()?);
+    /// login.headers.insert("cookie", cookie.parse()?);
+    /// login.body = format!("username=alice&password=s3cret&_csrf={token}").into();
+    /// assert_eq!(app.handle(login).await.status(), 302);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn csrf(mut self, f: impl FnOnce(CsrfConfig) -> CsrfConfig) -> Self {
+        self.csrf = Some(f(CsrfConfig::default()));
         self
     }
 
@@ -435,9 +522,11 @@ impl HttpSecurity {
     /// decoder, [`SecurityBuildError::HttpBasicWithoutProvider`] when `http_basic` has no
     /// `password_provider`, [`SecurityBuildError::InvalidRealm`] for a realm with `"`, `\` or
     /// a control character, [`SecurityBuildError::InvalidFormLoginUrl`] when the form login
-    /// settings fail [`FormLogin::validate`], and
+    /// settings fail [`FormLogin::validate`],
     /// [`SecurityBuildError::FormLoginWithoutProvider`] when `form_login` has no
-    /// `password_provider`.
+    /// `password_provider`, [`SecurityBuildError::CsrfWithoutFormLogin`] when `csrf` was called
+    /// without `form_login`, and [`SecurityBuildError::InvalidCsrfConfig`] when the CSRF
+    /// settings fail [`CsrfConfig::validate`].
     ///
     /// # Examples
     ///
@@ -497,6 +586,23 @@ impl HttpSecurity {
                 return Err(SecurityBuildError::FormLoginWithoutProvider);
             }
         }
+        // With form login on and `csrf` never called, the check is on with the defaults.
+        let csrf = match (&self.form_login, self.csrf) {
+            (None, Some(_)) => return Err(SecurityBuildError::CsrfWithoutFormLogin),
+            (None, None) => None,
+            (Some(form), csrf) => {
+                let csrf = csrf.unwrap_or_default();
+                csrf.validate(&[
+                    &form.login_page,
+                    &form.login_processing_url,
+                    &form.logout_url,
+                    &form.default_success_url,
+                    &form.failure_url,
+                    &form.logout_success_url,
+                ])?;
+                csrf.enabled.then_some(csrf)
+            }
+        };
         let challenges = Challenges {
             basic_realm: self.basic.map(|b| Arc::from(b.realm)),
             bearer: self.bearer,
@@ -521,7 +627,7 @@ impl HttpSecurity {
             entry_point,
             self.access_denied,
             challenges,
-            form_login.map(FormLoginHandlers::new),
+            form_login.map(|settings| FormLoginHandlers::new(settings, csrf)),
         ))
     }
 }

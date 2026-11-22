@@ -143,7 +143,17 @@ store = "memory"
 # `/me` after the login. The users are the demo users above (`admin` / `changeit`). It needs the
 # `security.session` section and a password provider. All other keys have their defaults:
 # `login-page`, `login-processing-url` and `logout-url` are `/login`, `/login` and `/logout`.
-# There are no CSRF tokens yet: a same-origin check on the two POSTs and the `SameSite=Lax`
-# cookie are the protection for now.
+# CSRF protection follows form login and is on by default. The login page and the `/me` forms
+# carry the token of the session in the hidden field `_csrf`, and every state-changing request
+# that the session authenticates (also `POST /api/todos` with the cookie) must send it in that
+# field or in the header `X-CSRF-TOKEN`, otherwise the answer is 403. The two POSTs of the login
+# flow also pass a same-origin check, and the cookie is `SameSite=Lax`. Uncomment to change the
+# names or to add an endpoint that returns the token as JSON for scripts.
 [security.form-login]
 enabled = true
+
+# [security.csrf]
+# enabled = true                 # false turns the check off; it needs form login
+# field-name = "_csrf"           # `GET /me` writes the hidden field with this name
+# header-name = "X-CSRF-TOKEN"
+# token-endpoint = "/csrf"       # GET answers {"headerName":..,"parameterName":..,"token":..}

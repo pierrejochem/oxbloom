@@ -90,6 +90,7 @@ mod authentication;
 mod authorization;
 mod chain;
 mod config;
+mod csrf;
 mod dao;
 #[cfg(feature = "di")]
 mod di;
@@ -118,6 +119,7 @@ pub use chain::{
 pub use config::{
     SECRET_KEY, jwks_ssl_bundle, jwt_decoder_from_config, jwt_decoder_from_config_with_clock,
 };
+pub use csrf::{CsrfConfig, CsrfProperties, CsrfToken};
 pub use dao::DaoAuthenticationProvider;
 #[cfg(feature = "di")]
 pub use di::SecurityContainerExt;

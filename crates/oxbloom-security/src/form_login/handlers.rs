@@ -19,16 +19,48 @@ use super::repository::{
     load_authentication, save_request, store_authentication, take_saved_request,
 };
 use super::settings::FormLogin;
+use crate::csrf::{ensure_token, replace_token, request_passes};
 use crate::{
     Authentication, AuthenticationEntryPoint, AuthenticationError, AuthenticationRequest,
-    ProviderManager, RequestSessionExt,
+    CsrfConfig, ProviderManager, RequestSessionExt, Session,
 };
 
 /// The log marker of a form that could not be read.
 #[derive(Debug)]
 struct MalformedForm;
 
-const FORM_CONTENT_TYPE: &str = "application/x-www-form-urlencoded";
+pub(crate) const FORM_CONTENT_TYPE: &str = "application/x-www-form-urlencoded";
+
+/// The JSON the token endpoint returns: the header name, the field name and the token, in that
+/// order of keys, every value escaped by `serde_json`. The session and the token are created
+/// when missing. The answer must never be cached.
+pub(crate) fn token_endpoint_response(session: &Session, cfg: &CsrfConfig) -> Response {
+    let token = ensure_token(session);
+    let json = |s: &str| serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_owned());
+    let body = format!(
+        "{{\"headerName\":{},\"parameterName\":{},\"token\":{}}}",
+        json(&cfg.header_name),
+        json(&cfg.field_name),
+        json(token.as_str())
+    );
+    let mut res = Response::new(body.into());
+    *res.status_mut() = StatusCode::OK;
+    res.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    res.headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    res
+}
+
+/// Logs that form login found no session, which means the application has no session filter.
+fn no_session_error() {
+    tracing::error!(
+        target: "oxbloom::security",
+        "form login has no session: add a SessionFilter to the application"
+    );
+}
 
 fn status(status: StatusCode) -> Response {
     let mut res = Response::new(Default::default());
@@ -49,7 +81,7 @@ fn redirect(target: &str, fallback: &str) -> Response {
 
 /// Whether the request body is declared as `application/x-www-form-urlencoded`, parameters such
 /// as `charset` allowed.
-fn is_form(req: &Request) -> bool {
+pub(crate) fn is_form(req: &Request) -> bool {
     req.headers
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
@@ -117,14 +149,28 @@ pub(crate) fn prefers_html(req: &Request) -> bool {
     }
 }
 
-/// The form login part of a chain: the settings and the handlers that use them.
+/// The form login part of a chain: the settings, the CSRF settings when the check is on, and
+/// the handlers that use them.
 pub(crate) struct FormLoginHandlers {
     settings: Arc<FormLogin>,
+    csrf: Option<CsrfConfig>,
 }
 
 impl FormLoginHandlers {
-    pub(crate) fn new(settings: Arc<FormLogin>) -> Self {
-        Self { settings }
+    /// `csrf` is `Some` only when the CSRF check is on.
+    pub(crate) fn new(settings: Arc<FormLogin>, csrf: Option<CsrfConfig>) -> Self {
+        Self { settings, csrf }
+    }
+
+    /// The CSRF settings, when the check is on.
+    pub(crate) fn csrf(&self) -> Option<&CsrfConfig> {
+        self.csrf.as_ref()
+    }
+
+    /// Whether the request passes the CSRF check: always when the check is off or the method
+    /// is safe.
+    pub(crate) fn csrf_passes(&self, req: &Request) -> bool {
+        request_passes(req, self.csrf.as_ref())
     }
 
     fn is_login_post(&self, req: &Request) -> bool {
@@ -168,11 +214,51 @@ impl FormLoginHandlers {
     }
 
     /// Replaces the router's 404 for the login page with the default page, when it is on.
-    pub(crate) fn page_fallback(&self, res: Response, flags: (bool, bool)) -> Response {
+    ///
+    /// `session` is the session of the request, cloned before the application ran because this
+    /// function does not see the request. When the CSRF check is on, the page creates the token
+    /// in that session and carries it in a hidden field. Without a session the page has no
+    /// field and the missing session filter is logged.
+    pub(crate) fn page_fallback(
+        &self,
+        res: Response,
+        flags: (bool, bool),
+        session: Option<Session>,
+    ) -> Response {
         if res.status() == StatusCode::NOT_FOUND && self.settings.login_page_enabled {
-            login_page(&self.settings, flags.0, flags.1)
+            let token = self.csrf.as_ref().and_then(|cfg| match &session {
+                Some(session) => Some((cfg.field_name.as_str(), ensure_token(session))),
+                None => {
+                    no_session_error();
+                    None
+                }
+            });
+            let field = token.as_ref().map(|(name, token)| (*name, token.as_str()));
+            login_page(&self.settings, flags.0, flags.1, field)
         } else {
             res
+        }
+    }
+
+    /// Whether the request is a `GET` of the token endpoint, when there is one. `HEAD`, other
+    /// methods and other paths are not.
+    pub(crate) fn token_endpoint_request(&self, req: &Request) -> bool {
+        self.csrf
+            .as_ref()
+            .and_then(|cfg| cfg.token_endpoint.as_deref())
+            .is_some_and(|path| req.method == HttpMethod::Get && req.path == path_of(path))
+    }
+
+    /// Answers the token endpoint. Without a session the application has no session filter: log
+    /// that and return `None`, so the request goes on to the application as any other.
+    pub(crate) fn token_endpoint(&self, req: &Request) -> Option<Response> {
+        let cfg = self.csrf.as_ref()?;
+        match req.session() {
+            Some(session) => Some(token_endpoint_response(&session, cfg)),
+            None => {
+                no_session_error();
+                None
+            }
         }
     }
 
@@ -194,17 +280,23 @@ impl FormLoginHandlers {
     }
 
     async fn login(&self, req: &Request, manager: Option<&ProviderManager>) -> Response {
+        // The origin first, the token second, both before the form is read or the provider is
+        // asked, and both with the same answer.
         if !same_origin(req) {
+            return status(StatusCode::FORBIDDEN);
+        }
+        if !self.csrf_passes(req) {
+            // The answer stays the same 403; only the log names the missing filter.
+            if req.session().is_none() {
+                no_session_error();
+            }
             return status(StatusCode::FORBIDDEN);
         }
         if !is_form(req) {
             return status(StatusCode::BAD_REQUEST);
         }
         let Some(session) = req.session() else {
-            tracing::error!(
-                target: "oxbloom::security",
-                "form login has no session: add a SessionFilter to the application"
-            );
+            no_session_error();
             return redirect(&self.settings.failure_url, "/");
         };
         let form = if req.body_too_large() {
@@ -231,6 +323,10 @@ impl FormLoginHandlers {
         };
         // A new id first, so a planted or stolen anonymous id never carries the login.
         session.rotate_id();
+        // A new token too, so a token known before the login is dead after it.
+        if self.csrf.is_some() {
+            replace_token(&session);
+        }
         if store_authentication(&session, &authentication, SystemTime::now()).is_err() {
             tracing::error!(
                 target: "oxbloom::security",
@@ -247,6 +343,13 @@ impl FormLoginHandlers {
 
     fn logout(&self, req: &Request) -> Response {
         if !same_origin(req) {
+            return status(StatusCode::FORBIDDEN);
+        }
+        if !self.csrf_passes(req) {
+            // The answer stays the same 403; only the log names the missing filter.
+            if req.session().is_none() {
+                no_session_error();
+            }
             return status(StatusCode::FORBIDDEN);
         }
         if let Some(session) = req.session() {

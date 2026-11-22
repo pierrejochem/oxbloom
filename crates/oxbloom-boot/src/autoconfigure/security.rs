@@ -5,8 +5,8 @@ use std::sync::Arc;
 use oxbloom_config::Config;
 use oxbloom_di::{Configuration, ContainerBuilder, DiError, component};
 use oxbloom_security::{
-    AuthenticationProvider, FormLoginConfig, HttpBasicSettings, HttpSecurity, JwtDecoder,
-    SecurityFilterChain, SessionFilter,
+    AuthenticationProvider, CsrfProperties, FormLoginConfig, HttpBasicSettings, HttpSecurity,
+    JwtDecoder, SecurityFilterChain, SessionFilter,
 };
 
 use super::jwt::JwtDecoderAutoConfiguration;
@@ -117,9 +117,20 @@ pub trait SecurityCustomizer: Send + Sync {
 /// that names `security.session`.
 ///
 /// A `SecurityBuildError` fails the build as `DiError::Creation` with that error as source; a
-/// bad `security.http-basic` or `security.form-login` key fails it the same way with the
-/// `ConfigError` naming the key. The metadata of this auto-configuration lists the
-/// `security.form-login` keys, so excluding it hides them.
+/// bad `security.http-basic`, `security.form-login` or `security.csrf` key fails it the same
+/// way with the `ConfigError` naming the key. The metadata of this auto-configuration lists the
+/// `security.form-login` and `security.csrf` keys, so excluding it hides them.
+///
+/// CSRF protection follows form login (read with `oxbloom_security::CsrfProperties::from_config`).
+/// With form login on, the chain calls `csrf` with the `security.csrf` settings: the check is on
+/// unless `security.csrf.enabled` is `false`, and `field-name`, `header-name` and
+/// `token-endpoint` are optional. With form login off the chain never calls `csrf`; then
+/// `security.csrf.enabled = true` and every other `security.csrf` key fail the startup with a
+/// `ConfigError` naming the key, and `enabled = false` alone is accepted and does nothing. A
+/// token endpoint equal to a form login path fails the build with
+/// `SecurityBuildError::InvalidCsrfConfig`. The chain is configured after every
+/// `SecurityCustomizer`, as for form login, so the configuration wins over a customizer that
+/// calls `.csrf(..)`.
 ///
 /// # Examples
 ///
@@ -193,7 +204,7 @@ impl AutoConfiguration for SecurityAutoConfiguration {
     }
 
     fn properties() -> &'static [PropertyMetadata] {
-        &FORM_LOGIN
+        &SECURITY
     }
 }
 
@@ -216,6 +227,7 @@ fn security_filter_chain(
         ));
     }
     let form_enabled = form.is_some();
+    let csrf = CsrfProperties::from_config(&config, form_enabled).map_err(creation)?;
     let mut http = HttpSecurity::new();
     if customizers.is_empty() {
         // Closed by default: nothing is reachable without authentication.
@@ -233,6 +245,10 @@ fn security_filter_chain(
     }
     if let Some(form) = form {
         http = http.form_login(move |_| form);
+    }
+    if let Some(csrf) = csrf {
+        // `HttpSecurity::csrf` needs form login, and the reader gives `Some` only with it.
+        http = http.csrf(move |_| csrf);
     }
     if basic.enabled || form_enabled {
         for provider in providers {
@@ -259,8 +275,37 @@ impl std::fmt::Display for FormLoginWithoutSession {
 
 impl std::error::Error for FormLoginWithoutSession {}
 
-/// Exactly the keys `FormLoginConfig::from_config` reads (pinned by a test).
-static FORM_LOGIN: [PropertyMetadata; 10] = [
+/// Exactly the keys `FormLoginConfig::from_config` and `CsrfProperties::from_config` read
+/// (pinned by tests), sorted by key.
+static SECURITY: [PropertyMetadata; 14] = [
+    PropertyMetadata::new(
+        "security.csrf.enabled",
+        "bool",
+        Some("true"),
+        "Whether the CSRF check runs. Follows form login: on when form login is on. Setting it \
+         to `true` without form login fails the startup.",
+    ),
+    PropertyMetadata::new(
+        "security.csrf.field-name",
+        "String",
+        Some("_csrf"),
+        "The name of the hidden form field that carries the CSRF token; letters, digits, `_` \
+         and `-`. Needs form login.",
+    ),
+    PropertyMetadata::new(
+        "security.csrf.header-name",
+        "String",
+        Some("X-CSRF-TOKEN"),
+        "The name of the request header that carries the CSRF token; letters, digits, `_` and \
+         `-`. Needs form login.",
+    ),
+    PropertyMetadata::new(
+        "security.csrf.token-endpoint",
+        "String",
+        None,
+        "The path of an endpoint that answers GET with the CSRF token as JSON; a local path \
+         that differs from the form login paths. Needs form login. Unset means no endpoint.",
+    ),
     PropertyMetadata::new(
         "security.form-login.default-success-url",
         "String",

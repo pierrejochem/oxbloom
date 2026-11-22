@@ -3,6 +3,9 @@
 //! The behavioural tests run against both session backends through one shared loop per test
 //! (`for kind in KINDS`). A small cookie jar plays the browser: it keeps the session cookie the
 //! responses set and drops it on `Max-Age=0`.
+//!
+//! These tests pin the Slice 6c behavior, so the CSRF check is off in every setup here; its own
+//! tests are in `tests/csrf_flow.rs`.
 
 use std::io::Write;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -90,8 +93,13 @@ fn rules(security: HttpSecurity) -> HttpSecurity {
     })
 }
 
+/// Form login with the CSRF check off, as in Slice 6c.
+fn form_login(security: HttpSecurity, f: impl FnOnce(FormLogin) -> FormLogin) -> HttpSecurity {
+    security.form_login(f).csrf(|c| c.enabled(false))
+}
+
 fn default_security() -> HttpSecurity {
-    rules(base_security().form_login(|f| f))
+    rules(form_login(base_security(), |f| f))
 }
 
 fn principal_route(path: &'static str) -> Route {
@@ -612,12 +620,12 @@ async fn basic_and_bearer_create_no_session() {
     for kind in KINDS {
         let c = Client::with(
             kind,
-            rules(
+            rules(form_login(
                 base_security()
                     .http_basic(|b| b)
-                    .bearer_provider(Arc::new(FakeBearer))
-                    .form_login(|f| f),
-            ),
+                    .bearer_provider(Arc::new(FakeBearer)),
+                |f| f,
+            )),
         );
         let mut req = c.request(HttpMethod::Get, "/secret");
         req.headers.insert(
@@ -655,7 +663,7 @@ async fn basic_wins_over_a_session() {
     for kind in KINDS {
         let c = Client::with(
             kind,
-            rules(base_security().http_basic(|b| b).form_login(|f| f)),
+            rules(form_login(base_security().http_basic(|b| b), |f| f)),
         );
         c.login("alice", "s3cret").await;
         assert_eq!(body(&c.browse("/secret").await), "alice");
@@ -682,12 +690,16 @@ async fn default_page() {
         assert_eq!(h[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
         assert_eq!(
             h[header::CONTENT_SECURITY_POLICY],
-            "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'"
+            "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'"
         );
+        assert_eq!(h[header::X_FRAME_OPTIONS], "DENY");
         let text = body(&res);
         assert!(text.contains("action=\"/login\""));
         assert!(!text.contains("Invalid username"));
-        assert!(set_cookies(&res).is_empty(), "the page creates no session");
+        assert!(
+            set_cookies(&res).is_empty(),
+            "with CSRF off the page creates no session"
+        );
 
         assert!(body(&c.browse("/login?error").await).contains("Invalid username or password."));
         assert!(body(&c.browse("/login?logout").await).contains("You have been logged out."));
@@ -716,7 +728,7 @@ async fn default_page() {
         // Turned off, the 404 stays a 404.
         let off = Client::with(
             kind,
-            rules(base_security().form_login(|f| f.login_page_enabled(false))),
+            rules(form_login(base_security(), |f| f.login_page_enabled(false))),
         );
         assert_eq!(off.browse("/login").await.status(), 404);
     }
