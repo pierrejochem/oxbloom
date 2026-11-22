@@ -144,10 +144,11 @@ impl RememberMeProperties {
     /// default 14 days), `field-name` (ASCII letters, digits, `_` and `-`, default
     /// `remember-me`) and `cookie-name` (an HTTP token, default `OXBLOOM_REMEMBER_ME`).
     ///
-    /// The result is `None` unless `enabled` is `true`. A disabled or missing section still
-    /// rejects unknown keys and values of the wrong type, but its values are not checked
-    /// further, as for `security.form-login`. `secret` and `old-secrets` are refused when they
-    /// come from the command line, enabled or not.
+    /// The result is `None` unless `enabled` is `true`. A disabled section is still checked in
+    /// full: unknown keys, values of the wrong type and every value rule above are rejected
+    /// whether or not remember-me is enabled; only a missing secret is accepted, since the
+    /// secret is needed only when remember-me is on. `secret` and `old-secrets` are refused
+    /// when they come from the command line, enabled or not.
     ///
     /// # Errors
     ///
@@ -187,9 +188,7 @@ impl RememberMeProperties {
         for index in 0..old_secrets.len() {
             refuse_command_line(config, &format!("{OLD_SECRETS}[{index}]"))?;
         }
-        if !raw.enabled.unwrap_or(false) {
-            return Ok(None);
-        }
+        // Every value is checked, enabled or not; only a missing secret is left to the caller.
         let long_enough = |s: &Secret<String>| s.expose().len() >= MIN_SECRET_BYTES;
         if raw.secret.as_ref().is_some_and(|s| !long_enough(s)) {
             return Err(ConfigError::invalid(SECRET, SECRET_RULE));
@@ -212,6 +211,9 @@ impl RememberMeProperties {
         let cookie_name = raw.cookie_name.unwrap_or(defaults.cookie_name);
         if !is_valid_cookie_name(&cookie_name) {
             return Err(ConfigError::invalid(COOKIE_NAME, COOKIE_NAME_RULE));
+        }
+        if !raw.enabled.unwrap_or(false) {
+            return Ok(None);
         }
         Ok(Some(RememberMeSettings {
             secret: raw.secret,
@@ -322,19 +324,53 @@ mod tests {
     }
 
     #[test]
-    fn a_disabled_section_rejects_unknown_keys_and_wrong_types_only() {
+    fn a_disabled_section_is_validated_too() {
         let err = read("bogus-key = 1").unwrap_err();
         assert!(err.to_string().contains(SECTION), "{err}");
         assert!(err.to_string().contains("bogus"), "{err}");
         assert!(read("enabled = false\nlifetime = true").is_err());
         assert!(read("enabled = false\ncookie-name = { a = 1 }").is_err());
-        // A value that is only out of range is checked once the section is enabled.
+        // Every value is checked, enabled or not, without echoing it.
+        for prefix in ["enabled = false\n", ""] {
+            let disabled = |body: &str| read(&format!("{prefix}{body}"));
+            rejects(
+                disabled("secret = \"short-secret-value\""),
+                SECRET,
+                "short-secret-value",
+            );
+            rejects(
+                disabled(&format!("old-secrets = [\"{KEY}\", \"short-old-value\"]")),
+                "security.remember-me.old-secrets[1]",
+                "short-old-value",
+            );
+            rejects(disabled("lifetime = \"366d\""), LIFETIME, "366d");
+            rejects(disabled("lifetime = \"0s\""), LIFETIME, "0s");
+            rejects(
+                disabled("field-name = \"bad name\""),
+                FIELD_NAME,
+                "bad name",
+            );
+            rejects(
+                disabled("cookie-name = \"bad;name\""),
+                COOKIE_NAME,
+                "bad;name",
+            );
+        }
+        // A fully valid disabled section is `None`, and a missing secret is fine while
+        // disabled.
         assert!(
-            read("enabled = false\nsecret = \"short\"")
+            read(&format!(
+                "enabled = false\nsecret = \"{KEY}\"\nold-secrets = [\"{KEY}\"]\n\
+                 lifetime = \"1h\"\nfield-name = \"stay\"\ncookie-name = \"KEEP\""
+            ))
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            read("enabled = false\nlifetime = \"1h\"")
                 .unwrap()
                 .is_none()
         );
-        assert!(enabled("secret = \"short\"").is_err());
     }
 
     #[test]

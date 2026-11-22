@@ -12,13 +12,15 @@ use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use oxbloom_boot::{
-    AutoConfiguration, SecurityAutoConfiguration, StartupPhase, auto_configurations,
+    AutoConfiguration, SecurityAutoConfiguration, SecurityCustomizer, StartupPhase,
+    auto_configurations,
 };
 use oxbloom_config::{Config, ConfigError};
 use oxbloom_di::{ContainerBuilder, DiError};
 use oxbloom_security::{
-    Argon2PasswordEncoder, DelegatingPasswordEncoder, PasswordEncoder, RememberMeProperties,
-    RememberMeSettings, SecurityFilterChain, UserDetails, UserDetailsError, UserDetailsService,
+    Argon2PasswordEncoder, DelegatingPasswordEncoder, HttpSecurity, PasswordEncoder,
+    RememberMeProperties, RememberMeSettings, SecurityFilterChain, UserDetails, UserDetailsError,
+    UserDetailsService,
 };
 use oxbloom_test::{ContextRunner, ManualClock, RunningApp, TestApp};
 use oxbloom_web::{Controller, HttpMethod, Route};
@@ -146,6 +148,42 @@ fn unknown_keys_and_wrong_types_are_rejected_also_when_disabled() {
     assert!(text.contains("bogus"), "{text}");
     assert!(read("[security.remember-me]\nenabled = false\nlifetime = true\n").is_err());
     assert!(read("[security.remember-me]\nenabled = false\nsecret = [1]\n").is_err());
+}
+
+#[test]
+fn bad_values_are_rejected_also_when_disabled() {
+    let disabled = |body: &str| {
+        read(&format!(
+            "[security.remember-me]\nenabled = false\n{body}\n"
+        ))
+    };
+    rejects(
+        disabled("secret = \"short-secret-value\""),
+        "security.remember-me.secret",
+        "short-secret-value",
+    );
+    rejects(
+        disabled("old-secrets = [\"short-old-secret-value\"]"),
+        "security.remember-me.old-secrets[0]",
+        "short-old-secret-value",
+    );
+    rejects(
+        disabled("lifetime = \"366d\""),
+        "security.remember-me.lifetime",
+        "366d",
+    );
+    rejects(
+        disabled("field-name = \"stay signed\""),
+        "security.remember-me.field-name",
+        "stay signed",
+    );
+    rejects(
+        disabled("cookie-name = \"bad;cookie\""),
+        "security.remember-me.cookie-name",
+        "bad;cookie",
+    );
+    // Valid values and no secret: off.
+    assert!(disabled("lifetime = \"1h\"").unwrap().is_none());
 }
 
 // ---- Startup failures ----------------------------------------------------------------------
@@ -511,6 +549,61 @@ async fn the_cookie_expires_by_the_clock_bean() {
     early.drop_session();
     assert!(early.secret(&app).await.starts_with(IN));
     // Past it, by the same clock, it does not.
+    clock.advance(Duration::from_secs(2));
+    late.drop_session();
+    assert_eq!(late.secret(&app).await, OUT);
+    app.stop().await;
+}
+
+/// Changes only the remember-me field name, and owns the rules.
+struct StayField;
+
+impl SecurityCustomizer for StayField {
+    fn customize(&self, http: HttpSecurity) -> HttpSecurity {
+        http.remember_me(|r| r.field_name("stay"))
+            .authorize(|a| a.any_request().authenticated())
+    }
+}
+
+#[tokio::test]
+async fn a_customizer_composes_on_the_configured_remember_me() {
+    let clock = ManualClock::at(SystemTime::now());
+    let app = TestApp::secured()
+        .config_str(format!("{FORM}{}", remember("lifetime = \"1h\"")))
+        .clock(Arc::new(clock.clone()))
+        .configure(|b| {
+            b.instance(Routes)
+                .provides(|c: Arc<Routes>| -> Arc<dyn Controller> { c })
+                .instance(StayField)
+                .provides(|c: Arc<StayField>| -> Arc<dyn SecurityCustomizer> { c })
+        })
+        .configure(|b| {
+            b.instance(Switchable::new())
+                .provides(|u: Arc<Switchable>| -> Arc<dyn UserDetailsService> { u })
+        })
+        .start()
+        .await;
+    // The customizer's field name asks for the cookie; the configured lifetime is kept.
+    let early = Browser::default();
+    let body = "username=alice&password=wonderland&stay=on";
+    assert_eq!(
+        early.send(&app, HttpMethod::Post, "/login", body).await,
+        "302 /"
+    );
+    let set = early
+        .last_set(COOKIE)
+        .expect("the remember-me cookie is set");
+    assert!(set.contains("Max-Age=3600"), "{set}");
+    let late = Browser::default();
+    assert_eq!(
+        late.send(&app, HttpMethod::Post, "/login", body).await,
+        "302 /"
+    );
+    // The configured secret and user service are kept: the cookie logs in again.
+    clock.advance(Duration::from_secs(3599));
+    early.drop_session();
+    assert!(early.secret(&app).await.starts_with(IN));
+    // The clock bean is still the one that judges the expiry.
     clock.advance(Duration::from_secs(2));
     late.drop_session();
     assert_eq!(late.secret(&app).await, OUT);

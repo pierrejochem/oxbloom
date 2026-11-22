@@ -569,10 +569,15 @@ impl HttpSecurity {
     /// `form_login` is not configured and with [`SecurityBuildError::InvalidRememberMe`] when a
     /// setting is missing or out of range. Neither error contains a value.
     ///
+    /// `f` receives the current settings: the defaults on the first call, or the result of an
+    /// earlier call, so several calls compose (boot applies the `security.remember-me`
+    /// configuration first, and a `SecurityCustomizer` changes only what it touches).
+    ///
     /// # Examples
     ///
     /// ```
     /// use std::sync::Arc;
+    /// use std::time::Duration;
     /// use oxbloom_config::Secret;
     /// use oxbloom_security::{
     ///     Argon2PasswordEncoder, DaoAuthenticationProvider, HttpSecurity,
@@ -586,6 +591,11 @@ impl HttpSecurity {
     ///     .password_provider(Arc::new(DaoAuthenticationProvider::new(users.clone(), encoder)))
     ///     .form_login(|f| f)
     ///     .remember_me(|r| r.secret(secret()).user_details(users.clone()))
+    ///     // A second call sees the first call's secret and user service.
+    ///     .remember_me(|r| {
+    ///         assert!(format!("{r:?}").contains("user_details: true"));
+    ///         r.lifetime(Duration::from_secs(3600))
+    ///     })
     ///     .authorize(|a| a.path("/account/**").fully_authenticated().any_request().authenticated())
     ///     .build();
     /// assert!(chain.is_ok());
@@ -599,7 +609,7 @@ impl HttpSecurity {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn remember_me(mut self, f: impl FnOnce(RememberMe) -> RememberMe) -> Self {
-        self.remember_me = Some(f(RememberMe::new()));
+        self.remember_me = Some(f(self.remember_me.take().unwrap_or_else(RememberMe::new)));
         self
     }
 
