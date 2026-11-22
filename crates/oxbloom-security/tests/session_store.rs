@@ -369,6 +369,36 @@ async fn expired_entries_are_removed_before_evicting_a_live_one() {
     assert_eq!(store.len(), 3, "the expired entries made room");
 }
 
+#[tokio::test]
+async fn the_sample_varies_between_saves() {
+    let (store, clock) = store_with(&settings().max_sessions(2000));
+    for i in 0..2000u64 {
+        let data = SessionData::new(clock.now() + Duration::from_millis(i));
+        store.save(&format!("s{i}"), &data, IDLE).await.unwrap();
+    }
+    // A sample of 16 random entries rarely holds the globally oldest ones, so the victims
+    // cannot all be among the 40 oldest; a fixed sample of one shard's first entries would
+    // keep taking from the same place.
+    let mut victims = Vec::new();
+    for i in 0..40 {
+        store
+            .save(
+                &format!("new-{i}"),
+                &SessionData::new(clock.now() + Duration::from_secs(5)),
+                IDLE,
+            )
+            .await
+            .unwrap();
+    }
+    for i in 0..2000u64 {
+        if store.load(&format!("s{i}")).await.unwrap().is_none() {
+            victims.push(i);
+        }
+    }
+    assert_eq!(victims.len(), 40);
+    assert!(victims.iter().any(|&i| i >= 40), "victims: {victims:?}");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn size_stays_at_or_below_cap_plus_racing_saves() {
     let (store, clock) = store_with(&settings().max_sessions(10));
@@ -394,12 +424,22 @@ async fn size_stays_at_or_below_cap_plus_racing_saves() {
     for task in tasks {
         task.await.unwrap();
     }
-    assert!(store.len() <= 10 + 50, "len was {}", store.len());
-    store
-        .save("settle", &data_with(&clock, "k", json!(0)), IDLE)
-        .await
-        .unwrap();
-    assert!(store.len() <= 10 + 50);
+    // Racing saves can overshoot the cap, but eviction must have run for most of them:
+    // without it the store would hold 10 + 50.
+    let raced = store.len();
+    assert!((10..10 + 25).contains(&raced), "len was {raced}");
+    // Sequential saves at the cap never grow the store.
+    for i in 0..20 {
+        store
+            .save(
+                &format!("after-{i}"),
+                &data_with(&clock, "k", json!(i)),
+                IDLE,
+            )
+            .await
+            .unwrap();
+        assert!(store.len() <= raced, "len grew to {}", store.len());
+    }
 }
 
 #[tokio::test]

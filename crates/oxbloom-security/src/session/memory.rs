@@ -21,6 +21,10 @@ const SHARDS: usize = 16;
 /// The most entries one eviction visits.
 const SAMPLE: usize = 16;
 
+/// The most entries skipped at the start of a shard, so the sample position varies while the
+/// cost stays constant.
+const MAX_SKIP: usize = 64;
+
 /// The shortest gap between two eviction warnings.
 const WARN_INTERVAL: Duration = Duration::from_secs(60);
 
@@ -60,7 +64,9 @@ type Shard = Mutex<HashMap<String, Entry>>;
 /// `oxbloom::security`, at most once a minute, without any id). The sample keeps the cost of
 /// a write constant however large the store is, but it is not the global oldest: a flood of
 /// new anonymous sessions can still evict real ones. Under concurrent saves of new sessions
-/// the count may overshoot the cap by the number of racing saves.
+/// the count may overshoot the cap by the number of racing saves, and the overshoot persists
+/// until entries expire or [`sweep`](Self::sweep) runs, because a save at the cap evicts one
+/// session and adds one.
 ///
 /// Sessions are lost when the process stops and are not shared between instances. `Debug`
 /// shows only the number of sessions and the cap.
@@ -199,7 +205,7 @@ impl InMemorySessionStore {
 
     /// Makes room for a new session: removes the expired entries met while sampling, and when
     /// that is not enough evicts the entry with the oldest last touch among the sampled live
-    /// ones. The sample starts at a random shard and walks the entries in hash order across
+    /// ones. The sample starts at a random shard and a random position in it and walks the entries in hash order across
     /// shards until [`SAMPLE`] entries were visited or the store is exhausted, so the cost
     /// does not depend on the size of the store. Only one shard lock is held at a time, and
     /// the session being saved (`saving`) is never chosen.
@@ -215,7 +221,11 @@ impl InMemorySessionStore {
             let index = (start + offset) % self.shards.len();
             let mut map = lock(&self.shards[index]);
             let mut expired = Vec::new();
-            for (id, entry) in map.iter() {
+            // A random skip inside the shard, so the same low-bucket entries are not probed
+            // by every save. Skipped entries are not visits.
+            let skip =
+                (self.hasher.hash_one((tick, index)) as usize) % map.len().clamp(1, MAX_SKIP);
+            for (id, entry) in map.iter().skip(skip).chain(map.iter().take(skip)) {
                 if visited >= SAMPLE {
                     break;
                 }
@@ -280,7 +290,7 @@ impl InMemorySessionStore {
             tracing::warn!(
                 target: "oxbloom::security",
                 max_sessions = self.max_sessions,
-                "the in-memory session store is full; the least recently touched session was evicted"
+                "the in-memory session store is full; the oldest session of a sample was evicted"
             );
         }
     }
