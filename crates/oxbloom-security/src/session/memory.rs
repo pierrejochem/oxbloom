@@ -203,11 +203,18 @@ impl InMemorySessionStore {
         &self.shards[index]
     }
 
+    /// How many entries to skip at the start of a shard: below `len` and below [`MAX_SKIP`].
+    fn sample_skip(hasher: &RandomState, tick: u64, index: usize, len: usize) -> usize {
+        (hasher.hash_one((tick, index)) as usize) % len.clamp(1, MAX_SKIP)
+    }
+
     /// Makes room for a new session: removes the expired entries met while sampling, and when
     /// that is not enough evicts the entry with the oldest last touch among the sampled live
-    /// ones. The sample starts at a random shard and a random position in it and walks the entries in hash order across
-    /// shards until [`SAMPLE`] entries were visited or the store is exhausted, so the cost
-    /// does not depend on the size of the store. Only one shard lock is held at a time, and
+    /// ones. The sample starts at a random shard and, within it, at a random position among
+    /// its first [`MAX_SKIP`] entries (a cost tradeoff: the position is not uniform over the
+    /// whole shard). It walks the entries in hash order across shards until [`SAMPLE`]
+    /// entries were visited or the store is exhausted, so the cost does not depend on the
+    /// size of the store. Only one shard lock is held at a time, and
     /// the session being saved (`saving`) is never chosen.
     fn evict_sampled(&self, now: SystemTime, saving: &str) {
         let tick = self.ticks.fetch_add(1, Ordering::Relaxed);
@@ -221,10 +228,9 @@ impl InMemorySessionStore {
             let index = (start + offset) % self.shards.len();
             let mut map = lock(&self.shards[index]);
             let mut expired = Vec::new();
-            // A random skip inside the shard, so the same low-bucket entries are not probed
-            // by every save. Skipped entries are not visits.
-            let skip =
-                (self.hasher.hash_one((tick, index)) as usize) % map.len().clamp(1, MAX_SKIP);
+            // A random skip among the first 64 entries of the shard, so the same low-bucket
+            // entries are not probed by every save. Skipped entries are not visits.
+            let skip = Self::sample_skip(&self.hasher, tick, index, map.len());
             for (id, entry) in map.iter().skip(skip).chain(map.iter().take(skip)) {
                 if visited >= SAMPLE {
                     break;
@@ -401,5 +407,26 @@ impl SessionStore for InMemorySessionStore {
 
     async fn maintain(&self) {
         self.sweep();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sample_skip_varies_and_stays_in_range() {
+        let hasher = RandomState::new();
+        let distinct: std::collections::HashSet<usize> = (0..200)
+            .map(|tick| InMemorySessionStore::sample_skip(&hasher, tick, 3, 1000))
+            .collect();
+        assert!(distinct.len() > 8, "only {} distinct skips", distinct.len());
+        assert!(distinct.iter().all(|&skip| skip < MAX_SKIP));
+        for len in 0..20 {
+            for tick in 0..50 {
+                let skip = InMemorySessionStore::sample_skip(&hasher, tick, 1, len);
+                assert!(skip < len.max(1), "skip {skip} for len {len}");
+            }
+        }
     }
 }
