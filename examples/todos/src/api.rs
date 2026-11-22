@@ -24,7 +24,7 @@ use std::sync::Arc;
 use http::{HeaderValue, StatusCode, header};
 use oxbloom_boot::SecurityCustomizer;
 use oxbloom_di::component;
-use oxbloom_security::{HttpSecurity, RequestSessionExt};
+use oxbloom_security::{HttpSecurity, RequestSecurityExt, RequestSessionExt};
 use oxbloom_web::{HttpError, IntoResponse, Json, Request, Response, controller};
 use serde::{Deserialize, Serialize};
 
@@ -173,6 +173,68 @@ impl VisitController {
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
         Json(&Visits { visits }).into_response()
+    }
+}
+
+/// The protected page for `/me`: an HTML page that shows who is logged in and has a logout
+/// button. It is not in [`PublicPaths`], so the last rule applies: a browser without a login
+/// is redirected to `/login` (served by Oxbloom's default page) and returns here after it.
+///
+/// # Examples
+///
+/// ```
+/// use std::sync::Arc;
+/// use oxbloom_security::{Authentication, SecurityContext};
+/// use oxbloom_web::{App, HttpMethod, Request};
+/// use todos::api::MeController;
+///
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let app = App::new().routes(Arc::new(MeController).routes())?;
+/// let mut req = Request::new(HttpMethod::Get, "/me");
+/// req.extensions_mut()
+///     .insert(SecurityContext::authenticated(Authentication::new("<b>x</b>", [])));
+/// let res = app.handle(req).await;
+/// assert_eq!(res.status(), 200);
+/// let body = String::from_utf8(res.body().to_vec())?;
+/// assert!(body.contains("&lt;b&gt;x&lt;/b&gt;"));
+/// # Ok(())
+/// # }
+/// ```
+#[component]
+pub struct MeController;
+
+#[controller("/me")]
+impl MeController {
+    /// `GET /me`: the name of the logged-in user, escaped, and a form that posts to
+    /// `/logout`. Without an authentication (the rules keep that from happening) the answer
+    /// is 401.
+    #[get("")]
+    async fn me(&self, req: Request) -> Response {
+        let Some(auth) = req.authentication() else {
+            return StatusCode::UNAUTHORIZED.into_response();
+        };
+        let name = auth
+            .principal()
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+            .replace('\'', "&#39;");
+        let body = format!(
+            "<!DOCTYPE html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\"><title>Me</title></head>\n\
+             <body>\n<h1>Hello, {name}</h1>\n\
+             <form method=\"post\" action=\"/logout\"><button type=\"submit\">Log out</button></form>\n\
+             </body>\n</html>\n"
+        );
+        let mut res = Response::new(body.into());
+        let h = res.headers_mut();
+        h.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/html; charset=utf-8"),
+        );
+        h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        res
     }
 }
 
