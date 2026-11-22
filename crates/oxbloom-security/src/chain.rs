@@ -12,9 +12,10 @@ use oxbloom_web::{Filter, Next, Request, Response};
 
 use crate::csrf::hide_token_header;
 use crate::form_login::FormLoginHandlers;
+use crate::headers::apply_headers;
 use crate::{
-    AuthenticationError, AuthenticationRequest, AuthorizationRule, ProviderManager, RequestMatcher,
-    RequestSecurityExt, RequestSessionExt, SecurityContext,
+    AuthenticationError, AuthenticationRequest, AuthorizationRule, HeadersConfig, ProviderManager,
+    RequestMatcher, RequestSecurityExt, RequestSessionExt, SecurityContext,
 };
 
 /// Produces the response for a request that needs authentication, or whose credentials failed.
@@ -324,6 +325,7 @@ pub struct SecurityFilterChain {
     access_denied: Arc<dyn AccessDeniedHandler>,
     challenges: Challenges,
     form_login: Option<FormLoginHandlers>,
+    headers: HeadersConfig,
 }
 
 impl SecurityFilterChain {
@@ -334,6 +336,7 @@ impl SecurityFilterChain {
         access_denied: Arc<dyn AccessDeniedHandler>,
         challenges: Challenges,
         form_login: Option<FormLoginHandlers>,
+        headers: HeadersConfig,
     ) -> Self {
         Self {
             manager,
@@ -342,6 +345,7 @@ impl SecurityFilterChain {
             access_denied,
             challenges,
             form_login,
+            headers,
         }
     }
 
@@ -362,7 +366,22 @@ impl SecurityFilterChain {
 
 #[async_trait]
 impl Filter for SecurityFilterChain {
-    async fn filter(&self, mut req: Request, next: Next<'_>) -> Response {
+    async fn filter(&self, req: Request, next: Next<'_>) -> Response {
+        let scheme = req.scheme();
+        let (mut res, authenticated) = self.run(req, next).await;
+        apply_headers(&self.headers, authenticated, scheme, &mut res);
+        res
+    }
+
+    fn order(&self) -> i32 {
+        oxbloom_web::order::SECURITY
+    }
+}
+
+impl SecurityFilterChain {
+    /// The chain proper. Returns the response and whether the request was authenticated, which
+    /// the wrapper needs to decide on `Cache-Control`.
+    async fn run(&self, mut req: Request, next: Next<'_>) -> (Response, bool) {
         // Keep the token out of `Debug` output of the request from here on, also for requests
         // built by hand. Marking a value sensitive does not change its bytes.
         if let header::Entry::Occupied(mut entry) = req.headers.entry(header::AUTHORIZATION) {
@@ -375,18 +394,18 @@ impl Filter for SecurityFilterChain {
         // paths, before the authorization rules.
         if let Some(form) = &self.form_login {
             if let Some(res) = form.handle_post(&req, self.manager.as_ref()).await {
-                return res;
+                return (res, false);
             }
             if form.token_endpoint_request(&req)
                 && let Some(res) = form.token_endpoint(&req)
             {
-                return res;
+                return (res, false);
             }
             if let Some(flags) = form.login_page_request(&req) {
                 req.extensions_mut().insert(SecurityContext::anonymous());
                 let session = req.session();
                 let res = next.run(req).await;
-                return form.page_fallback(res, flags, session);
+                return (form.page_fallback(res, flags, session), false);
             }
         }
         let mut context = SecurityContext::anonymous();
@@ -397,7 +416,9 @@ impl Filter for SecurityFilterChain {
                 self.challenges.bearer,
             ) {
                 Credentials::Anonymous => None,
-                Credentials::Malformed(scheme) => return self.challenges.malformed(scheme),
+                Credentials::Malformed(scheme) => {
+                    return (self.challenges.malformed(scheme), false);
+                }
                 Credentials::Token(token) => {
                     Some(AuthenticationRequest::BearerToken(Secret::new(token)))
                 }
@@ -413,7 +434,7 @@ impl Filter for SecurityFilterChain {
                     Ok(authentication) => {
                         context = SecurityContext::authenticated(authentication);
                     }
-                    Err(error) => return self.entry_point.commence(&req, Some(&error)),
+                    Err(error) => return (self.entry_point.commence(&req, Some(&error)), false),
                 }
             }
         }
@@ -424,22 +445,20 @@ impl Filter for SecurityFilterChain {
             && let Some(authentication) = form.restore(&req)
         {
             if !form.csrf_passes(&req) {
-                return empty(StatusCode::FORBIDDEN);
+                return (empty(StatusCode::FORBIDDEN), true);
             }
             context = SecurityContext::authenticated(authentication);
         }
         req.extensions_mut().insert(context);
-        if self.authorized(&req) {
+        let authenticated = req.authentication().is_some();
+        let res = if self.authorized(&req) {
             next.run(req).await
-        } else if req.authentication().is_none() {
-            self.entry_point.commence(&req, None)
-        } else {
+        } else if authenticated {
             self.access_denied.handle(&req)
-        }
-    }
-
-    fn order(&self) -> i32 {
-        oxbloom_web::order::SECURITY
+        } else {
+            self.entry_point.commence(&req, None)
+        };
+        (res, authenticated)
     }
 }
 

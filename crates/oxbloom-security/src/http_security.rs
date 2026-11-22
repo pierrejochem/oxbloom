@@ -11,7 +11,7 @@ use crate::chain::{
 use crate::form_login::{FormLoginEntryPoint, FormLoginHandlers};
 use crate::{
     AccessDeniedHandler, AuthenticationEntryPoint, AuthenticationProvider, AuthorizationManager,
-    AuthorizationRule, CsrfConfig, FormLogin, JwtAuthenticationConverter,
+    AuthorizationRule, CsrfConfig, FormLogin, HeadersConfig, JwtAuthenticationConverter,
     JwtAuthenticationProvider, JwtDecoder, ProviderManager, RequestMatcher, SecurityFilterChain,
 };
 
@@ -56,6 +56,9 @@ pub enum SecurityBuildError {
     /// A CSRF field or header name is empty or has a character outside ASCII letters, digits,
     /// `_` and `-`, or the token endpoint is not a safe path or collides with a form login URL.
     InvalidCsrfConfig,
+    /// A security header value is empty or has a character outside visible ASCII, or the HSTS
+    /// `max_age` is zero.
+    InvalidHeadersConfig,
 }
 
 impl fmt::Display for SecurityBuildError {
@@ -74,6 +77,7 @@ impl fmt::Display for SecurityBuildError {
             Self::InvalidFormLoginUrl => "invalid form login url or field name",
             Self::CsrfWithoutFormLogin => "csrf protection configured without form login",
             Self::InvalidCsrfConfig => "invalid csrf field name, header name or token endpoint",
+            Self::InvalidHeadersConfig => "invalid security headers value or hsts max age",
         })
     }
 }
@@ -106,6 +110,7 @@ pub struct HttpSecurity {
     custom_entry_point: bool,
     form_login: Option<FormLogin>,
     csrf: Option<CsrfConfig>,
+    headers: HeadersConfig,
 }
 
 impl Default for HttpSecurity {
@@ -138,6 +143,7 @@ impl HttpSecurity {
             custom_entry_point: false,
             form_login: None,
             csrf: None,
+            headers: HeadersConfig::default(),
         }
     }
 
@@ -409,6 +415,28 @@ impl HttpSecurity {
         self
     }
 
+    /// Tunes or turns off the security response headers. See [`HeadersConfig`] for the defaults.
+    /// Without this call the defaults apply to every response of the chain.
+    /// [`build`](Self::build) fails with [`SecurityBuildError::InvalidHeadersConfig`] when
+    /// [`HeadersConfig::validate`] fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_security::HttpSecurity;
+    ///
+    /// let chain = HttpSecurity::new()
+    ///     .authorize(|a| a.any_request().permit_all())
+    ///     .headers(|h| h.frame_options(Some("SAMEORIGIN")).hsts(|s| s.preload(true)))
+    ///     .build()?;
+    /// # let _ = chain;
+    /// # Ok::<(), oxbloom_security::SecurityBuildError>(())
+    /// ```
+    pub fn headers(mut self, f: impl FnOnce(HeadersConfig) -> HeadersConfig) -> Self {
+        self.headers = f(HeadersConfig::default());
+        self
+    }
+
     /// Configures a JWT resource server: installs a [`JwtAuthenticationProvider`] built from the
     /// [`ResourceServer`]'s decoder and converter as a bearer provider (see
     /// [`bearer_provider`](Self::bearer_provider)). Without a decoder, [`build`](Self::build)
@@ -526,7 +554,8 @@ impl HttpSecurity {
     /// [`SecurityBuildError::FormLoginWithoutProvider`] when `form_login` has no
     /// `password_provider`, [`SecurityBuildError::CsrfWithoutFormLogin`] when `csrf` was called
     /// without `form_login`, and [`SecurityBuildError::InvalidCsrfConfig`] when the CSRF
-    /// settings fail [`CsrfConfig::validate`].
+    /// settings fail [`CsrfConfig::validate`], and [`SecurityBuildError::InvalidHeadersConfig`]
+    /// when the header settings fail [`HeadersConfig::validate`].
     ///
     /// # Examples
     ///
@@ -568,6 +597,7 @@ impl HttpSecurity {
         if self.resource_server_without_decoder {
             return Err(SecurityBuildError::ResourceServerWithoutDecoder);
         }
+        self.headers.validate()?;
         if let Some(basic) = &self.basic {
             if basic
                 .realm
@@ -628,6 +658,7 @@ impl HttpSecurity {
             self.access_denied,
             challenges,
             form_login.map(|settings| FormLoginHandlers::new(settings, csrf)),
+            self.headers,
         ))
     }
 }

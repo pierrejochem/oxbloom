@@ -95,6 +95,7 @@ mod dao;
 #[cfg(feature = "di")]
 mod di;
 mod form_login;
+mod headers;
 mod http_security;
 mod jwks;
 mod jwt;
@@ -124,6 +125,7 @@ pub use dao::DaoAuthenticationProvider;
 #[cfg(feature = "di")]
 pub use di::SecurityContainerExt;
 pub use form_login::{FormLogin, FormLoginConfig, is_safe_redirect_target};
+pub use headers::{HeadersConfig, HstsConfig};
 pub use http_security::{
     AuthorizeBuilder, HttpBasic, HttpSecurity, ResourceServer, RuleBuilder, SecurityBuildError,
 };

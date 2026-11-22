@@ -63,6 +63,11 @@ impl FailureAnalyzer for SecurityAnalyzer {
                 "Use plain names such as `_csrf` and `X-CSRF-TOKEN`, and a token endpoint that \
                  starts with a single `/` and differs from the form login URLs.",
             ),
+            SecurityBuildError::InvalidHeadersConfig => (
+                "A security header value is empty or has a character outside visible ASCII, or the \
+                 HSTS max age is zero.",
+                "Use plain printable header values and an HSTS max age of at least one second.",
+            ),
         };
         Some(FailureAnalysis::new(description, action))
     }
@@ -235,6 +240,15 @@ mod tests {
             SecurityBuildError::InvalidCsrfConfig,
             "A CSRF field or header name is not made of ASCII letters, digits, `_` and `-`, or the token endpoint is not a safe local path or collides with a form login URL.",
             "Use plain names such as `_csrf` and `X-CSRF-TOKEN`, and a token endpoint that starts with a single `/` and differs from the form login URLs.",
+        );
+    }
+
+    #[test]
+    fn invalid_headers_config_text() {
+        check(
+            SecurityBuildError::InvalidHeadersConfig,
+            "A security header value is empty or has a character outside visible ASCII, or the HSTS max age is zero.",
+            "Use plain printable header values and an HSTS max age of at least one second.",
         );
     }
 
