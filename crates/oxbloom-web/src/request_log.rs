@@ -9,14 +9,18 @@ use crate::{Filter, Next, Request, Response, order};
 /// Header names whose values are always logged as `<redacted>`, even when allowlisted.
 ///
 /// Stored normalized (see [`normalize`]): `authorization`, `proxy-authorization`, `cookie`,
-/// `set-cookie`, `x-api-key` and `x-auth-token`, matched with any `-`/`_` separator and case.
-const DENY_LIST: [&str; 6] = [
+/// `set-cookie`, `x-api-key`, `x-auth-token`, `x-csrf-token` and `x-xsrf-token`, matched with any
+/// `-`/`_` separator and case. A custom CSRF header name (`security.csrf.header-name`) is not on
+/// this list and must not be allowlisted.
+const DENY_LIST: [&str; 8] = [
     "authorization",
     "proxyauthorization",
     "cookie",
     "setcookie",
     "xapikey",
     "xauthtoken",
+    "xcsrftoken",
+    "xxsrftoken",
 ];
 
 /// Lowercases `name` and drops `-` and `_`, so `X_Api-Key` and `x-api-key` compare equal.
@@ -37,8 +41,8 @@ const REDACTED: &str = "<redacted>";
 /// when a hand-built request leaves it in the path (the path is cut at the first `?`).
 ///
 /// A header value prints as `<redacted>` when it is flagged sensitive or when its name is
-/// `authorization`, `proxy-authorization`, `cookie`, `set-cookie`, `x-api-key` or
-/// `x-auth-token` (in any case, with `-` or `_` as separator), even if that name is on the
+/// `authorization`, `proxy-authorization`, `cookie`, `set-cookie`, `x-api-key`,
+/// `x-auth-token`, `x-csrf-token` or `x-xsrf-token` (in any case, with `-` or `_` as separator), even if that name is on the
 /// allowlist. Control characters in the path and in
 /// header values are escaped, so an event never spans more than one line.
 ///
@@ -72,10 +76,10 @@ impl RequestLogFilter {
     /// `headers` (matched case-insensitively).
     ///
     /// Only the exact built-in credential names (`authorization`, `proxy-authorization`,
-    /// `cookie`, `set-cookie`, `x-api-key`, `x-auth-token`, in any case and with `-` or `_`) are
-    /// redacted by name. A name that merely contains a credential word, such as `x-csrf-token`,
-    /// is logged in full if allowlisted: keeping secrets off the allowlist is the operator's
-    /// responsibility. Values flagged sensitive are always redacted.
+    /// `cookie`, `set-cookie`, `x-api-key`, `x-auth-token`, `x-csrf-token`, `x-xsrf-token`, in
+    /// any case and with `-` or `_`) are redacted by name. A name that merely contains a
+    /// credential word, such as `x-my-token` or a custom CSRF header name, is logged in full if
+    /// allowlisted: keeping secrets off the allowlist is the operator's responsibility. Values flagged sensitive are always redacted.
     ///
     /// # Examples
     ///
@@ -432,9 +436,21 @@ mod tests {
 
     #[tokio::test]
     async fn names_merely_containing_a_credential_word_are_not_redacted() {
-        let req = with_header(get("/a"), "x-csrf-token", "visible");
-        let (_, out) = capture(&app(filter(&["x-csrf-token"])), req, Level::TRACE).await;
-        assert!(out.contains(r#"x-csrf-token="visible""#), "{out}");
+        let req = with_header(get("/a"), "x-my-token", "visible");
+        let (_, out) = capture(&app(filter(&["x-my-token"])), req, Level::TRACE).await;
+        assert!(out.contains(r#"x-my-token="visible""#), "{out}");
+    }
+
+    #[tokio::test]
+    async fn csrf_token_headers_are_redacted_even_if_allowlisted() {
+        let mut req = with_header(get("/a"), "x-csrf-token", "csrf-secret");
+        req.headers
+            .append("x-xsrf-token", HeaderValue::from_static("xsrf-secret"));
+        let f = filter(&["X-CSRF-TOKEN", "X-XSRF-Token"]);
+        let (_, out) = capture(&app(f), req, Level::TRACE).await;
+        assert!(out.contains("x-csrf-token=<redacted>"), "{out}");
+        assert!(out.contains("x-xsrf-token=<redacted>"), "{out}");
+        assert!(!out.contains("secret"), "{out}");
     }
 
     #[tokio::test]

@@ -82,6 +82,8 @@ curl -i -b jar.txt -H "X-CSRF-TOKEN: $TOKEN" -H 'content-type: application/json'
 curl -i -b jar.txt -d "_csrf=$TOKEN" http://127.0.0.1:8081/logout                          # 302 to /login?logout
 ```
 
+The example runs HTTP Basic and form login together. A request authenticated by Basic is not checked, and a browser that cached Basic credentials sends them on forged requests, so use Basic for non-browser clients only.
+
 The two posts of the login flow also pass a same-origin check, and a request with neither `Origin` nor
 `Referer` (such as `curl`) is allowed there. The cookie is `SameSite=Lax`. Only the login page is
 protected against framing. A script on the same origin can read the token from the page, and a

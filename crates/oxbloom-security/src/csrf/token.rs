@@ -22,8 +22,17 @@ const TOKEN_LEN: usize = 43;
 /// fn show(token: &CsrfToken) -> String {
 ///     format!("{token:?}")
 /// }
-/// // Display is not implemented, so `format!("{token}")` does not compile.
 /// # let _ = show;
+/// ```
+///
+/// `Display` is not implemented, so this does not compile:
+///
+/// ```compile_fail
+/// use oxbloom_security::CsrfToken;
+///
+/// fn show(token: &CsrfToken) -> String {
+///     format!("{token}")
+/// }
 /// ```
 #[derive(Clone)]
 pub struct CsrfToken(String);

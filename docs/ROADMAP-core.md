@@ -758,7 +758,11 @@ Limits that users must know (also in the guide):
 - Anonymous requests with no session are exempt, and so is an anonymous `POST` that carries a pre-login session without a login. `Basic` and bearer requests are exempt, also with a stray session cookie.
 - A failed check answers a fixed empty 403 and skips a custom `access_denied` handler, the same as the same-origin 403 of 6c.
 - A script on the same origin (XSS) can read the token. A multipart form needs the header, because the reader parses only urlencoded bodies. The `_csrf` field is part of the body and is visible in the `Debug` output of the request, like the 6c password; the header is marked sensitive.
-- With the cookie backend an attacker who can plant a sealed cookie also knows that session's token, so the token cannot stop that attack.
+- With either session backend, an attacker who controls a sibling subdomain can plant the cookie `OXBLOOM_SESSION` (it has no `__Host-` prefix) of a session they logged in to and so know its token, so the token cannot stop that attack.
+- `Basic` requests are exempt, but a browser that cached Basic credentials sends them on forged cross-site requests, which are not checked; `Basic` is for non-browser clients only.
+- A form-field token is read only from urlencoded bodies of at most 4 KiB; a larger urlencoded form, or a body with one pair that does not decode, always gets 403 and must send the header.
+- A login page left open past the idle timeout, or a logout after the session expired, gets a 403 instead of a redirect.
+- Any application page that calls `req.csrf_token()` for an anonymous visitor writes a session. The framing headers of the default login page are always added, also with CSRF off.
 - The login page and the token endpoint are anonymous session writers, bounded by sampled eviction but not prevented. Only the login page is protected against framing.
 - The same-origin check still covers only the login and logout posts, and it allows a request with neither `Origin` nor `Referer`.
 - The chain answers the token endpoint before the application route, so the endpoint wins on a collision. An application that invalidates or rotates the session inside its handler while it answers a `404` for the login page gets a page with a token that is no longer valid (a corner case).
@@ -787,6 +791,10 @@ Deferred minors from the 6d reviews:
 - The boot collision test covers only `/login`.
 - `CsrfProperties` is a unit struct that only serves as a namespace.
 - A configured token endpoint is silently ignored when `enabled = false`.
+- `CsrfConfig::validate` does not reject a `field_name` that equals the username or password field of form login.
+- The form-field token is limited to urlencoded bodies of 4 KiB; reading it up to the web body limit would lift this.
+- The request-log deny list is a list of names, so a custom CSRF header name must not be allowlisted for request logging.
+- `RequestSessionExt::csrf_token` has a default body, so an outside implementer of the trait is not broken by the new method.
 
 Rulings made during Slice 6d:
 - The branch is `s6d-csrf`, started from `main`; nothing is pushed.

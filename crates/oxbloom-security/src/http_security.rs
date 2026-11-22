@@ -339,13 +339,14 @@ impl HttpSecurity {
     /// their defaults. With [`form_login`](Self::form_login) on and this method never called,
     /// the check is on with the defaults.
     ///
-    /// The check covers every request that the session authenticates, except the safe methods
-    /// `GET`, `HEAD`, `OPTIONS` and `TRACE`, and the login and logout posts. Any other method,
-    /// also an unknown one, is checked. Such a request must send the token of its
-    /// session in the header named `header_name` or, in an urlencoded form, in the field named
-    /// `field_name`; read it with
+    /// The check covers every request that the session authenticates, with every method except
+    /// the safe `GET`, `HEAD`, `OPTIONS` and `TRACE` (any other method, also an unknown one, is
+    /// checked), and also the login and logout posts, which are checked even without a login.
+    /// Such a request must send the token of its session in the header named `header_name` or,
+    /// in an urlencoded form of at most 4 KiB, in the field named `field_name`; read it with
     /// [`RequestSessionExt::csrf_token`](crate::RequestSessionExt::csrf_token). Requests
-    /// authenticated by `Basic` or a bearer token and anonymous requests are not checked. A failed check is a 403 with an empty body and changes nothing.
+    /// authenticated by `Basic` or a bearer token and anonymous requests are not checked. A
+    /// failed check is a 403 with an empty body and changes nothing.
     /// A successful login replaces the token.
     ///
     /// [`build`](Self::build) fails with [`SecurityBuildError::CsrfWithoutFormLogin`] when this

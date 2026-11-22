@@ -128,7 +128,9 @@ pub trait SecurityCustomizer: Send + Sync {
 /// `security.csrf.enabled = true` and every other `security.csrf` key fail the startup with a
 /// `ConfigError` naming the key, and `enabled = false` alone is accepted and does nothing. A
 /// token endpoint equal to a form login path fails the build with
-/// `SecurityBuildError::InvalidCsrfConfig`.
+/// `SecurityBuildError::InvalidCsrfConfig`. The chain is configured after every
+/// `SecurityCustomizer`, as for form login, so the configuration wins over a customizer that
+/// calls `.csrf(..)`.
 ///
 /// # Examples
 ///

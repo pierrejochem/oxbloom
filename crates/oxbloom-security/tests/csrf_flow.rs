@@ -1020,6 +1020,20 @@ async fn csrf_on_without_a_session_filter_logs_the_missing_filter_and_answers_40
         "{text}"
     );
     assert!(!text.contains("s3cret"), "{text}");
+
+    // The logout post gets the same 403 and the same log line. The check is sequential with the
+    // login above, because the log buffer is shared by the whole test binary.
+    let before = text.len();
+    let mut req = Request::new(HttpMethod::Post, "/logout");
+    req.headers.insert(header::HOST, HOST.parse().unwrap());
+    let res = app.handle(req).await;
+    assert_eq!(res.status(), 403);
+    let text = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+    assert!(
+        text[before..]
+            .contains("form login has no session: add a SessionFilter to the application"),
+        "{text}"
+    );
 }
 
 /// Everything a response shows: its `Debug`, its headers and its body.

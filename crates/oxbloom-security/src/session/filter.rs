@@ -349,17 +349,18 @@ pub trait RequestSessionExt {
     /// // Without a `SessionFilter` there is no session and so no token.
     /// assert!(Request::new(HttpMethod::Get, "/").csrf_token().is_none());
     /// ```
-    fn csrf_token(&self) -> Option<crate::CsrfToken>;
+    ///
+    /// The method has a default body, so a type that implements this trait outside the crate
+    /// keeps compiling.
+    fn csrf_token(&self) -> Option<crate::CsrfToken> {
+        self.session()
+            .map(|session| crate::csrf::ensure_token(&session))
+    }
 }
 
 impl RequestSessionExt for Request {
     fn session(&self) -> Option<Session> {
         self.extensions().get::<Session>().cloned()
-    }
-
-    fn csrf_token(&self) -> Option<crate::CsrfToken> {
-        self.session()
-            .map(|session| crate::csrf::ensure_token(&session))
     }
 }
 

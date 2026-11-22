@@ -29,7 +29,7 @@ use crate::{
 #[derive(Debug)]
 struct MalformedForm;
 
-const FORM_CONTENT_TYPE: &str = "application/x-www-form-urlencoded";
+pub(crate) const FORM_CONTENT_TYPE: &str = "application/x-www-form-urlencoded";
 
 /// The JSON the token endpoint returns: the header name, the field name and the token, in that
 /// order of keys, every value escaped by `serde_json`. The session and the token are created
@@ -81,7 +81,7 @@ fn redirect(target: &str, fallback: &str) -> Response {
 
 /// Whether the request body is declared as `application/x-www-form-urlencoded`, parameters such
 /// as `charset` allowed.
-fn is_form(req: &Request) -> bool {
+pub(crate) fn is_form(req: &Request) -> bool {
     req.headers
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
@@ -250,7 +250,7 @@ impl FormLoginHandlers {
     }
 
     /// Answers the token endpoint. Without a session the application has no session filter: log
-    /// that once and return `None`, so the request goes on to the application as any other.
+    /// that and return `None`, so the request goes on to the application as any other.
     pub(crate) fn token_endpoint(&self, req: &Request) -> Option<Response> {
         let cfg = self.csrf.as_ref()?;
         match req.session() {
@@ -342,7 +342,14 @@ impl FormLoginHandlers {
     }
 
     fn logout(&self, req: &Request) -> Response {
-        if !same_origin(req) || !self.csrf_passes(req) {
+        if !same_origin(req) {
+            return status(StatusCode::FORBIDDEN);
+        }
+        if !self.csrf_passes(req) {
+            // The answer stays the same 403; only the log names the missing filter.
+            if req.session().is_none() {
+                no_session_error();
+            }
             return status(StatusCode::FORBIDDEN);
         }
         if let Some(session) = req.session() {

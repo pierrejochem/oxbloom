@@ -1,13 +1,10 @@
 //! Reading the token a request submitted.
 
-use http::header::{CONTENT_TYPE, HeaderName};
+use http::header::HeaderName;
 use oxbloom_web::Request;
 
 use super::CsrfConfig;
-use crate::form_login::urlencoded_pairs;
-
-/// The media type of an HTML form post.
-const FORM_CONTENT_TYPE: &str = "application/x-www-form-urlencoded";
+use crate::form_login::{is_form, urlencoded_pairs};
 
 /// Reads the token a request submitted: the configured header first and, when there is no such
 /// header and the body is urlencoded, the configured form field in the buffered body (at most
@@ -18,13 +15,7 @@ pub(crate) fn submitted_token(req: &Request, cfg: &CsrfConfig) -> Option<String>
     let value = if let Some(v) = req.headers.get(&name) {
         v.to_str().ok()?.to_owned()
     } else {
-        let is_form = req
-            .headers
-            .get(CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.split(';').next())
-            .is_some_and(|m| m.trim().eq_ignore_ascii_case(FORM_CONTENT_TYPE));
-        if !is_form || req.body_too_large() {
+        if !is_form(req) || req.body_too_large() {
             return None;
         }
         urlencoded_pairs(&req.body)?
