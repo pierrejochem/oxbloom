@@ -701,7 +701,7 @@ Gate numbers at the end of Slice 6c: `cargo test --workspace --all-features --no
 
 Limits that users must know (also in the guide):
 - (Closed by Slice 6d.) Slice 6c had no CSRF tokens: the same-origin check and `SameSite=Lax` were the interim measure. A request with neither `Origin` nor `Referer` is still allowed by that check; Slice 6d added tokens on top of it.
-- The stored authentication is not refreshed: a role change or a lock takes effect at the next login or at session expiry.
+- The stored authentication is not refreshed: a role change or a lock takes effect at the next login or at session expiry. (Closed by Slice 7a, which revalidates on an interval.)
 - Login always rotates the session id. API clients get 401 and no session. Basic and bearer never create a session, and Basic wins over a session.
 - The default login page is served only after the router answered 404 for a `GET` or `HEAD` of the login path, so any 404 at that path, even one that an application handler chose deliberately, is replaced by the page. It has a fixed CSP and fixed texts. In Slice 6c it had no `frame-ancestors` or `X-Frame-Options`; Slice 6d added both. On `HEAD` the page keeps its body when seen through `App::handle`.
 - The success and failure URLs are not exempt from the authorization rules; only `POST` login, `POST` logout and `GET` or `HEAD` of the login page are. A custom `failure_url` or `logout_success_url` on a path other than the login page needs a `permit_all` rule, otherwise the user is redirected to the login page again. The defaults work.
@@ -737,7 +737,7 @@ Deferred minors from the 6c reviews:
 
 Rulings made during Slice 6c:
 - The branch is `s6c-form-login`, started from `s6b-sessions`; nothing is pushed.
-- The stored authentication is not refreshed, and a request with neither `Origin` nor `Referer` passes the same-origin check, because non-browser clients send neither.
+- The stored authentication is not refreshed (closed by Slice 7a), and a request with neither `Origin` nor `Referer` passes the same-origin check, because non-browser clients send neither.
 - The default login page is the fallback for a 404 of the router, and it stayed frameable until Slice 6d.
 
 ### Security Slice 6d: CSRF tokens (`oxbloom-security`) — done
@@ -763,7 +763,7 @@ Limits that users must know (also in the guide):
 - A form-field token is read only from urlencoded bodies of at most 4 KiB; a larger urlencoded form, or a body with one pair that does not decode, always gets 403 and must send the header.
 - A login page left open past the idle timeout, or a logout after the session expired, gets a 403 instead of a redirect.
 - Any application page that calls `req.csrf_token()` for an anonymous visitor writes a session. The framing headers of the default login page are always added, also with CSRF off.
-- The login page and the token endpoint are anonymous session writers, bounded by sampled eviction but not prevented. Only the login page is protected against framing.
+- The login page and the token endpoint are anonymous session writers, bounded by sampled eviction but not prevented. Only the login page is protected against framing. (Closed by Slice 7a for `X-Frame-Options`.)
 - The same-origin check still covers only the login and logout posts, and it allows a request with neither `Origin` nor `Referer`.
 - The chain answers the token endpoint before the application route, so the endpoint wins on a collision. An application that invalidates or rotates the session inside its handler while it answers a `404` for the login page gets a page with a token that is no longer valid (a corner case).
 - `HttpSecurity::csrf` without `form_login` fails the build, also with `enabled(false)`. With form login off, every `security.csrf` key except `enabled = false` fails the startup and names the key. The reserved session keys now are `oxbloom.security.authentication`, `oxbloom.security.saved-request` and `oxbloom.security.csrf-token`.
