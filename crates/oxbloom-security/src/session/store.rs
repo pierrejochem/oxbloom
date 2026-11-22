@@ -1,12 +1,14 @@
 //! The session data and the trait that stores it.
 
 use std::fmt;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use serde_json::{Map, Value};
 
 use super::error::SessionError;
+use super::principal::PrincipalSessions;
 
 /// The contents of one session: its values, its creation time and its last-touch time.
 ///
@@ -330,4 +332,21 @@ pub trait SessionStore: Send + Sync {
     /// Periodic housekeeping, such as removing expired sessions. The session filter calls it
     /// at most once a minute. The default does nothing.
     async fn maintain(&self) {}
+
+    /// The per-user view of this store, when it has one. The default is `None`;
+    /// [`InMemorySessionStore`](crate::InMemorySessionStore) returns itself.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use oxbloom_core::SystemClock;
+    /// use oxbloom_security::{InMemorySessionStore, SessionSettings, SessionStore};
+    ///
+    /// let store = Arc::new(InMemorySessionStore::new(&SessionSettings::default(), Arc::new(SystemClock)));
+    /// assert!(store.principal_sessions().is_some());
+    /// ```
+    fn principal_sessions(self: Arc<Self>) -> Option<Arc<dyn PrincipalSessions>> {
+        None
+    }
 }

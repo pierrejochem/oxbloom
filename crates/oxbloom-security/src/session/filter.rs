@@ -14,6 +14,7 @@ use super::backend::{CookieAction, SessionBackend};
 use super::cookie::{build_set_cookie, parse_cookie_header};
 use super::error::SessionError;
 use super::handle::Session;
+use super::principal::PrincipalSessions;
 use super::settings::{SecureMode, SessionSettings};
 
 /// The slot of the [`SessionFilter`]: one step before the security chain, so authentication
@@ -202,6 +203,36 @@ impl SessionFilter {
     pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
         self.clock = clock;
         self
+    }
+
+    /// The per-user view of the sessions: `Some` for a server backend whose store has one (the
+    /// in-memory store does), `None` for the cookie backend, whose sessions cannot be found by
+    /// user.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use oxbloom_core::SystemClock;
+    /// use oxbloom_security::{InMemorySessionStore, SessionBackend, SessionFilter, SessionSettings};
+    ///
+    /// let settings = SessionSettings::default();
+    /// let store = InMemorySessionStore::new(&settings, Arc::new(SystemClock));
+    /// let filter = SessionFilter::new(SessionBackend::Server(Arc::new(store)), settings).unwrap();
+    /// assert!(filter.principal_sessions().is_some());
+    ///
+    /// // A cookie backend keeps nothing on the server, so it has no per-user view.
+    /// use oxbloom_config::Secret;
+    /// use oxbloom_security::CookieSessionBackend;
+    /// let settings = SessionSettings::default();
+    /// let secret = Secret::new("a-session-secret-of-at-least-32-bytes!".to_owned());
+    /// let backend = CookieSessionBackend::new(&secret, &[], &settings, Arc::new(SystemClock)).unwrap();
+    /// let filter = SessionFilter::new(SessionBackend::Cookie(Arc::new(backend)), settings).unwrap();
+    /// assert!(filter.principal_sessions().is_none());
+    /// ```
+    #[must_use]
+    pub fn principal_sessions(&self) -> Option<Arc<dyn PrincipalSessions>> {
+        self.backend.principal_sessions()
     }
 
     /// Runs the store housekeeping when the last run is a minute old or there was none.

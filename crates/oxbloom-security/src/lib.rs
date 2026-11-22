@@ -145,10 +145,10 @@ pub use provider::{AuthenticationProvider, ProviderManager};
 #[cfg(feature = "jwks")]
 pub use reqwest_fetcher::ReqwestJwksFetcher;
 pub use session::{
-    CookieSessionBackend, InMemorySessionStore, RequestSessionExt, SESSION_OLD_SECRETS_KEY,
-    SESSION_ORDER, SESSION_SECRET_KEY, SameSite, SecureMode, Session, SessionBackend,
-    SessionConfig, SessionData, SessionError, SessionFilter, SessionSettings, SessionStore,
-    StoreKind,
+    CookieSessionBackend, InMemorySessionStore, PrincipalSessions, RequestSessionExt,
+    SESSION_OLD_SECRETS_KEY, SESSION_ORDER, SESSION_SECRET_KEY, SameSite, SecureMode, Session,
+    SessionBackend, SessionConfig, SessionData, SessionError, SessionFilter, SessionRegistry,
+    SessionSettings, SessionStore, SessionSummary, StoreKind,
 };
 pub use user::{
     InMemoryUserDetailsService, UserDetails, UserDetailsError, UserDetailsService, UserStoreError,

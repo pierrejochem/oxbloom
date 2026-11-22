@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use oxbloom_core::Clock;
 
 use super::error::SessionError;
+use super::principal::{PRINCIPAL_KEY, PrincipalSessions, SessionSummary};
 use super::settings::SessionSettings;
 use super::store::{SessionData, SessionStore};
 
@@ -407,6 +408,90 @@ impl SessionStore for InMemorySessionStore {
 
     async fn maintain(&self) {
         self.sweep();
+    }
+
+    fn principal_sessions(self: Arc<Self>) -> Option<Arc<dyn PrincipalSessions>> {
+        Some(self)
+    }
+}
+
+impl Entry {
+    fn belongs_to(&self, principal: &str) -> bool {
+        self.data
+            .values()
+            .get(PRINCIPAL_KEY)
+            .and_then(|value| value.as_str())
+            == Some(principal)
+    }
+}
+
+impl InMemorySessionStore {
+    /// The live sessions of `principal` as (id, created, touched), oldest touched first. Each
+    /// shard is locked on its own and no lock outlives this call.
+    fn scan(&self, principal: &str, except: Option<&str>) -> Vec<(String, SystemTime, SystemTime)> {
+        let now = self.clock.now();
+        let mut found = Vec::new();
+        for shard in &*self.shards {
+            let map = lock(shard);
+            found.extend(
+                map.iter()
+                    .filter(|(id, entry)| {
+                        entry.is_live(now)
+                            && entry.belongs_to(principal)
+                            && except != Some(id.as_str())
+                    })
+                    .map(|(id, entry)| (id.clone(), entry.data.created(), entry.data.touched())),
+            );
+        }
+        found.sort_by(|a, b| a.2.cmp(&b.2).then_with(|| a.0.cmp(&b.0)));
+        found
+    }
+
+    fn remove_ids(&self, ids: &[String]) -> usize {
+        let mut removed = 0;
+        for id in ids {
+            if lock(self.shard(id)).remove(id).is_some() {
+                self.count.fetch_sub(1, Ordering::Relaxed);
+                removed += 1;
+            }
+        }
+        removed
+    }
+}
+
+#[async_trait]
+impl PrincipalSessions for InMemorySessionStore {
+    async fn sessions_of(&self, principal: &str) -> Result<Vec<SessionSummary>, SessionError> {
+        Ok(self
+            .scan(principal, None)
+            .into_iter()
+            .map(|(id, created, touched)| SessionSummary::new(id, created, touched))
+            .collect())
+    }
+
+    async fn delete_of(
+        &self,
+        principal: &str,
+        except: Option<&str>,
+    ) -> Result<usize, SessionError> {
+        let ids: Vec<String> = self
+            .scan(principal, except)
+            .into_iter()
+            .map(|(id, ..)| id)
+            .collect();
+        Ok(self.remove_ids(&ids))
+    }
+
+    async fn evict_oldest(
+        &self,
+        principal: &str,
+        keep: usize,
+        except: Option<&str>,
+    ) -> Result<usize, SessionError> {
+        let found = self.scan(principal, except);
+        let excess = found.len().saturating_sub(keep);
+        let ids: Vec<String> = found.into_iter().take(excess).map(|(id, ..)| id).collect();
+        Ok(self.remove_ids(&ids))
     }
 }
 

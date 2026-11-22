@@ -8,6 +8,7 @@ use std::time::{Duration, SystemTime};
 use super::cookie_backend::CookieSessionBackend;
 use super::error::SessionError;
 use super::handle::{SessionState, id_fingerprint};
+use super::principal::PrincipalSessions;
 use super::settings::SessionSettings;
 use super::store::{SessionData, SessionStore};
 
@@ -258,6 +259,14 @@ impl SessionBackend {
     pub(crate) async fn maintain(&self) {
         if let Self::Server(store) = self {
             store.maintain().await;
+        }
+    }
+
+    /// The per-user view of the server store, when it has one; `None` for the cookie backend.
+    pub(crate) fn principal_sessions(&self) -> Option<Arc<dyn PrincipalSessions>> {
+        match self {
+            Self::Server(store) => store.clone().principal_sessions(),
+            Self::Cookie(_) => None,
         }
     }
 }

@@ -26,6 +26,7 @@ mod error;
 mod filter;
 pub(crate) mod handle;
 mod memory;
+mod principal;
 mod settings;
 mod store;
 
@@ -36,5 +37,6 @@ pub use error::SessionError;
 pub use filter::{RequestSessionExt, SESSION_ORDER, SessionFilter};
 pub use handle::Session;
 pub use memory::InMemorySessionStore;
+pub use principal::{PrincipalSessions, SessionRegistry, SessionSummary};
 pub use settings::{SameSite, SecureMode, SessionSettings};
 pub use store::{SessionData, SessionStore};
