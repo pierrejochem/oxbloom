@@ -14,7 +14,7 @@ use crate::csrf::hide_token_header;
 use crate::form_login::FormLoginHandlers;
 use crate::{
     AuthenticationError, AuthenticationRequest, AuthorizationRule, ProviderManager, RequestMatcher,
-    RequestSecurityExt, SecurityContext,
+    RequestSecurityExt, RequestSessionExt, SecurityContext,
 };
 
 /// Produces the response for a request that needs authentication, or whose credentials failed.
@@ -377,10 +377,16 @@ impl Filter for SecurityFilterChain {
             if let Some(res) = form.handle_post(&req, self.manager.as_ref()).await {
                 return res;
             }
+            if form.token_endpoint_request(&req)
+                && let Some(res) = form.token_endpoint(&req)
+            {
+                return res;
+            }
             if let Some(flags) = form.login_page_request(&req) {
                 req.extensions_mut().insert(SecurityContext::anonymous());
+                let session = req.session();
                 let res = next.run(req).await;
-                return form.page_fallback(res, flags);
+                return form.page_fallback(res, flags, session);
             }
         }
         let mut context = SecurityContext::anonymous();

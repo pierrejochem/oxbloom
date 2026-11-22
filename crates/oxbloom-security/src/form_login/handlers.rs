@@ -19,10 +19,10 @@ use super::repository::{
     load_authentication, save_request, store_authentication, take_saved_request,
 };
 use super::settings::FormLogin;
-use crate::csrf::{replace_token, request_passes};
+use crate::csrf::{ensure_token, replace_token, request_passes};
 use crate::{
     Authentication, AuthenticationEntryPoint, AuthenticationError, AuthenticationRequest,
-    CsrfConfig, ProviderManager, RequestSessionExt,
+    CsrfConfig, ProviderManager, RequestSessionExt, Session,
 };
 
 /// The log marker of a form that could not be read.
@@ -30,6 +30,29 @@ use crate::{
 struct MalformedForm;
 
 const FORM_CONTENT_TYPE: &str = "application/x-www-form-urlencoded";
+
+/// The JSON the token endpoint returns: the header name, the field name and the token, in that
+/// order of keys, every value escaped by `serde_json`. The session and the token are created
+/// when missing. The answer must never be cached.
+pub(crate) fn token_endpoint_response(session: &Session, cfg: &CsrfConfig) -> Response {
+    let token = ensure_token(session);
+    let json = |s: &str| serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_owned());
+    let body = format!(
+        "{{\"headerName\":{},\"parameterName\":{},\"token\":{}}}",
+        json(&cfg.header_name),
+        json(&cfg.field_name),
+        json(token.as_str())
+    );
+    let mut res = Response::new(body.into());
+    *res.status_mut() = StatusCode::OK;
+    res.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    res.headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    res
+}
 
 /// Logs that form login found no session, which means the application has no session filter.
 fn no_session_error() {
@@ -191,11 +214,51 @@ impl FormLoginHandlers {
     }
 
     /// Replaces the router's 404 for the login page with the default page, when it is on.
-    pub(crate) fn page_fallback(&self, res: Response, flags: (bool, bool)) -> Response {
+    ///
+    /// `session` is the session of the request, cloned before the application ran because this
+    /// function does not see the request. When the CSRF check is on, the page creates the token
+    /// in that session and carries it in a hidden field. Without a session the page has no
+    /// field and the missing session filter is logged.
+    pub(crate) fn page_fallback(
+        &self,
+        res: Response,
+        flags: (bool, bool),
+        session: Option<Session>,
+    ) -> Response {
         if res.status() == StatusCode::NOT_FOUND && self.settings.login_page_enabled {
-            login_page(&self.settings, flags.0, flags.1)
+            let token = self.csrf.as_ref().and_then(|cfg| match &session {
+                Some(session) => Some((cfg.field_name.as_str(), ensure_token(session))),
+                None => {
+                    no_session_error();
+                    None
+                }
+            });
+            let field = token.as_ref().map(|(name, token)| (*name, token.as_str()));
+            login_page(&self.settings, flags.0, flags.1, field)
         } else {
             res
+        }
+    }
+
+    /// Whether the request is a `GET` of the token endpoint, when there is one. `HEAD`, other
+    /// methods and other paths are not.
+    pub(crate) fn token_endpoint_request(&self, req: &Request) -> bool {
+        self.csrf
+            .as_ref()
+            .and_then(|cfg| cfg.token_endpoint.as_deref())
+            .is_some_and(|path| req.method == HttpMethod::Get && req.path == path_of(path))
+    }
+
+    /// Answers the token endpoint. Without a session the application has no session filter: log
+    /// that once and return `None`, so the request goes on to the application as any other.
+    pub(crate) fn token_endpoint(&self, req: &Request) -> Option<Response> {
+        let cfg = self.csrf.as_ref()?;
+        match req.session() {
+            Some(session) => Some(token_endpoint_response(&session, cfg)),
+            None => {
+                no_session_error();
+                None
+            }
         }
     }
 

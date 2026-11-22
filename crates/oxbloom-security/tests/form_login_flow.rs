@@ -690,12 +690,16 @@ async fn default_page() {
         assert_eq!(h[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
         assert_eq!(
             h[header::CONTENT_SECURITY_POLICY],
-            "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'"
+            "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'"
         );
+        assert_eq!(h[header::X_FRAME_OPTIONS], "DENY");
         let text = body(&res);
         assert!(text.contains("action=\"/login\""));
         assert!(!text.contains("Invalid username"));
-        assert!(set_cookies(&res).is_empty(), "the page creates no session");
+        assert!(
+            set_cookies(&res).is_empty(),
+            "with CSRF off the page creates no session"
+        );
 
         assert!(body(&c.browse("/login?error").await).contains("Invalid username or password."));
         assert!(body(&c.browse("/login?logout").await).contains("You have been logged out."));
