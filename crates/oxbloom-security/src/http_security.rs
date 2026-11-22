@@ -2,17 +2,19 @@
 
 use std::fmt;
 use std::sync::Arc;
+use std::time::Duration;
 
-use oxbloom_core::HttpMethod;
+use oxbloom_core::{Clock, HttpMethod, SystemClock};
 
 use crate::chain::{
     ChallengeEntryPoint, Challenges, DefaultAccessDeniedHandler, DefaultEntryPoint,
 };
-use crate::form_login::{FormLoginEntryPoint, FormLoginHandlers};
+use crate::form_login::{FormLoginEntryPoint, FormLoginHandlers, Revalidation};
 use crate::{
     AccessDeniedHandler, AuthenticationEntryPoint, AuthenticationProvider, AuthorizationManager,
-    AuthorizationRule, CsrfConfig, FormLogin, JwtAuthenticationConverter,
-    JwtAuthenticationProvider, JwtDecoder, ProviderManager, RequestMatcher, SecurityFilterChain,
+    AuthorizationRule, CsrfConfig, FormLogin, HeadersConfig, JwtAuthenticationConverter,
+    JwtAuthenticationProvider, JwtDecoder, PrincipalSessions, ProviderManager, RequestMatcher,
+    SecurityFilterChain, UserDetailsService,
 };
 
 /// Why [`HttpSecurity::build`] refused to build a chain.
@@ -56,6 +58,18 @@ pub enum SecurityBuildError {
     /// A CSRF field or header name is empty or has a character outside ASCII letters, digits,
     /// `_` and `-`, or the token endpoint is not a safe path or collides with a form login URL.
     InvalidCsrfConfig,
+    /// A security header value is empty or has a character outside visible ASCII, or the HSTS
+    /// `max_age` is zero.
+    InvalidHeadersConfig,
+    /// A session limit is configured but form login is not, so no login would apply it.
+    SessionLimitWithoutFormLogin,
+    /// The session limit is zero; at least one session per user must be allowed.
+    InvalidSessionLimit,
+    /// Revalidation is configured but form login is not, so no session holds an authentication
+    /// to check.
+    RevalidateWithoutFormLogin,
+    /// The revalidation interval is zero. Leave `revalidate` out to turn revalidation off.
+    InvalidRevalidateInterval,
 }
 
 impl fmt::Display for SecurityBuildError {
@@ -74,6 +88,11 @@ impl fmt::Display for SecurityBuildError {
             Self::InvalidFormLoginUrl => "invalid form login url or field name",
             Self::CsrfWithoutFormLogin => "csrf protection configured without form login",
             Self::InvalidCsrfConfig => "invalid csrf field name, header name or token endpoint",
+            Self::InvalidHeadersConfig => "invalid security headers value or hsts max age",
+            Self::SessionLimitWithoutFormLogin => "session limit configured without form login",
+            Self::InvalidSessionLimit => "session limit must be at least one",
+            Self::RevalidateWithoutFormLogin => "revalidation configured without form login",
+            Self::InvalidRevalidateInterval => "revalidation interval must be greater than zero",
         })
     }
 }
@@ -106,6 +125,10 @@ pub struct HttpSecurity {
     custom_entry_point: bool,
     form_login: Option<FormLogin>,
     csrf: Option<CsrfConfig>,
+    headers: HeadersConfig,
+    session_limit: Option<(Arc<dyn PrincipalSessions>, usize)>,
+    revalidate: Option<(Duration, Arc<dyn UserDetailsService>)>,
+    clock: Arc<dyn Clock>,
 }
 
 impl Default for HttpSecurity {
@@ -138,6 +161,10 @@ impl HttpSecurity {
             custom_entry_point: false,
             form_login: None,
             csrf: None,
+            headers: HeadersConfig::default(),
+            session_limit: None,
+            revalidate: None,
+            clock: Arc::new(SystemClock),
         }
     }
 
@@ -409,6 +436,174 @@ impl HttpSecurity {
         self
     }
 
+    /// Limits the sessions of one user. At a successful form login the oldest sessions of that
+    /// user, by last use, are evicted until `max_per_user - 1` others remain, so the new session
+    /// fits. The session the login replaces is never counted, and a failed login evicts nothing.
+    /// An error from `sessions` is logged with a fixed text and never fails the login.
+    ///
+    /// `sessions` is the per-user index of the session store, for example
+    /// [`InMemorySessionStore::principal_sessions`](crate::SessionStore::principal_sessions).
+    /// [`build`](Self::build) fails with [`SecurityBuildError::SessionLimitWithoutFormLogin`]
+    /// when `form_login` is not configured and with [`SecurityBuildError::InvalidSessionLimit`]
+    /// when `max_per_user` is zero.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use oxbloom_core::SystemClock;
+    /// use oxbloom_security::{
+    ///     Argon2PasswordEncoder, DaoAuthenticationProvider, HttpSecurity, InMemorySessionStore,
+    ///     InMemoryUserDetailsService, SecurityBuildError, SessionSettings, SessionStore,
+    /// };
+    ///
+    /// let store = Arc::new(InMemorySessionStore::new(
+    ///     &SessionSettings::default(),
+    ///     Arc::new(SystemClock),
+    /// ));
+    /// let index = store.principal_sessions().expect("the memory store has an index");
+    /// let encoder = Arc::new(Argon2PasswordEncoder::new(8, 1, 1)?);
+    /// let provider = DaoAuthenticationProvider::new(
+    ///     Arc::new(InMemoryUserDetailsService::new(vec![])?),
+    ///     encoder,
+    /// );
+    /// let chain = HttpSecurity::new()
+    ///     .password_provider(Arc::new(provider))
+    ///     .form_login(|f| f)
+    ///     .session_limit(index.clone(), 2)
+    ///     .authorize(|a| a.any_request().authenticated())
+    ///     .build();
+    /// assert!(chain.is_ok());
+    ///
+    /// let err = HttpSecurity::new()
+    ///     .session_limit(index, 2)
+    ///     .authorize(|a| a.any_request().authenticated())
+    ///     .build()
+    ///     .err();
+    /// assert_eq!(err, Some(SecurityBuildError::SessionLimitWithoutFormLogin));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn session_limit(
+        mut self,
+        sessions: Arc<dyn PrincipalSessions>,
+        max_per_user: usize,
+    ) -> Self {
+        self.session_limit = Some((sessions, max_per_user));
+        self
+    }
+
+    /// Checks the user of a session login again, at most once per `interval`.
+    ///
+    /// The chain runs the check after it restored the authentication from the session and before
+    /// the CSRF check and the authorization, only for requests that the session authenticates;
+    /// requests authenticated by `Basic` or a bearer token never reach `users`. When the time of
+    /// the last check, kept in the session under `oxbloom.security.revalidated-at`, is missing or
+    /// at least `interval` old, the user is loaded again by the principal of the stored
+    /// authentication:
+    ///
+    /// - a missing, disabled or locked user invalidates the session, and the request goes on
+    ///   as anonymous;
+    /// - changed authorities are stored in the session, with the login time and the details
+    ///   kept, and this request uses them;
+    /// - no change only advances the time of the last check;
+    /// - an error of `users` keeps the session as it is and does not advance the time, so the
+    ///   next request tries again.
+    ///
+    /// The time comes from the [`clock`](Self::clock). A changed password does not end a session.
+    /// [`build`](Self::build) fails with [`SecurityBuildError::RevalidateWithoutFormLogin`] when
+    /// `form_login` is not configured and with [`SecurityBuildError::InvalidRevalidateInterval`]
+    /// when `interval` is zero.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use std::time::Duration;
+    /// use oxbloom_security::{
+    ///     Argon2PasswordEncoder, DaoAuthenticationProvider, HttpSecurity,
+    ///     InMemoryUserDetailsService, SecurityBuildError,
+    /// };
+    ///
+    /// let users = Arc::new(InMemoryUserDetailsService::new(vec![])?);
+    /// let encoder = Arc::new(Argon2PasswordEncoder::new(8, 1, 1)?);
+    /// let chain = HttpSecurity::new()
+    ///     .password_provider(Arc::new(DaoAuthenticationProvider::new(users.clone(), encoder)))
+    ///     .form_login(|f| f)
+    ///     .revalidate(Duration::from_secs(300), users.clone())
+    ///     .authorize(|a| a.any_request().authenticated())
+    ///     .build();
+    /// assert!(chain.is_ok());
+    ///
+    /// let err = HttpSecurity::new()
+    ///     .revalidate(Duration::from_secs(300), users)
+    ///     .authorize(|a| a.any_request().authenticated())
+    ///     .build()
+    ///     .err();
+    /// assert_eq!(err, Some(SecurityBuildError::RevalidateWithoutFormLogin));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn revalidate(mut self, interval: Duration, users: Arc<dyn UserDetailsService>) -> Self {
+        self.revalidate = Some((interval, users));
+        self
+    }
+
+    /// Replaces the clock of form login: the login time and the time of the last revalidation
+    /// come from it. The default is [`SystemClock`]; tests pass a clock they can move.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use oxbloom_core::SystemClock;
+    /// use oxbloom_security::HttpSecurity;
+    ///
+    /// let chain = HttpSecurity::new()
+    ///     .clock(Arc::new(SystemClock))
+    ///     .authorize(|a| a.any_request().permit_all())
+    ///     .build();
+    /// assert!(chain.is_ok());
+    /// ```
+    pub fn clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = clock;
+        self
+    }
+
+    /// Tunes or turns off the security response headers. See [`HeadersConfig`] for the defaults.
+    /// `f` receives the current settings: the defaults on a fresh `HttpSecurity`, or the result
+    /// of an earlier call, so several calls compose (boot applies the `security.headers`
+    /// configuration first, and a `SecurityCustomizer` changes only what it touches). Without
+    /// this call the defaults apply to every response of the chain.
+    /// [`build`](Self::build) fails with [`SecurityBuildError::InvalidHeadersConfig`] when
+    /// [`HeadersConfig::validate`] fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_security::HttpSecurity;
+    ///
+    /// let chain = HttpSecurity::new()
+    ///     .authorize(|a| a.any_request().permit_all())
+    ///     .headers(|h| h.frame_options(Some("SAMEORIGIN")).hsts(|s| s.preload(true)))
+    ///     .build()?;
+    /// # let _ = chain;
+    ///
+    /// // A second call starts from the first one's result, not from the defaults.
+    /// use oxbloom_security::HeadersConfig;
+    /// let mut seen = None;
+    /// let _ = HttpSecurity::new()
+    ///     .headers(|h| h.referrer_policy(None))
+    ///     .headers(|h| {
+    ///         seen = Some(h.clone());
+    ///         h.frame_options(Some("SAMEORIGIN"))
+    ///     });
+    /// assert_eq!(seen, Some(HeadersConfig::default().referrer_policy(None)));
+    /// # Ok::<(), oxbloom_security::SecurityBuildError>(())
+    /// ```
+    pub fn headers(mut self, f: impl FnOnce(HeadersConfig) -> HeadersConfig) -> Self {
+        self.headers = f(std::mem::take(&mut self.headers));
+        self
+    }
+
     /// Configures a JWT resource server: installs a [`JwtAuthenticationProvider`] built from the
     /// [`ResourceServer`]'s decoder and converter as a bearer provider (see
     /// [`bearer_provider`](Self::bearer_provider)). Without a decoder, [`build`](Self::build)
@@ -526,7 +721,12 @@ impl HttpSecurity {
     /// [`SecurityBuildError::FormLoginWithoutProvider`] when `form_login` has no
     /// `password_provider`, [`SecurityBuildError::CsrfWithoutFormLogin`] when `csrf` was called
     /// without `form_login`, and [`SecurityBuildError::InvalidCsrfConfig`] when the CSRF
-    /// settings fail [`CsrfConfig::validate`].
+    /// settings fail [`CsrfConfig::validate`], [`SecurityBuildError::SessionLimitWithoutFormLogin`]
+    /// and [`SecurityBuildError::InvalidSessionLimit`] for a session limit without form login or
+    /// of zero, [`SecurityBuildError::RevalidateWithoutFormLogin`] and
+    /// [`SecurityBuildError::InvalidRevalidateInterval`] for revalidation without form login or
+    /// with a zero interval, and [`SecurityBuildError::InvalidHeadersConfig`]
+    /// when the header settings fail [`HeadersConfig::validate`].
     ///
     /// # Examples
     ///
@@ -568,6 +768,7 @@ impl HttpSecurity {
         if self.resource_server_without_decoder {
             return Err(SecurityBuildError::ResourceServerWithoutDecoder);
         }
+        self.headers.validate()?;
         if let Some(basic) = &self.basic {
             if basic
                 .realm
@@ -603,6 +804,20 @@ impl HttpSecurity {
                 csrf.enabled.then_some(csrf)
             }
         };
+        let limit = match (&self.form_login, self.session_limit) {
+            (None, Some(_)) => return Err(SecurityBuildError::SessionLimitWithoutFormLogin),
+            (Some(_), Some((_, 0))) => return Err(SecurityBuildError::InvalidSessionLimit),
+            (_, limit) => limit,
+        };
+        let revalidation = match (&self.form_login, self.revalidate) {
+            (None, Some(_)) => return Err(SecurityBuildError::RevalidateWithoutFormLogin),
+            (Some(_), Some((interval, _))) if interval.is_zero() => {
+                return Err(SecurityBuildError::InvalidRevalidateInterval);
+            }
+            (_, revalidate) => {
+                revalidate.map(|(interval, users)| Revalidation::new(interval, users))
+            }
+        };
         let challenges = Challenges {
             basic_realm: self.basic.map(|b| Arc::from(b.realm)),
             bearer: self.bearer,
@@ -627,7 +842,10 @@ impl HttpSecurity {
             entry_point,
             self.access_denied,
             challenges,
-            form_login.map(|settings| FormLoginHandlers::new(settings, csrf)),
+            form_login.map(|settings| {
+                FormLoginHandlers::new(settings, csrf, limit, revalidation, self.clock)
+            }),
+            self.headers,
         ))
     }
 }

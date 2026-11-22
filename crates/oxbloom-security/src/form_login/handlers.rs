@@ -5,10 +5,9 @@
 //! `debug` the error variant and the length of the username only.
 
 use std::sync::Arc;
-use std::time::SystemTime;
 
 use http::{HeaderValue, StatusCode, header};
-use oxbloom_core::HttpMethod;
+use oxbloom_core::{Clock, HttpMethod};
 use oxbloom_web::{Request, Response};
 
 use super::form::parse_login_form;
@@ -16,13 +15,14 @@ use super::origin::same_origin;
 use super::page::login_page;
 use super::redirect::path_of;
 use super::repository::{
-    load_authentication, save_request, store_authentication, take_saved_request,
+    load_authentication, save_request, store_authentication, store_principal, take_saved_request,
 };
+use super::revalidate::{Revalidated, Revalidation, revalidate};
 use super::settings::FormLogin;
 use crate::csrf::{ensure_token, replace_token, request_passes};
 use crate::{
     Authentication, AuthenticationEntryPoint, AuthenticationError, AuthenticationRequest,
-    CsrfConfig, ProviderManager, RequestSessionExt, Session,
+    CsrfConfig, PrincipalSessions, ProviderManager, RequestSessionExt, Session,
 };
 
 /// The log marker of a form that could not be read.
@@ -154,12 +154,29 @@ pub(crate) fn prefers_html(req: &Request) -> bool {
 pub(crate) struct FormLoginHandlers {
     settings: Arc<FormLogin>,
     csrf: Option<CsrfConfig>,
+    limit: Option<(Arc<dyn PrincipalSessions>, usize)>,
+    revalidation: Option<Revalidation>,
+    clock: Arc<dyn Clock>,
 }
 
 impl FormLoginHandlers {
-    /// `csrf` is `Some` only when the CSRF check is on.
-    pub(crate) fn new(settings: Arc<FormLogin>, csrf: Option<CsrfConfig>) -> Self {
-        Self { settings, csrf }
+    /// `csrf` is `Some` only when the CSRF check is on. `limit` is the per-user index and the
+    /// positive maximum of sessions per user, when a limit is configured. `revalidation` is
+    /// `Some` when revalidation is on. `clock` gives the login time and the revalidation time.
+    pub(crate) fn new(
+        settings: Arc<FormLogin>,
+        csrf: Option<CsrfConfig>,
+        limit: Option<(Arc<dyn PrincipalSessions>, usize)>,
+        revalidation: Option<Revalidation>,
+        clock: Arc<dyn Clock>,
+    ) -> Self {
+        Self {
+            settings,
+            csrf,
+            limit,
+            revalidation,
+            clock,
+        }
     }
 
     /// The CSRF settings, when the check is on.
@@ -269,6 +286,24 @@ impl FormLoginHandlers {
         load_authentication(&session)
     }
 
+    /// Revalidates `authentication`, just restored from the session of `req`, when revalidation
+    /// is on. Returns the authentication the request goes on with, or `None` when the session
+    /// was ended and the request is anonymous.
+    pub(crate) async fn revalidate(
+        &self,
+        req: &Request,
+        authentication: Authentication,
+    ) -> Option<Authentication> {
+        let (Some(revalidation), Some(session)) = (&self.revalidation, req.session()) else {
+            return Some(authentication);
+        };
+        match revalidate(revalidation, &session, &authentication, self.clock.now()).await {
+            Revalidated::Unchanged | Revalidated::Skipped => Some(authentication),
+            Revalidated::Updated(updated) => Some(updated),
+            Revalidated::Ended => None,
+        }
+    }
+
     fn failure(&self, error: &dyn std::fmt::Debug, username_len: usize) -> Response {
         tracing::debug!(
             target: "oxbloom::security",
@@ -321,24 +356,53 @@ impl FormLoginHandlers {
             Ok(authentication) => authentication,
             Err(error) => return self.failure(&error, username_len),
         };
+        // The id of the session the login replaces, read before the rotation removes it.
+        let replaced_id = session.id();
         // A new id first, so a planted or stolen anonymous id never carries the login.
         session.rotate_id();
         // A new token too, so a token known before the login is dead after it.
         if self.csrf.is_some() {
             replace_token(&session);
         }
-        if store_authentication(&session, &authentication, SystemTime::now()).is_err() {
+        // One read of the clock, so the login time and the revalidation time are the same.
+        let now = self.clock.now();
+        let principal = authentication.principal().to_string();
+        if store_authentication(&session, &authentication, now).is_err()
+            || store_principal(&session, &principal, now).is_err()
+        {
             tracing::error!(
                 target: "oxbloom::security",
                 "the authentication could not be stored in the session"
             );
+            // A half-written login must not stay: without the principal key the session would
+            // escape the limit and the registry.
+            session.invalidate();
             return redirect(&self.settings.failure_url, "/");
         }
+        self.apply_limit(&principal, &replaced_id).await;
         let target = take_saved_request(&session);
         let target = target
             .as_deref()
             .unwrap_or(&self.settings.default_success_url);
         redirect(target, &self.settings.default_success_url)
+    }
+
+    /// Evicts the oldest sessions of `principal` until `max - 1` others remain. The session being
+    /// replaced is never counted. A failure is logged with a fixed text and never fails the login.
+    async fn apply_limit(&self, principal: &str, replaced_id: &str) {
+        let Some((sessions, max)) = &self.limit else {
+            return;
+        };
+        if sessions
+            .evict_oldest(principal, max - 1, Some(replaced_id))
+            .await
+            .is_err()
+        {
+            tracing::error!(
+                target: "oxbloom::security",
+                "the session limit could not be applied"
+            );
+        }
     }
 
     fn logout(&self, req: &Request) -> Response {

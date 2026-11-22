@@ -132,11 +132,11 @@ async fn a_logged_in_post_needs_the_token() {
     let (client, handle, run) = start().await;
     let (session, login_token) = login(&client).await;
 
-    // The page of the logged-in user carries the token in both forms.
+    // The page of the logged-in user carries the token in all three forms.
     let me = page(&client, "/me", &session).await;
     assert_eq!(me.status(), 200);
     let text = me.text();
-    assert_eq!(text.matches("name=\"_csrf\"").count(), 2);
+    assert_eq!(text.matches("name=\"_csrf\"").count(), 3);
     let token = field_token(&text);
     // The login replaced the token, so the one of the login page is dead.
     assert_ne!(token, login_token);

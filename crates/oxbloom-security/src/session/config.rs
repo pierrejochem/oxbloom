@@ -72,6 +72,11 @@ struct RawSession {
     secret: Option<Secret<String>>,
     #[serde(rename = "old-secrets")]
     old_secrets: Option<Vec<Secret<String>>>,
+    // Read by `SessionManagementProperties`; accepted here so they are not unknown keys.
+    #[serde(rename = "max-sessions-per-user")]
+    _max_sessions_per_user: Option<serde::de::IgnoredAny>,
+    #[serde(rename = "revalidate-interval")]
+    _revalidate_interval: Option<serde::de::IgnoredAny>,
 }
 
 /// Where the sessions of `security.session.store` live.
@@ -139,6 +144,8 @@ impl SessionConfig {
     /// 30 minutes), `absolute-timeout` (positive, default 8 hours), `max-sessions` (at least 1,
     /// default 100 000), `max-cookie-bytes` (at least 256, default 3072), `secret` and
     /// `old-secrets` (each at least 32 bytes; `secret` is required with `store = "cookie"`).
+    /// The keys `max-sessions-per-user` and `revalidate-interval` are accepted and left to
+    /// [`SessionManagementProperties`](crate::SessionManagementProperties).
     /// Durations take the configuration's duration form, such as `90s` or `30m`. A missing
     /// section gives the defaults.
     ///
@@ -420,6 +427,12 @@ mod tests {
         rejects("cookie-name = \"\"", COOKIE_NAME, "\"\"");
         rejects("max-sessions = \"many\"", MAX_SESSIONS, "many");
         rejects("idle-timeout = \"forever\"", IDLE_TIMEOUT, "forever");
+    }
+
+    #[test]
+    fn session_management_keys_are_accepted_and_left_alone() {
+        let session = section("max-sessions-per-user = 2\nrevalidate-interval = \"1m\"").unwrap();
+        assert_eq!(session.settings, SessionSettings::default());
     }
 
     #[test]

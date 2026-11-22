@@ -171,7 +171,7 @@ The DAO provider then uses it with the configured encoder.
 - Timing of an unknown user is equalised with a dummy hash, but a user with a malformed stored hash answers faster. The difference is narrow and needs control of the user store.
 - Basic sends the password with every request. Use it over TLS (see [SSL bundles](16-ssl-bundles.md#ssl-bundles)).
 - The raw password is not zeroized after use.
-- Sessions exist since Slice 6b (see [Sessions](20-sessions.md#sessions)). Form login and logout are Slice 6c (see [Form login](21-form-login.md#form-login)), CSRF tokens are Slice 6d (see [CSRF protection](22-csrf.md#csrf-protection)), and remember-me is not planned yet.
+- Sessions exist since Slice 6b (see [Sessions](20-sessions.md#sessions)). Form login and logout are Slice 6c (see [Form login](21-form-login.md#form-login)), CSRF tokens are Slice 6d (see [CSRF protection](22-csrf.md#csrf-protection)), security headers and session management are Slice 7a (see [Session management](23-session-management.md#session-management-and-security-headers)), and remember-me is Slice 7b.
 
 ### Semver
 

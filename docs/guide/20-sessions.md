@@ -140,6 +140,7 @@ A store error at load or commit, or a failed seal or a `TooLarge` session at com
 - A logout that races another request on the same session cannot bring the session back: a loaded session is written back only with `update` and moved only with `rotate`, and when the id is missing by then, the filter stores nothing and leaves the cookie alone. It does not clear the cookie, because the dead id is never adopted anyway, and a clear could delete a newer cookie that a later response gave the browser, such as a new login.
 - If a `rotate` commits before a concurrent logout of the old id, the session lives on under the new id, so a logout of the old id does not end it. A logout should invalidate by the current id, and `rotate_id` should be called only at login.
 - Concurrent requests on one session are last-writer-wins. Each loads a copy and writes the whole session back, so one request's change can overwrite another's. Keep counters and lists that need exactness outside the session.
+- The per-user limit, the `SessionRegistry` and the revalidation of the stored login are Slice 7a (see [Session management and security headers](23-session-management.md#session-management-and-security-headers)). Only the keys `security.session.max-sessions-per-user` and `security.session.revalidate-interval` are read by `SecurityAutoConfiguration`, and not by the session filter, so they have no effect with your own `SecurityFilterChain` bean.
 - A `Session` clone used after the filter ran loses its writes silently.
 
 ## Configuration
@@ -155,6 +156,8 @@ A store error at load or commit, or a failed seal or a `TooLarge` session at com
 | `security.session.idle-timeout` | `30m` | Unused time before expiry; at least one second and at most `absolute-timeout`. |
 | `security.session.absolute-timeout` | `8h` | Total lifetime however active; positive. |
 | `security.session.max-sessions` | `100000` | The cap of the in-memory store; at least 1. |
+| `security.session.max-sessions-per-user` | none | The limit of sessions of one user; at least 1; needs the in-memory store and form login. See [Session management](23-session-management.md#limiting-the-sessions-of-a-user). |
+| `security.session.revalidate-interval` | `5m` | How often the stored login is checked against the user service; `0` is off, otherwise at least `1s`. See [Session management](23-session-management.md#revalidating-the-user). |
 | `security.session.max-cookie-bytes` | `3072` | The largest session cookie, in bytes; at least 256. |
 | `security.session.secret` | none | The key of the stateless backend; at least 32 bytes; required with `store = "cookie"`. |
 | `security.session.old-secrets` | none | Earlier keys that still open cookies; each at least 32 bytes. |
@@ -192,7 +195,7 @@ let app = oxbloom_web::App::new().filter(filter);
 
 - The session filter itself does no CSRF check. `SameSite=Lax` does not stop every cross-site request, and `HttpOnly` only keeps scripts from reading the cookie. With form login on, the security chain checks a CSRF token on every unsafe request that the session authenticates (Slice 6d, see [CSRF protection](22-csrf.md#csrf-protection)). An application that authenticates its own sessions without form login must add its own protection. The token is stored in the session under the reserved key `oxbloom.security.csrf-token`, and an attacker who controls a sibling subdomain can plant the cookie `OXBLOOM_SESSION` (it has no `__Host-` prefix) of a session they logged in to and so know its token; this holds with either backend.
 - Form login and logout exist since Slice 6c (see [Form login](21-form-login.md#form-login)). An application that builds its own login should call `rotate_id` at login and `invalidate` at logout. The session keys under the prefix `oxbloom.security.` are reserved for Oxbloom.
-- A stateless cookie cannot be revoked on the server; a copy stays valid until its expiry.
+- A stateless cookie cannot be revoked on the server; a copy stays valid until its expiry. It also has no per-user limit and no registry (Slice 7a, see [Session management](23-session-management.md#limits)).
 - The in-memory store is per process: sessions are lost at a restart and not shared between instances.
 - At the cap, the in-memory store evicts the oldest-touched entry of a sample of at most 16 entries (constant cost per write). An anonymous flood that writes sessions, such as `GET /api/visits` in the todos example or `Accept: text/html` requests to protected paths with form login, can still fill the cap and evict real users' sessions. The cap can be exceeded by the number of racing saves, and the overshoot persists until expiry or a sweep.
 - Concurrent requests on one session are last-writer-wins.
