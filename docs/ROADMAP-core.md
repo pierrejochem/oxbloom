@@ -695,7 +695,7 @@ Delivered:
 - Sampled eviction in `InMemorySessionStore`: the oldest of a sample of at most 16 entries, starting at a random shard and a random position within the first 64 entries of it; the method `eviction_probes` is hidden from the docs and exists for the tests.
 - In `oxbloom-boot` (feature `security`): `SecurityAutoConfiguration` applies `form_login` when `security.form-login.enabled` is true, with ten property metadata entries (`security.form-login.*`); it needs the table `security.session` and a password provider bean.
 - `examples/todos`: the HTML page `GET /me` behind the login, `[security.form-login]` in `application.toml`, a test `tests/login.rs` and README notes.
-- ADR 0088, the guide chapter 21 (the roadmap chapter is now 24 since Slice 7a) and the API section.
+- ADR 0088, the guide chapter 21 (the roadmap chapter is now 25 since Slice 7b) and the API section.
 
 Gate numbers at the end of Slice 6c: `cargo test --workspace --all-features --no-fail-fast` 3097 passed, 0 failed, 8 ignored (2993 before Slice 6c); `cargo test -p oxbloom-boot` per feature: none 484, `security` 484, `web` 484, `logging` 504, `ssl` 484, `actuator` 497, `tasks` 508, all features 542, each with 0 failed and 1 ignored (the probe); `make check-examples` 63 (61 before); clippy `-D warnings` and `cargo fmt --check` clean; the boot stack probes are unchanged at 238 KB (237 overflows) and 239 KB with all features (238 overflows); the nine `cargo build -p oxbloom-boot` builds for `tasks`, `tasks,logging`, `tasks,ssl`, `tasks,security`, `tasks,actuator`, `security`, `security,logging`, `security,web` and `web`, each with default features off, pass; `cargo tree -i ring --workspace --all-features` finds no `ring`. The flaky `oxbloom-ssl` validity test from Slice 6b did not fail in this gate run.
 
@@ -712,7 +712,7 @@ Limits that users must know (also in the guide):
 Follow-ups from Slice 6c, not yet scheduled:
 - CSRF protection and the framing of the default login page: done in Slice 6d.
 - Refreshing or revalidating the stored authentication (done in Slice 7a).
-- Remember-me (Slice 7b), concurrent-session limits (done in Slice 7a), OAuth2 login, registration, password reset and per-user rate limiting.
+- Remember-me (done in Slice 7b), concurrent-session limits (done in Slice 7a), OAuth2 login, registration, password reset and per-user rate limiting.
 - A themeable login page.
 
 Deferred minors from the 6c reviews:
@@ -749,7 +749,7 @@ Delivered:
 - Login replaces the token, logout drops it. The default login page creates the pre-login session, carries the token in a hidden field and adds `frame-ancestors 'none'` and `X-Frame-Options: DENY`. An optional token endpoint (`security.csrf.token-endpoint`) answers `{"headerName":..,"parameterName":..,"token":..}`.
 - In `oxbloom-boot` (feature `security`): `SecurityAutoConfiguration` calls `csrf` with the `security.csrf` settings when form login is on, with four property metadata entries (`security.csrf.*`); the boot stack probes did not grow.
 - `examples/todos`: the `/me` page has two forms that post the token, `POST /me/reset-visits` needs it, the tests `tests/csrf.rs` and `tests/login.rs` use the token flow, and the README and `application.toml` describe it.
-- ADR 0089, the guide chapter 22 (the roadmap chapter is now 24 since Slice 7a) and the API section.
+- ADR 0089, the guide chapter 22 (the roadmap chapter is now 25 since Slice 7b) and the API section.
 
 Gate numbers at the end of Slice 6d: `cargo test --workspace --all-features --no-fail-fast` 3203 passed, 0 failed, 8 ignored (3097 before Slice 6d); `cargo test -p oxbloom-boot` per feature: none 496, `security` 496, `web` 496, `logging` 516, `ssl` 496, `actuator` 509, `tasks` 520, all features 554, each with 0 failed and 1 ignored (the probe); `make check-examples` 66 (63 before); clippy `-D warnings` and `cargo fmt --check` clean; the boot stack probes are unchanged at 238 KB (237 overflows) and 239 KB with all features (238 overflows); the nine `cargo build -p oxbloom-boot` builds for `tasks`, `tasks,logging`, `tasks,ssl`, `tasks,security`, `tasks,actuator`, `security`, `security,logging`, `security,web` and `web`, each with default features off, pass; `cargo tree -i ring --workspace --all-features` finds no `ring`.
 
@@ -804,7 +804,7 @@ Rulings made during Slice 6d:
 - A refused login without a session filter logs the "add a SessionFilter" error and still answers 403.
 
 ### Security Slice 7a: Security headers and session management (`oxbloom-security`) — done
-Done on 2026-11-22; the design is the Slice 7a spec `2026-11-22-session-management-design.md` and the plan is `2026-11-22-session-management.md` (both local files under `docs/superpowers`, named here without a link), usage is in the guide chapter `docs/guide/23-session-management.md` and `docs/API.md` (section 4.7, the slice 7a subsection, and `SecurityAutoConfiguration` in section 4.8), the decisions are in ADR 0090. Remember-me is Slice 7b and is next.
+Done on 2026-11-22; the design is the Slice 7a spec `2026-11-22-session-management-design.md` and the plan is `2026-11-22-session-management.md` (both local files under `docs/superpowers`, named here without a link), usage is in the guide chapter `docs/guide/23-session-management.md` and `docs/API.md` (section 4.7, the slice 7a subsection, and `SecurityAutoConfiguration` in section 4.8), the decisions are in ADR 0090. Remember-me is Slice 7b, which is done (see below).
 
 Delivered:
 - Headers: `HttpSecurity::headers`, `HeadersConfig`, `HstsConfig`, `HeadersProperties` and the new `SecurityBuildError::InvalidHeadersConfig`. The chain adds `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options`, `Cache-Control: no-store` (authenticated requests only) and HSTS (`https` requests only) to every response, never over a header the response has. `headers` composes on the current settings.
@@ -813,7 +813,7 @@ Delivered:
 - Revalidation: `HttpSecurity::revalidate`, `HttpSecurity::clock` and `security.session.revalidate-interval` (default 5 minutes, `0` is off, at least one second otherwise). The user is reloaded by the principal of the stored authentication; a missing, disabled or locked user ends the session.
 - In `oxbloom-boot` (feature `security`): `SecurityAutoConfiguration` reads the keys and applies them before the customizers, a lazy `SessionRegistry` bean, the `SessionManagementAnalyzer`, nine `security.headers.*` metadata entries and two `security.session.*` entries. The boot stack probes did not grow.
 - `examples/todos`: `security.session.max-sessions-per-user = 2`, `POST /me/logout-everywhere` (`LogoutEverywhereController`, which injects `SessionRegistry` and calls `invalidate_others`), the `/me` page has a third form, and `tests/session_management.rs` (3 tests with cookie jars). `tests/csrf.rs` now expects three `_csrf` fields. `oxbloom-core` became a dev-dependency of the example for the doc example.
-- ADR 0090, the guide chapter 23 (the roadmap chapter is now 24, renamed with `git mv`) and the API section.
+- ADR 0090, the guide chapter 23 (the roadmap chapter was renamed to 24 with `git mv`, and to 25 in Slice 7b) and the API section.
 
 Gate numbers at the end of Slice 7a: `cargo test --workspace --all-features --no-fail-fast` 3330 passed, 0 failed, 8 ignored (3203 before Slice 7a; counted by summing the `test result` lines, doctests included); `cargo test -p oxbloom-boot` per feature, summed the same way: none 522, `web` 522, `logging` 542, `security` 522, `ssl` 522, `actuator` 535, `tasks` 546, all features 580, each with 0 failed and 1 ignored (the probe); `make check-examples` 70 passed (66 before), 0 failed; clippy `-D warnings` and `cargo fmt --check` clean; the boot stack probes are unchanged at 238 KB (237 overflows, exit 101) and 239 KB with all features (238 overflows, exit 101); the fourteen `cargo build -p oxbloom-boot --no-default-features` builds of CI (none, `logging`, `web`, `security`, `ssl`, `actuator`, `actuator,logging`, `actuator,ssl`, `actuator,security`, `tasks`, `tasks,logging`, `tasks,ssl`, `tasks,security` and `tasks,actuator`) and the four `oxbloom-security` builds (no features, `di`, `jwks`, `di,jwks`) pass; `cargo tree -i ring --workspace --all-features` finds no `ring`.
 
@@ -823,12 +823,12 @@ Limits that users must know (also in the guide):
 - A changed password does not end any session. Revalidation is bounded by the interval, and a user service outage keeps the sessions (no backoff, one warning per due request).
 - A `SessionRegistry` consumer on a store without the index fails the injection (also `Option<Arc<SessionRegistry>>`, at startup); with the cookie store there is no bean.
 - The `security.headers.*` and the two session keys are applied only by `SecurityAutoConfiguration`, and are ignored with a user `SecurityFilterChain` bean, as for form login and CSRF.
-- `Session::set` does not enforce the reserved prefix `oxbloom.security.`, so application code can write the authentication and principal keys. Revalidation reloads the user by the principal of the stored authentication for that reason; the per-user index trusts the principal key.
+- (Closed by Slice 7b: `Session::set` now enforces the reserved prefix `oxbloom.security.`.) `Session::set` did not enforce the reserved prefix `oxbloom.security.`, so application code could write the authentication and principal keys. Revalidation reloads the user by the principal of the stored authentication for that reason; the per-user index trusts the principal key.
 - Boot applies the headers, the limit, the revalidation and the clock before the customizers (a customizer can override or compose), and form login and CSRF after them (configuration wins).
 - Form login that a customizer turns on gets no default revalidation; an explicit interval works.
 
 Follow-ups from Slice 7a, not yet scheduled:
-- Remember-me is Slice 7b. A default content security policy, `Permissions-Policy`, a refuse-new-login policy, ending the sessions of a user on a password change, an admin endpoint for sessions and Redis or SQL indexes.
+- Remember-me (done in Slice 7b). A default content security policy, `Permissions-Policy`, a refuse-new-login policy, ending the sessions of a user on a password change, an admin endpoint for sessions and Redis or SQL indexes.
 
 Deferred minors from the 7a reviews:
 - Task 1: validate runs when headers disabled (document or leave).
@@ -865,6 +865,68 @@ Rulings made during Slice 7a:
 - The index is a scan of the in-memory store, not a second map, and `PrincipalSessions` has a third method `evict_oldest`.
 - Revalidation reloads the user by the principal of the stored authentication, never by the principal key.
 - A revalidate interval above zero and under one second is refused.
+
+### Security Slice 7b: Remember-me (`oxbloom-security`) — done
+Done on 2026-11-22; the design is the Slice 7b spec `2026-11-22-remember-me-design.md` and the plan is `2026-11-22-remember-me.md` (both local files under `docs/superpowers`, named here without a link), usage is in the guide chapter `docs/guide/24-remember-me.md` and `docs/API.md` (section 4.7, the slice 7b subsection, and `SecurityAutoConfiguration` in section 4.8), the decisions are in ADR 0091. Method security is Slice 8 and is next.
+
+Delivered:
+- Reserved prefix: `Session::set` returns the new `SessionError::ReservedKey` for a key that starts with `oxbloom.security.` and writes nothing, `Session::remove` ignores such a key (it stays infallible), and `get` is unchanged. The `#[doc(hidden)]` methods `set_reserved` and `remove_reserved` serve Oxbloom's own writers and this repository's integration tests.
+- Token and settings: a stateless signed token `v1.<base64url(username)>.<expiry>.<base64url(HMAC-SHA256)>` bound to the stored password hash, keyed by HKDF-SHA256 over the remember-me secret with its own info string, constant-time verification with old secrets for rotation, a limit of 1 KiB. `RememberMe`, `RememberMeSettings`, `RememberMeProperties`, `HttpSecurity::remember_me` (composes), and the new `SecurityBuildError::RememberMeWithoutFormLogin` and `InvalidRememberMe`.
+- Marker and rule: `Authentication::remembered` and `is_remembered`, `AuthorizationRule::FullyAuthenticated` and `RuleBuilder::fully_authenticated()`. The new enum variants break exhaustive matches on `AuthorizationRule`, `SessionError` and `SecurityBuildError`.
+- Issue, clear and auto login: the cookie `OXBLOOM_REMEMBER_ME` (`HttpOnly`, `SameSite=Lax`, `Path` and `Secure` from the session settings through the `CookieScope` request extension of the session filter, a fixed `Max-Age`) after a password login with the checkbox, cleared at logout, and an auto login in the chain only without a header credential and without a session login. The default login page shows the checkbox when remember-me is on.
+- In `oxbloom-boot` (feature `security`): `SecurityAutoConfiguration` reads the six `security.remember-me.*` keys (checked even while disabled), applies remember-me before the customizers with the one clock bean, rejects a cookie name equal to the session cookie name, and lists the keys in its metadata. The boot stack probes did not grow.
+- In `oxbloom-test`: `TestResponse::header_all`.
+- `examples/todos`: `[security.remember-me]` with a public development secret, `tests/remember_me.rs` (6 tests with cookie jars: the checkbox and the round trip, no checkbox, the cookie attributes, a changed signature and a forged user name, a header credential, logout). The example's users come from the configuration, so the test cannot change a password or disable a user; the crate tests of `oxbloom-security` cover those. `tests/csrf.rs` needed no change: its count of three `_csrf` fields is for the `/me` page, not the login page.
+- ADR 0091, the guide chapter 24 (the roadmap chapter is now 25, renamed with `git mv`) and the API section.
+
+Gate numbers at the end of Slice 7b: `cargo test --workspace --all-features --no-fail-fast` 3465 passed, 0 failed, 8 ignored (3330 before Slice 7b; counted by summing the `test result` lines, doctests included); `cargo test -p oxbloom-boot --no-default-features` per feature, summed the same way: none 542, `web` 542, `logging` 562, `security` 542, `ssl` 542, `actuator` 555, `tasks` 566, and `--all-features` 600, each with 0 failed and 1 ignored (the probe); `make check-examples` 76 passed (70 before), 0 failed; clippy `-D warnings` and `cargo fmt --check` clean; the boot stack probes are unchanged at 238 KB passing and 237 KB overflowing (exit 101) with no features, and 239 KB passing and 238 KB overflowing (exit 101) with all features; the fourteen `cargo build -p oxbloom-boot --no-default-features` builds of CI (none, `logging`, `web`, `security`, `ssl`, `actuator`, `actuator,logging`, `actuator,ssl`, `actuator,security`, `tasks`, `tasks,logging`, `tasks,ssl`, `tasks,security` and `tasks,actuator`) and the four `oxbloom-security` builds with `--no-default-features` (no features, `di`, `jwks`, `di,jwks`) pass; `cargo tree -i ring --workspace --all-features` finds no `ring` (cargo prints "nothing to print").
+
+Limits that users must know (also in the guide):
+- No per-device revocation and no theft detection: a stolen cookie works until it expires or the password changes, and the lifetime is fixed.
+- An auto login on an unsafe request gets 403 until a `GET`; a logout `POST` after the session expired, with CSRF on, is 403 and keeps the cookie.
+- The cookie holds the user name in the clear (base64url, not encrypted).
+- The `UserDetailsService` must know every form-login user; any `Authorization` header blocks auto login.
+- Log out everywhere (the 7a registry) and the session limit do not revoke remember-me: an evicted or ended session logs straight back in, and a burst of parallel requests after the session expired can each auto log in and count against the limit.
+- A changed password ends every remember-me cookie of the user at once and the sessions at the next revalidation (the 7a limit now has this aspect).
+- A JWT claim `oxbloom.remembered: true` counts as remembered (deny-only for `fully_authenticated()`); it is documented and the converter is not changed.
+- The `CookieScope` request extension carries the session cookie's `Path` and `Secure` decision to the remember-me cookie; without a session filter there is no auto login.
+- A customizer's `http.clock(..)` does not change the clock of remember-me; the keys apply only through `SecurityAutoConfiguration`.
+- Secrets are never read from the command line and never echoed; rotate with `old-secrets`.
+
+Follow-ups from Slice 7b, not yet scheduled:
+- A persistent token store with per-device revocation and theft detection, a refreshing cookie, an admin endpoint to revoke remember-me cookies, and the 7a deferred minors.
+
+Deferred minors from the 7b reviews:
+- Task 1: minor (deferred): no test that a rejected set / ignored remove leaves the session clean (no Set-Cookie on a fresh session)
+- Task 2: minor (deferred -> Task 6): M1 a JWT claim "oxbloom.remembered": true counts as remembered (deny-only); drop the claim in the converter or document; with_details replaces details and drops the marker so Task 4 must call .remembered() after with_details
+- Task 2: minor (-> Task 3/4 briefs): M2 blanket #[allow(dead_code)] / #[allow(unused_imports)] in remember_me/token.rs and mod.rs must be removed by hand in Tasks 3 and 4
+- Task 2: minor (deferred): M3 TokenCodec::new comment gives a wrong reason for returning Result
+- Task 2: minor (deferred): boundary test is Linux-specific (should compute the bound with checked_add)
+- Task 2: minor (deferred): parse doc line over 100 columns
+- Task 3: minor (deferred): remember_cookie user_details.as_ref()? returns None with no log (unreachable after validate)
+- Task 3: minor (-> Task 4): integration test that a password login inside a remembered session drops the marker (plant remembered authentication with set_reserved); auto-login round trip should prove the codec accepts the issued token
+- Task 3: minor (deferred): the "one fixed text" logs not asserted to appear exactly once (shared process-global log buffer)
+- Task 3: minor (-> Task 5): remember-me cookie_name equal to the session cookie name would collide; Task 5 boot should reject it naming the key; Task 5 must give RememberMe.clock and the handlers' clock the same clock bean
+- Task 3: minor (-> Task 6 docs): logout after the session expired with CSRF on is 403 and keeps the cookie; auto login on the logout POST also gets the 403; token username comes from user.username() not the principal (doc line on remember_cookie); CookieScope extension recorded in the ADR
+- Task 4: minor (deferred): M1 AutoLogin derives Debug; LoggedIn(Authentication) would print the principal (never printed today)
+- Task 4: minor (deferred): M2 revalidation-ended session plus cookie costs a second user-service lookup in the same request
+- Task 4: minor (deferred): M3 log_text() global buffer shared across tests; assertions can pass because of other tests; "one fixed text" not checked as exactly one
+- Task 4: minor (deferred): M4 no test: valid session plus cookie never reads the cookie / no lookup; no test: planted anonymous session id is rotated at auto login
+- Task 4: minor (-> Task 6 docs): M5 a session evicted by the limit or ended by invalidate_all logs straight back in from the cookie (log out everywhere does not revoke remember-me); a burst of parallel requests after expiry each auto log in and count against the limit; any Authorization header blocks auto login; auto login on an unsafe request gets 403
+- Task 4: minor (-> Task 5): M6 user_details None gives Invalid (would clear every cookie): boot/build must always supply the user service (validate already requires it)
+- Task 5: minor (deferred): customizer http.clock(x) does not change remember-me's clock (boot pinned it); undocumented
+- Task 5: minor (deferred): misplaced comment ("default interval applies only with form login and a user service") now above the remember-me read in security.rs
+- Task 5: minor (deferred): short-secret test does not pin .secret vs .old-secrets[0] nor that the failure report names the key
+- Task 5: minor (deferred): header_all doc example lacks a single value and a case-insensitive name; lifetime metadata default checked as literal
+- Task 5: minor (deferred): startup-report and Debug paths for a bad disabled section covered only via read(), not via the startup report; one over-long doc line in autoconfigure/security.rs
+
+Rulings made during Slice 7b:
+- The branch is `s7b-remember-me`, started from `main`; nothing is pushed.
+- `Session::remove` stays infallible and ignores reserved keys; `set` returns `SessionError::ReservedKey`.
+- Auto login is a free `check_token` function and a method of the form login handlers, because the handlers hold the limit, the CSRF settings and the clock.
+- Any `Authorization` header, even of an unknown scheme, blocks auto login (fail-closed; header credentials win).
+- The missing-session check runs after a cookie is found and before the token check.
+- `AuthorizationRule` gets the variant `FullyAuthenticated`, a source-compatible change only for code that does not match the enum exhaustively.
 
 ### C10: Test support (`oxbloom-test`)
 
@@ -919,13 +981,13 @@ Deferred minors from the C10b reviews:
 
 1. **C2 Configuration v2.** Smallest dependencies, fixes open defects, and every other slice reads config.
 2. **C1 DI v2** (done). Required by C3, C4, C8 and C10.
-3. **Security Slice 6** (`PasswordEncoder`, `UserDetailsService`, Basic, form login and sessions): 6a (password encoding, user details, HTTP Basic), 6b (sessions), 6c (form login and logout) and 6d (CSRF tokens) are done. It needs beans with lifecycle and typed config, so it comes after C1 and C2.
+3. **Security Slice 6** (`PasswordEncoder`, `UserDetailsService`, Basic, form login and sessions): 6a (password encoding, user details, HTTP Basic), 6b (sessions), 6c (form login and logout) and 6d (CSRF tokens) are done, and so are Slices 7a (security headers, session management) and 7b (remember-me). It needs beans with lifecycle and typed config, so it comes after C1 and C2.
 4. **C3 Application lifecycle** with `FailureAnalyzer` (done: C3a and C3b).
 5. **C5 Logging** (C5a and C5b done), then **C6 Web server properties, errors and JSON** (C6a, C6b-1 and C6b-2 done).
 6. **C4 Conditions and auto-configuration** (C4a, the mechanism, and C4b, auto-configuring the existing wiring with property metadata, done).
 7. **C10 Test support** (C10a, the context runner and clock, and C10b, `TestApp`, `TestClient` and slicing, done).
 8. **C7 SSL bundles** (done) and **C8 Availability, info and health** (done), **C9a Tasks and scheduling** (done) and **C9b Retry** (done).
-9. Security Slices 7 to 9, then `oxbloom-ai`, database, jobs and the rest of `IDEA.md`.
+9. Security Slice 8 (method security) and 9 (OAuth2 login and client), then `oxbloom-ai`, database, jobs and the rest of `IDEA.md`.
 10. **C11 Service connections** after the database and queue crates exist.
 
 ## Open questions for the design steps

@@ -111,7 +111,7 @@ A script, for example a single-page application, reads it and sends the token in
 
 ## What the session holds
 
-The token is stored under the session key `oxbloom.security.csrf-token`. The prefix `oxbloom.security.` is reserved for Oxbloom: application code must not set a key with it. A stored value that is not a valid token is removed and read as absent. The token is created only when the login page, the endpoint or `csrf_token()` asks for it, never by the check. A token created in a session that is new marks it for writing, so the cookie is set. `csrf_token()` returns `None` when no session filter ran and never creates a session.
+The token is stored under the session key `oxbloom.security.csrf-token`. The prefix `oxbloom.security.` is reserved for Oxbloom, and `Session::set` returns `SessionError::ReservedKey` for such a key since Slice 7b. A stored value that is not a valid token is removed and read as absent. The token is created only when the login page, the endpoint or `csrf_token()` asks for it, never by the check. A token created in a session that is new marks it for writing, so the cookie is set. `csrf_token()` returns `None` when no session filter ran and never creates a session.
 
 ## Limits
 
@@ -123,6 +123,7 @@ The token is stored under the session key `oxbloom.security.csrf-token`. The pre
 - **The origin check.** The same-origin check of form login still covers only `POST` of the login and logout URLs, and it allows a request with neither `Origin` nor `Referer`. The token is what protects your own routes.
 - **Anonymous posts.** An anonymous request with no session, and one with a pre-login session that is not logged in, are not checked.
 - **Expired sessions.** A login page that stays open past the idle timeout, or a logout after the session expired, gets a 403 (`application/problem+json`) instead of a redirect, because the stored token is gone. The user has to load the login page again.
+- **Remember-me.** An auto login from the remember-me cookie creates a session with a new token, so an unsafe request that auto logs in is a 403, and the next `GET` works (see [Remember-me](24-remember-me.md#limits)).
 - **Basic in a browser.** A browser that cached `Basic` credentials sends them on forged requests, which are not checked. Use `Basic` for non-browser clients only.
 - **A dead token on a page.** An application that rotates or invalidates the session inside its handler while it answers a `404` for the login path gets the default page with a token that is no longer valid. This is a corner case.
 - **No custom 403.** The 403 of a failed check does not use your `access_denied` handler.
