@@ -14,6 +14,11 @@ pub(crate) const AUTHENTICATION_KEY: &str = "oxbloom.security.authentication";
 /// The session key that holds the path and query to return to after a login.
 pub(crate) const SAVED_REQUEST_KEY: &str = "oxbloom.security.saved-request";
 
+/// The session key that holds the username of the logged-in principal, as a JSON string.
+pub(crate) use crate::session::PRINCIPAL_KEY;
+/// The session key that holds the seconds since the epoch of the last check of the user.
+pub(crate) const REVALIDATED_AT_KEY: &str = "oxbloom.security.revalidated-at";
+
 /// The version of the stored authentication value.
 const VERSION: u64 = 1;
 
@@ -39,6 +44,27 @@ pub(crate) fn load_authentication(session: &Session) -> Option<Authentication> {
     parsed
 }
 
+/// Stores the username as the principal key and `now` as the time of the last check, for the
+/// per-user session index and for revalidation.
+///
+/// # Errors
+///
+/// [`SessionError::Serialization`] when a value cannot be turned into JSON.
+pub(crate) fn store_principal(
+    session: &Session,
+    principal: &str,
+    now: SystemTime,
+) -> Result<(), SessionError> {
+    session.set(PRINCIPAL_KEY, &principal)?;
+    session.set(REVALIDATED_AT_KEY, &epoch_seconds(now))
+}
+
+/// Seconds since the epoch, zero for a time before it.
+fn epoch_seconds(now: SystemTime) -> u64 {
+    now.duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs())
+}
+
 /// Stores the authentication and the login time in the session.
 ///
 /// # Errors
@@ -49,9 +75,7 @@ pub(crate) fn store_authentication(
     authentication: &Authentication,
     now: SystemTime,
 ) -> Result<(), SessionError> {
-    let login = now
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_secs());
+    let login = epoch_seconds(now);
     let authentication =
         serde_json::to_value(authentication).map_err(|_| SessionError::Serialization)?;
     session.set(

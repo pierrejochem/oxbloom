@@ -12,7 +12,8 @@ use crate::form_login::{FormLoginEntryPoint, FormLoginHandlers};
 use crate::{
     AccessDeniedHandler, AuthenticationEntryPoint, AuthenticationProvider, AuthorizationManager,
     AuthorizationRule, CsrfConfig, FormLogin, HeadersConfig, JwtAuthenticationConverter,
-    JwtAuthenticationProvider, JwtDecoder, ProviderManager, RequestMatcher, SecurityFilterChain,
+    JwtAuthenticationProvider, JwtDecoder, PrincipalSessions, ProviderManager, RequestMatcher,
+    SecurityFilterChain,
 };
 
 /// Why [`HttpSecurity::build`] refused to build a chain.
@@ -59,6 +60,10 @@ pub enum SecurityBuildError {
     /// A security header value is empty or has a character outside visible ASCII, or the HSTS
     /// `max_age` is zero.
     InvalidHeadersConfig,
+    /// A session limit is configured but form login is not, so no login would apply it.
+    SessionLimitWithoutFormLogin,
+    /// The session limit is zero; at least one session per user must be allowed.
+    InvalidSessionLimit,
 }
 
 impl fmt::Display for SecurityBuildError {
@@ -78,6 +83,8 @@ impl fmt::Display for SecurityBuildError {
             Self::CsrfWithoutFormLogin => "csrf protection configured without form login",
             Self::InvalidCsrfConfig => "invalid csrf field name, header name or token endpoint",
             Self::InvalidHeadersConfig => "invalid security headers value or hsts max age",
+            Self::SessionLimitWithoutFormLogin => "session limit configured without form login",
+            Self::InvalidSessionLimit => "session limit must be at least one",
         })
     }
 }
@@ -111,6 +118,7 @@ pub struct HttpSecurity {
     form_login: Option<FormLogin>,
     csrf: Option<CsrfConfig>,
     headers: HeadersConfig,
+    session_limit: Option<(Arc<dyn PrincipalSessions>, usize)>,
 }
 
 impl Default for HttpSecurity {
@@ -144,6 +152,7 @@ impl HttpSecurity {
             form_login: None,
             csrf: None,
             headers: HeadersConfig::default(),
+            session_limit: None,
         }
     }
 
@@ -415,6 +424,62 @@ impl HttpSecurity {
         self
     }
 
+    /// Limits the sessions of one user. At a successful form login the oldest sessions of that
+    /// user, by last use, are evicted until `max_per_user - 1` others remain, so the new session
+    /// fits. The session the login replaces is never counted, and a failed login evicts nothing.
+    /// An error from `sessions` is logged with a fixed text and never fails the login.
+    ///
+    /// `sessions` is the per-user index of the session store, for example
+    /// [`InMemorySessionStore::principal_sessions`](crate::SessionStore::principal_sessions).
+    /// [`build`](Self::build) fails with [`SecurityBuildError::SessionLimitWithoutFormLogin`]
+    /// when `form_login` is not configured and with [`SecurityBuildError::InvalidSessionLimit`]
+    /// when `max_per_user` is zero.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use oxbloom_core::SystemClock;
+    /// use oxbloom_security::{
+    ///     Argon2PasswordEncoder, DaoAuthenticationProvider, HttpSecurity, InMemorySessionStore,
+    ///     InMemoryUserDetailsService, SecurityBuildError, SessionSettings, SessionStore,
+    /// };
+    ///
+    /// let store = Arc::new(InMemorySessionStore::new(
+    ///     &SessionSettings::default(),
+    ///     Arc::new(SystemClock),
+    /// ));
+    /// let index = store.principal_sessions().expect("the memory store has an index");
+    /// let encoder = Arc::new(Argon2PasswordEncoder::new(8, 1, 1)?);
+    /// let provider = DaoAuthenticationProvider::new(
+    ///     Arc::new(InMemoryUserDetailsService::new(vec![])?),
+    ///     encoder,
+    /// );
+    /// let chain = HttpSecurity::new()
+    ///     .password_provider(Arc::new(provider))
+    ///     .form_login(|f| f)
+    ///     .session_limit(index.clone(), 2)
+    ///     .authorize(|a| a.any_request().authenticated())
+    ///     .build();
+    /// assert!(chain.is_ok());
+    ///
+    /// let err = HttpSecurity::new()
+    ///     .session_limit(index, 2)
+    ///     .authorize(|a| a.any_request().authenticated())
+    ///     .build()
+    ///     .err();
+    /// assert_eq!(err, Some(SecurityBuildError::SessionLimitWithoutFormLogin));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn session_limit(
+        mut self,
+        sessions: Arc<dyn PrincipalSessions>,
+        max_per_user: usize,
+    ) -> Self {
+        self.session_limit = Some((sessions, max_per_user));
+        self
+    }
+
     /// Tunes or turns off the security response headers. See [`HeadersConfig`] for the defaults.
     /// Without this call the defaults apply to every response of the chain.
     /// [`build`](Self::build) fails with [`SecurityBuildError::InvalidHeadersConfig`] when
@@ -554,7 +619,9 @@ impl HttpSecurity {
     /// [`SecurityBuildError::FormLoginWithoutProvider`] when `form_login` has no
     /// `password_provider`, [`SecurityBuildError::CsrfWithoutFormLogin`] when `csrf` was called
     /// without `form_login`, and [`SecurityBuildError::InvalidCsrfConfig`] when the CSRF
-    /// settings fail [`CsrfConfig::validate`], and [`SecurityBuildError::InvalidHeadersConfig`]
+    /// settings fail [`CsrfConfig::validate`], [`SecurityBuildError::SessionLimitWithoutFormLogin`]
+    /// and [`SecurityBuildError::InvalidSessionLimit`] for a session limit without form login or
+    /// of zero, and [`SecurityBuildError::InvalidHeadersConfig`]
     /// when the header settings fail [`HeadersConfig::validate`].
     ///
     /// # Examples
@@ -633,6 +700,11 @@ impl HttpSecurity {
                 csrf.enabled.then_some(csrf)
             }
         };
+        let limit = match (&self.form_login, self.session_limit) {
+            (None, Some(_)) => return Err(SecurityBuildError::SessionLimitWithoutFormLogin),
+            (Some(_), Some((_, 0))) => return Err(SecurityBuildError::InvalidSessionLimit),
+            (_, limit) => limit,
+        };
         let challenges = Challenges {
             basic_realm: self.basic.map(|b| Arc::from(b.realm)),
             bearer: self.bearer,
@@ -657,7 +729,7 @@ impl HttpSecurity {
             entry_point,
             self.access_denied,
             challenges,
-            form_login.map(|settings| FormLoginHandlers::new(settings, csrf)),
+            form_login.map(|settings| FormLoginHandlers::new(settings, csrf, limit)),
             self.headers,
         ))
     }

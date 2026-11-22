@@ -68,6 +68,14 @@ impl FailureAnalyzer for SecurityAnalyzer {
                  HSTS max age is zero.",
                 "Use plain printable header values and an HSTS max age of at least one second.",
             ),
+            SecurityBuildError::SessionLimitWithoutFormLogin => (
+                "A session limit is configured but form login is not.",
+                "Configure `form_login`, or remove the session limit.",
+            ),
+            SecurityBuildError::InvalidSessionLimit => (
+                "The session limit is zero.",
+                "Allow at least one session per user, or remove the session limit.",
+            ),
         };
         Some(FailureAnalysis::new(description, action))
     }
@@ -249,6 +257,24 @@ mod tests {
             SecurityBuildError::InvalidHeadersConfig,
             "A security header value is empty or has a character outside visible ASCII, or the HSTS max age is zero.",
             "Use plain printable header values and an HSTS max age of at least one second.",
+        );
+    }
+
+    #[test]
+    fn session_limit_without_form_login_text() {
+        check(
+            SecurityBuildError::SessionLimitWithoutFormLogin,
+            "A session limit is configured but form login is not.",
+            "Configure `form_login`, or remove the session limit.",
+        );
+    }
+
+    #[test]
+    fn invalid_session_limit_text() {
+        check(
+            SecurityBuildError::InvalidSessionLimit,
+            "The session limit is zero.",
+            "Allow at least one session per user, or remove the session limit.",
         );
     }
 

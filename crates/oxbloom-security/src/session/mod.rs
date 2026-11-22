@@ -37,6 +37,7 @@ pub use error::SessionError;
 pub use filter::{RequestSessionExt, SESSION_ORDER, SessionFilter};
 pub use handle::Session;
 pub use memory::InMemorySessionStore;
+pub(crate) use principal::PRINCIPAL_KEY;
 pub use principal::{PrincipalSessions, SessionRegistry, SessionSummary};
 pub use settings::{SameSite, SecureMode, SessionSettings};
 pub use store::{SessionData, SessionStore};
