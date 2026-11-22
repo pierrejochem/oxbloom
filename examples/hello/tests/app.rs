@@ -140,7 +140,7 @@ async fn a_valid_token_reaches_the_admin_route() {
     let token = encode(
         &Header::new(Algorithm::HS256),
         &claims,
-        &EncodingKey::from_secret(SECRET),
+        &EncodingKey::from_secret(SECRET).unwrap(),
     )
     .unwrap();
     get(app.addr, "/api/hello", None).await;

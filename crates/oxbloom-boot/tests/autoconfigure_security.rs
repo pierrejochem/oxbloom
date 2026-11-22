@@ -128,7 +128,7 @@ fn token() -> String {
     encode(
         &Header::new(Algorithm::HS256),
         &serde_json::json!({ "sub": "alice", "exp": exp }),
-        &EncodingKey::from_secret(SECRET.as_bytes()),
+        &EncodingKey::from_secret(SECRET.as_bytes()).unwrap(),
     )
     .unwrap()
 }
