@@ -1,6 +1,6 @@
 # Sessions
 
-Oxbloom keeps per-browser state in a session. The crate `oxbloom-security` holds the `Session` handle, the `SessionFilter`, two backends and the settings, and the feature `security` of `oxbloom-boot` wires them from the `security.session` keys. This is security Slice 6b. Form login and logout are Slice 6c (see [Form login](21-form-login.md#form-login)); there is no CSRF protection yet (Slice 6d), so read [Limits](#limits) before you build on sessions.
+Oxbloom keeps per-browser state in a session. The crate `oxbloom-security` holds the `Session` handle, the `SessionFilter`, two backends and the settings, and the feature `security` of `oxbloom-boot` wires them from the `security.session` keys. This is security Slice 6b. Form login and logout are Slice 6c (see [Form login](21-form-login.md#form-login)); CSRF tokens (Slice 6d, see [CSRF protection](22-csrf.md#csrf-protection)) protect form login, and the session filter itself does no CSRF check, so read [Limits](#limits) before you build on sessions.
 
 ```toml
 # Cargo.toml
@@ -190,7 +190,7 @@ let app = oxbloom_web::App::new().filter(filter);
 
 ## Limits
 
-- There is no CSRF protection yet; CSRF tokens come with Slice 6d. Until then `SameSite=Lax` is the only mitigation, and it does not stop every cross-site request. `HttpOnly` only keeps scripts from reading the cookie. Do not build state-changing endpoints on sessions for browsers before that. Form login turns exactly this on: after a login the cookie authenticates every route, and the same-origin check of Slice 6c covers only the login and logout posts.
+- The session filter itself does no CSRF check. `SameSite=Lax` does not stop every cross-site request, and `HttpOnly` only keeps scripts from reading the cookie. With form login on, the security chain checks a CSRF token on every unsafe request that the session authenticates (Slice 6d, see [CSRF protection](22-csrf.md#csrf-protection)). An application that authenticates its own sessions without form login must add its own protection. The token is stored in the session under the reserved key `oxbloom.security.csrf-token`, and with the cookie backend an attacker who can plant a sealed cookie also knows that session's token.
 - Form login and logout exist since Slice 6c (see [Form login](21-form-login.md#form-login)). An application that builds its own login should call `rotate_id` at login and `invalidate` at logout. The session keys under the prefix `oxbloom.security.` are reserved for Oxbloom.
 - A stateless cookie cannot be revoked on the server; a copy stays valid until its expiry.
 - The in-memory store is per process: sessions are lost at a restart and not shared between instances.

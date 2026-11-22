@@ -176,9 +176,11 @@ impl VisitController {
     }
 }
 
-/// The protected page for `/me`: an HTML page that shows who is logged in and has a logout
-/// button. It is not in [`PublicPaths`], so the last rule applies: a browser without a login
-/// is redirected to `/login` (served by Oxbloom's default page) and returns here after it.
+/// The protected page for `/me`: an HTML page that shows who is logged in, with a logout button
+/// and a button that resets the visit counter. Both are forms that post the CSRF token in the
+/// hidden field `_csrf`. It is not in [`PublicPaths`], so the last rule applies: a browser
+/// without a login is redirected to `/login` (served by Oxbloom's default page) and returns here
+/// after it.
 ///
 /// # Examples
 ///
@@ -198,33 +200,49 @@ impl VisitController {
 /// assert_eq!(res.status(), 200);
 /// let body = String::from_utf8(res.body().to_vec())?;
 /// assert!(body.contains("&lt;b&gt;x&lt;/b&gt;"));
+/// // Without a session filter there is no token, so the forms have no hidden field.
+/// assert!(!body.contains("_csrf"));
 /// # Ok(())
 /// # }
 /// ```
 #[component]
 pub struct MeController;
 
+/// Escapes a value for HTML text and for a double-quoted attribute.
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
 #[controller("/me")]
 impl MeController {
-    /// `GET /me`: the name of the logged-in user, escaped, and a form that posts to
-    /// `/logout`. Without an authentication (the rules keep that from happening) the answer
-    /// is 401.
+    /// `GET /me`: the name of the logged-in user, escaped, and two forms, one that posts to
+    /// `/logout` and one that posts to `/me/reset-visits`. Each form holds the CSRF token of the
+    /// session in a hidden field named `_csrf`, escaped like the name. Without an authentication
+    /// (the rules keep that from happening) the answer is 401.
     #[get("")]
     async fn me(&self, req: Request) -> Response {
         let Some(auth) = req.authentication() else {
             return StatusCode::UNAUTHORIZED.into_response();
         };
-        let name = auth
-            .principal()
-            .replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
-            .replace('"', "&quot;")
-            .replace('\'', "&#39;");
+        let name = escape_html(auth.principal());
+        // The token exists when a session filter ran. The field name is the default; an
+        // application that sets `security.csrf.field-name` must use that name here.
+        let hidden = req.csrf_token().map_or_else(String::new, |token| {
+            format!(
+                "<input type=\"hidden\" name=\"_csrf\" value=\"{}\">",
+                escape_html(token.as_str())
+            )
+        });
         let body = format!(
             "<!DOCTYPE html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\"><title>Me</title></head>\n\
              <body>\n<h1>Hello, {name}</h1>\n\
-             <form method=\"post\" action=\"/logout\"><button type=\"submit\">Log out</button></form>\n\
+             <form method=\"post\" action=\"/me/reset-visits\">{hidden}<button type=\"submit\">Reset the visit counter</button></form>\n\
+             <form method=\"post\" action=\"/logout\">{hidden}<button type=\"submit\">Log out</button></form>\n\
              </body>\n</html>\n"
         );
         let mut res = Response::new(body.into());
@@ -234,6 +252,24 @@ impl MeController {
             HeaderValue::from_static("text/html; charset=utf-8"),
         );
         h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        res
+    }
+
+    /// `POST /me/reset-visits`: removes the visit counter of `GET /api/visits` from the session
+    /// and redirects to `/me` with 303. The request is a state change of a logged-in session, so
+    /// the chain refuses it with 403 unless it carries the CSRF token.
+    #[post("/reset-visits")]
+    async fn reset_visits(&self, req: Request) -> Response {
+        let Some(session) = req.session() else {
+            return HttpError::new(StatusCode::SERVICE_UNAVAILABLE)
+                .detail("sessions are not configured")
+                .into_response();
+        };
+        session.remove("visits");
+        let mut res = Response::new(Default::default());
+        *res.status_mut() = StatusCode::SEE_OTHER;
+        res.headers_mut()
+            .insert(header::LOCATION, HeaderValue::from_static("/me"));
         res
     }
 }

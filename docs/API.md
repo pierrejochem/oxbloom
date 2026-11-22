@@ -3186,7 +3186,7 @@ let app = App::new()
 - `SessionConfig::from_config(&Config)` with `StoreKind` (`Memory`, `Cookie`) and the constants `SESSION_SECRET_KEY` and `SESSION_OLD_SECRETS_KEY`. Keys: `security.session.store` (`memory`), `.cookie-name` (`OXBLOOM_SESSION`), `.secure` (`auto`), `.same-site` (`lax`; `none` needs `secure = "always"`), `.idle-timeout` (`30m`, at least one second and at most `absolute-timeout`), `.absolute-timeout` (`8h`, positive), `.max-sessions` (`100000`, at least 1), `.max-cookie-bytes` (`3072`, at least 256), `.secret` (at least 32 bytes, required with `store = "cookie"`) and `.old-secrets` (each at least 32 bytes). `secret` and `old-secrets` are refused on the command line (a placeholder can evade this, as for `security.jwt.secret`); `old-secrets` in one environment variable is split on commas, so use the indexed form for a secret that contains a comma.
 - Boot: `SessionAutoConfiguration` (feature `security`). It runs only when the table `security.session` exists, after `PasswordEncoderAutoConfiguration` and before `SecurityAutoConfiguration`. A user `dyn SessionStore` bean replaces the in-memory store with `store = "memory"` and is ignored with `store = "cookie"`; a user `SessionFilter` bean steps the configured one aside but must also be provided as `dyn Filter`; one optional `Arc<dyn Clock>` bean feeds the filter, the store and the cookie backend. The feature `security` of `oxbloom-boot` now also enables `dep:oxbloom-web`.
 - Semver: the trait `SessionStore` has `update` and `maintain`, and `rotate` returns `Result<bool>`.
-- Limits: no CSRF protection yet (until slice 6d, `SameSite=Lax` is the only mitigation; `HttpOnly` only keeps scripts from reading the cookie), form login and logout are in slice 6c (see below), the in-memory store is per process and not shared between instances.
+- Limits: the session filter does no CSRF check itself (`SameSite=Lax` does not stop every cross-site request; `HttpOnly` only keeps scripts from reading the cookie); with form login on, the chain checks a CSRF token (slice 6d, see below); form login and logout are in slice 6c (see below), the in-memory store is per process and not shared between instances.
 
 #### Form login: `FormLogin`, `HttpSecurity::form_login`, `FormLoginConfig`, `is_safe_redirect_target` (slice 6c)
 
@@ -3211,13 +3211,43 @@ let _http = HttpSecurity::new().form_login(move |_| settings);
 - Behaviour of the chain: `POST` of the processing URL checks the same origin (a mismatch is 403; the handler's empty body is rendered as `application/problem+json` by the error filter inside an `App`), reads an `application/x-www-form-urlencoded` body of at most 4 KiB (another type is 400; a larger body, a missing field or invalid UTF-8 is a failed login), authenticates through the `ProviderManager`, rotates the session id, stores the authentication and answers 302 to the saved request or `default_success_url`. Every failure, a provider outage (`ProviderUnavailable`) included, answers the same 302 to `failure_url` and changes no session. `POST` of the logout URL checks the origin, invalidates the session and answers 302 to `logout_success_url`; `GET` of it changes nothing.
 - The session keys `oxbloom.security.authentication` and `oxbloom.security.saved-request` are reserved: the prefix `oxbloom.security.` belongs to Oxbloom, and application code must not set a key under it. The stored authentication is not refreshed, so a role change or a lock takes effect at the next login or at session expiry. Basic and bearer never create a session, and Basic wins over a session.
 - The default entry point is content-negotiated: an anonymous `GET` or `HEAD` that prefers `text/html` gets a 302 to `login_page` and the path and query are saved; every other request keeps the 401 and its challenge and saves nothing. A custom `entry_point(..)` replaces it.
-- The default login page is served only after the router answered 404 for a `GET` or `HEAD` of the login path, when `login_page_enabled` is true, so any 404 at that path (also one an application handler chose) is replaced by the page, and the application's own `GET /login` handler always sees an anonymous user. It has fixed texts for `?error` and `?logout`, `Cache-Control: no-store`, `X-Content-Type-Options: nosniff` and the fixed `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; form-action 'self'`. It has no `frame-ancestors` and no `X-Frame-Options`, so it can be framed (a clickjacking limit, to be addressed with slice 6d). Through `App::handle` a `HEAD` answer keeps its body.
+- The default login page is served only after the router answered 404 for a `GET` or `HEAD` of the login path, when `login_page_enabled` is true, so any 404 at that path (also one an application handler chose) is replaced by the page, and the application's own `GET /login` handler always sees an anonymous user. It has fixed texts for `?error` and `?logout`, `Cache-Control: no-store`, `X-Content-Type-Options: nosniff` and the fixed `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; form-action 'self'`. With CSRF on (slice 6d) it also has `frame-ancestors 'none'` in the policy and `X-Frame-Options: DENY`, and a hidden CSRF field. Through `App::handle` a `HEAD` answer keeps its body.
 - Only `POST` of the processing and logout URLs and `GET` or `HEAD` of the login page skip the authorization rules. The success and failure URLs are not exempt: a custom `failure_url` or `logout_success_url` on another path needs a `permit_all` rule.
-- Limits: no CSRF tokens yet. The same-origin check (`Origin`, else `Referer`, against the request's own scheme, host and port, honouring the trusted forwarded headers; `Origin: null` is rejected) and the `SameSite=Lax` cookie are the interim measure, and a request with neither `Origin` nor `Referer` is allowed.
+- Limits: the same-origin check (`Origin`, else `Referer`, against the request's own scheme, host and port, honouring the trusted forwarded headers; `Origin: null` is rejected) covers only the login and logout posts, and a request with neither `Origin` nor `Referer` is allowed. The CSRF token of slice 6d is checked after it on those two posts and protects the rest (see below).
 - Boot: see `SecurityAutoConfiguration` in section 4.8.
 
-Roadmap: slice 6d (CSRF), 7 (session management,
-security headers), 8 (method security), 9 (OAuth2 login and client). Not implemented: CSRF tokens,
+#### CSRF tokens: `CsrfConfig`, `CsrfToken`, `CsrfProperties`, `HttpSecurity::csrf`, `RequestSessionExt::csrf_token` (slice 6d)
+
+Guide: [CSRF protection](guide/22-csrf.md). Decisions: [ADR 0089](adr/0089-csrf-tokens.md).
+
+```rust
+use oxbloom_security::{CsrfConfig, HttpSecurity, RequestSessionExt};
+use oxbloom_web::{HttpMethod, Request};
+
+// With `form_login` on, CSRF protection is on with these defaults; `csrf` tunes or disables it.
+let defaults = CsrfConfig::default();
+assert!(defaults.enabled);
+assert_eq!(defaults.field_name, "_csrf");
+assert_eq!(defaults.header_name, "X-CSRF-TOKEN");
+let _http = HttpSecurity::new().csrf(|c| c.token_endpoint("/csrf"));
+// `None` when no session filter ran; a token has no `Display`, use `as_str` for a template.
+assert!(Request::new(HttpMethod::Get, "/").csrf_token().is_none());
+```
+
+- `HttpSecurity::csrf(|c| ..)` takes a closure from the defaults to a `CsrfConfig`. With `form_login` on and `csrf` never called, the check is on with the defaults. `build` fails with `SecurityBuildError::CsrfWithoutFormLogin` when `csrf` was called without `form_login` (also with `enabled(false)`) and with `SecurityBuildError::InvalidCsrfConfig` when `CsrfConfig::validate` fails. Both variants are new, and the texts hold no value.
+- `CsrfConfig` (`Debug`, `Clone`, `PartialEq`, `Eq`; nothing in it is secret) has the public fields and builder setters `enabled` (`true`), `field_name` (`_csrf`), `header_name` (`X-CSRF-TOKEN`) and `token_endpoint` (none), and `validate(&[&str]) -> Result<(), SecurityBuildError>`. `validate` rejects an empty name or one with characters other than ASCII letters, digits, `-` and `_`, and a token endpoint that fails `is_safe_redirect_target` or has the same path (before `?`) as one of the given form login paths.
+- `CsrfToken`: 32 random bytes from the `aws-lc-rs` provider, 43 characters of base64url without padding. It has no `Display` and a redacting `Debug`; `as_str()` gives the value for a template, and it must never be logged. Comparison with a submitted value is constant time, also in the length, and an empty value fails.
+- `RequestSessionExt::csrf_token(&self) -> Option<CsrfToken>`: the token of the session of the request, created and stored when missing; `None` when no session filter ran. It creates no session, and a token created in a new session marks it for writing, so the cookie is set. A stored value that is not a valid token is replaced.
+- `CsrfProperties::from_config(&Config, form_login_enabled: bool) -> Result<Option<CsrfConfig>, ConfigError>` reads `security.csrf.{enabled,field-name,header-name,token-endpoint}`. With form login on it always gives `Some`, with `enabled` defaulting to `true`. With form login off it gives `None`, and `enabled = true` and every other `security.csrf` key are errors that name the key (`enabled = false` alone is accepted). It rejects unknown keys, wrong types, a bad name and a bad endpoint, naming the key and never the value. That the endpoint differs from the form login paths is checked later, by `HttpSecurity::build`.
+- Behaviour of the chain: a request is checked when its method is not `GET`, `HEAD`, `OPTIONS` or `TRACE` (so `CONNECT` and unknown methods are checked) and the session authenticates it, and on `POST` of the login and logout URLs, which also pass the same-origin check first. The token comes from the header `header_name`, else from the field `field_name` of an `application/x-www-form-urlencoded` body of at most 4 KiB; the first value wins, the query string is never read, and a multipart or JSON body without the header fails. A failed check answers a fixed 403 with an empty body (rendered as `application/problem+json` inside an `App`), skips a custom `access_denied` handler and changes nothing. `Basic` and bearer requests, anonymous requests without a session and anonymous requests with a pre-login session are not checked. Login rotates the session id and replaces the token; logout invalidates the session. A refused login without a session filter logs the fixed error "form login has no session: add a SessionFilter to the application".
+- The token header is marked sensitive by the chain, so the `Debug` output of a request shows `Sensitive` for it. The form field is part of the body and is visible in that output, like the password of the login form.
+- The token is stored under the session key `oxbloom.security.csrf-token`; the prefix `oxbloom.security.` is reserved.
+- The default login page, with CSRF on, creates the pre-login session and the token (when the fallback renders it), writes the hidden field and adds `frame-ancestors 'none'` and `X-Frame-Options: DENY`. When `token_endpoint` is set, a `GET` of that exact path answers 200 with `Content-Type: application/json`, `Cache-Control: no-store` and `{"headerName":"..","parameterName":"..","token":".."}`, creating the session and token when missing. The chain answers it before the application route. Without a session filter it logs the same fixed error and the request goes on to the application. The page and the endpoint are anonymous session writers, bounded by sampled eviction.
+- Limits: a script on the same origin (XSS) can read the token; a multipart form needs the header; with the cookie backend an attacker who can plant a sealed cookie also knows that session's token; only the login page is protected against framing; the same-origin check still covers only login and logout; anonymous requests with no session, and with a pre-login session, are exempt; an application that rotates the session inside its handler while it answers a `404` for the login page gets a page with a dead token.
+- Boot: see `SecurityAutoConfiguration` in section 4.8.
+
+Roadmap: slice 7 (session management,
+security headers), 8 (method security), 9 (OAuth2 login and client). Not implemented:
 method security, OAuth2 login, opaque-token introspection, several chains per app, login rate limiting, database user stores.
 
 ### 4.8 `oxbloom-boot`
@@ -3809,7 +3839,7 @@ configured users alone never open Basic. With Basic on and no provider bean the 
 `HttpBasicWithoutProvider`. With `security.form-login.enabled = true` it also calls `form_login` with the settings of
 `FormLoginConfig::from_config`; that needs the table `security.session` (without it the startup
 fails with an error that names `security.session`) and a password provider bean (without one the
-build fails with `FormLoginWithoutProvider`, whose text names no key). Its metadata lists the ten `security.form-login.*` keys, and the two
+build fails with `FormLoginWithoutProvider`, whose text names no key). `SecurityAutoConfiguration` also reads `CsrfProperties::from_config` with the form login switch: with form login on it calls `csrf` with the settings (the check is on unless `security.csrf.enabled` is `false`), and an invalid name or endpoint fails the startup with the key named, or with `SecurityBuildError::InvalidCsrfConfig` when the endpoint collides with a form login path. With form login off it never calls `csrf`, and `security.csrf.enabled = true` or any other `security.csrf` key fails the startup naming the key. Its metadata lists the ten `security.form-login.*` keys and the four `security.csrf.*` keys, and the two
 `security.http-basic.*` keys it reads are in the metadata of `PasswordEncoderAutoConfiguration`.
 
 ```rust
@@ -6397,7 +6427,7 @@ Compile-fail tests use `trybuild` (`tests/ui/*.rs` with `.stderr` snapshots). Re
 
 ## Not implemented
 
-CSRF tokens, method security, OAuth2 login, login rate limiting, Redis and SQL session stores, database user stores, database, jobs and queue, metrics and
+Method security, OAuth2 login, login rate limiting, Redis and SQL session stores, database user stores, database, jobs and queue, metrics and
 other observability beyond the actuator, React integration, `oxbloom-ai`, `oxbloom add`, MVC web style. In
 boot: analysis of failures after startup, a report format other than text. In DI: transient and request scopes,
 injection of single configuration properties, qualifiers by name, async lifecycle hooks and

@@ -627,7 +627,7 @@ Delivered:
 Gate numbers at the end of Slice 6b: `cargo test --workspace --all-features --no-fail-fast` 2993 passed, 0 failed, 8 ignored (2821 before Slice 6b); `cargo test -p oxbloom-boot` per feature: none 475, `security` 475, `web` 475, `logging` 495, `ssl` 475, `actuator` 488, `tasks` 499, all features 533, each with 0 failed and 1 ignored (the probe); `make check-examples` 61 (59 before); clippy `-D warnings` and `cargo fmt --check` clean; the boot stack probes are unchanged at 238 KB (237 overflows) and 239 KB with all features (238 overflows); the `cargo build -p oxbloom-boot` builds for `tasks`, `tasks,logging`, `tasks,ssl`, `tasks,security`, `tasks,actuator`, `security`, `security,logging`, `security,web` and `web`, each with default features off, pass, and the `--no-default-features --features tasks` doc tests (114) pass; `cargo tree -i ring --workspace --all-features` finds no `ring`. One flaky test showed up in the gate and is not part of this slice: `repeat_warning_comes_after_24_hours_not_before` in `crates/oxbloom-ssl/tests/validity.rs` (from C7, commit fa7d072) failed in one of two full runs and in about 2 of 9 runs on its own, and passed in the other runs; the slice does not touch `oxbloom-ssl`.
 
 Limits that users must know (also in the guide):
-- There is no CSRF protection yet: until Slice 6d, `SameSite=Lax` is the only mitigation. `HttpOnly` keeps scripts from reading the cookie and does nothing against cross-site requests. Login and logout came with Slice 6c.
+- (Closed by Slice 6d, which added CSRF tokens.) There was no CSRF protection in Slice 6b: `SameSite=Lax` was the only mitigation. `HttpOnly` keeps scripts from reading the cookie and does nothing against cross-site requests. Login and logout came with Slice 6c.
 - A stateless cookie cannot be revoked on the server: a copy stays valid until its expiry. With the stateless backend `Session::id()` is random on every request.
 - Random nonces cap one key at about 2^32 writes, so the secret should be rotated periodically.
 - The in-memory store is per process: sessions are lost at a restart and not shared between instances. The global cap evicts the oldest-touched session; Slice 6c replaced the O(n) scan per new save at the cap with sampled eviction (constant cost per write), and the cap can be exceeded by the number of racing saves. An anonymous flood that writes sessions, such as `GET /api/visits` in the todos example, can still fill the cap and then evict real users' sessions.
@@ -639,7 +639,7 @@ Limits that users must know (also in the guide):
 Follow-ups from Slice 6b, not yet scheduled:
 - Login and logout endpoints and form login: done in Slice 6c.
 - Sampled eviction in the in-memory store: done in Slice 6c.
-- CSRF protection (Slice 6d).
+- CSRF protection: done in Slice 6d.
 - Redis and SQL session stores (they must implement `update` and `rotate` as conditional writes).
 
 Notes for Slice 6c:
@@ -687,7 +687,7 @@ Rulings made during Slice 6b:
 - Work happens on the branch `s6b-sessions`, started from `s6a-password-basic`.
 
 ### Security Slice 6c: Form login (`oxbloom-security`) — done
-Done on 2026-11-15; the design is the Slice 6c spec `2026-11-15-form-login-design.md` and the plan is `2026-11-15-form-login.md` (both local files under `docs/superpowers`, named here without a link), usage is in the guide chapter `docs/guide/21-form-login.md` and `docs/API.md` (section 4.7, the form login subsection, and `SecurityAutoConfiguration`), and decisions are in ADR 0088. CSRF tokens are Slice 6d.
+Done on 2026-11-15; the design is the Slice 6c spec `2026-11-15-form-login-design.md` and the plan is `2026-11-15-form-login.md` (both local files under `docs/superpowers`, named here without a link), usage is in the guide chapter `docs/guide/21-form-login.md` and `docs/API.md` (section 4.7, the form login subsection, and `SecurityAutoConfiguration`), and decisions are in ADR 0088. CSRF tokens came with Slice 6d.
 
 Delivered:
 - In `oxbloom-security`: `FormLogin` (the settings and their builder), `HttpSecurity::form_login`, `FormLoginConfig` (the reader of `security.form-login`), `is_safe_redirect_target`, the new `SecurityBuildError` variants `FormLoginWithoutProvider` and `InvalidFormLoginUrl`, and `Serialize` and `Deserialize` for `Authentication`. The chain restores the `Authentication` from the session, handles `POST /login` and `POST /logout` after a same-origin check, saves the request of an anonymous browser (`GET` or `HEAD` with `Accept: text/html`) and answers 302 to the login page, redirects back after the login, and serves a default login page after the router answered 404 for it.
@@ -695,22 +695,22 @@ Delivered:
 - Sampled eviction in `InMemorySessionStore`: the oldest of a sample of at most 16 entries, starting at a random shard and a random position within the first 64 entries of it; the method `eviction_probes` is hidden from the docs and exists for the tests.
 - In `oxbloom-boot` (feature `security`): `SecurityAutoConfiguration` applies `form_login` when `security.form-login.enabled` is true, with ten property metadata entries (`security.form-login.*`); it needs the table `security.session` and a password provider bean.
 - `examples/todos`: the HTML page `GET /me` behind the login, `[security.form-login]` in `application.toml`, a test `tests/login.rs` and README notes.
-- ADR 0088, the guide chapter 21 (the roadmap chapter is now 22) and the API section.
+- ADR 0088, the guide chapter 21 (the roadmap chapter is now 23) and the API section.
 
 Gate numbers at the end of Slice 6c: `cargo test --workspace --all-features --no-fail-fast` 3097 passed, 0 failed, 8 ignored (2993 before Slice 6c); `cargo test -p oxbloom-boot` per feature: none 484, `security` 484, `web` 484, `logging` 504, `ssl` 484, `actuator` 497, `tasks` 508, all features 542, each with 0 failed and 1 ignored (the probe); `make check-examples` 63 (61 before); clippy `-D warnings` and `cargo fmt --check` clean; the boot stack probes are unchanged at 238 KB (237 overflows) and 239 KB with all features (238 overflows); the nine `cargo build -p oxbloom-boot` builds for `tasks`, `tasks,logging`, `tasks,ssl`, `tasks,security`, `tasks,actuator`, `security`, `security,logging`, `security,web` and `web`, each with default features off, pass; `cargo tree -i ring --workspace --all-features` finds no `ring`. The flaky `oxbloom-ssl` validity test from Slice 6b did not fail in this gate run.
 
 Limits that users must know (also in the guide):
-- No CSRF tokens yet: the same-origin check and `SameSite=Lax` are the interim measure. A request with neither `Origin` nor `Referer` is allowed. Slice 6d adds tokens.
+- (Closed by Slice 6d.) Slice 6c had no CSRF tokens: the same-origin check and `SameSite=Lax` were the interim measure. A request with neither `Origin` nor `Referer` is still allowed by that check; Slice 6d added tokens on top of it.
 - The stored authentication is not refreshed: a role change or a lock takes effect at the next login or at session expiry.
 - Login always rotates the session id. API clients get 401 and no session. Basic and bearer never create a session, and Basic wins over a session.
-- The default login page is served only after the router answered 404 for a `GET` or `HEAD` of the login path, so any 404 at that path, even one that an application handler chose deliberately, is replaced by the page. It has a fixed CSP and fixed texts and no `frame-ancestors` or `X-Frame-Options`, so it can be framed; that clickjacking limit is to be addressed with Slice 6d. On `HEAD` the page keeps its body when seen through `App::handle`.
+- The default login page is served only after the router answered 404 for a `GET` or `HEAD` of the login path, so any 404 at that path, even one that an application handler chose deliberately, is replaced by the page. It has a fixed CSP and fixed texts. In Slice 6c it had no `frame-ancestors` or `X-Frame-Options`; Slice 6d added both. On `HEAD` the page keeps its body when seen through `App::handle`.
 - The success and failure URLs are not exempt from the authorization rules; only `POST` login, `POST` logout and `GET` or `HEAD` of the login page are. A custom `failure_url` or `logout_success_url` on a path other than the login page needs a `permit_all` rule, otherwise the user is redirected to the login page again. The defaults work.
 - The application's own `GET /login` handler always sees an anonymous user. An outage of the password provider (`ProviderUnavailable`) answers the same 302 as any failed login.
 - Sampled eviction: the in-memory store evicts the oldest of a sample of at most 16 entries, starting at a random shard and a random position within the first 64 entries of it, at constant cost per write. An anonymous flood of `Accept: text/html` requests to protected paths can still fill the cap and evict real sessions, and overshoot from racing saves persists until expiry or a sweep.
 - The redirect-target rule: a single leading `/`, no `//` or `/\` start, no control character or backslash, no `://` before the first `?`, at most 2048 bytes, and rechecked at use.
 
 Follow-ups from Slice 6c, not yet scheduled:
-- CSRF protection (Slice 6d), which also has to address the framing of the default login page.
+- CSRF protection and the framing of the default login page: done in Slice 6d.
 - Refreshing or revalidating the stored authentication.
 - Remember-me, concurrent-session limits, OAuth2 login, registration, password reset and per-user rate limiting.
 - A themeable login page.
@@ -738,7 +738,64 @@ Deferred minors from the 6c reviews:
 Rulings made during Slice 6c:
 - The branch is `s6c-form-login`, started from `s6b-sessions`; nothing is pushed.
 - The stored authentication is not refreshed, and a request with neither `Origin` nor `Referer` passes the same-origin check, because non-browser clients send neither.
-- The default login page is the fallback for a 404 of the router, and it stays frameable until Slice 6d.
+- The default login page is the fallback for a 404 of the router, and it stayed frameable until Slice 6d.
+
+### Security Slice 6d: CSRF tokens (`oxbloom-security`) — done
+Done on 2026-11-22; the design is the Slice 6d spec `2026-11-22-csrf-design.md` and the plan is `2026-11-22-csrf.md` (both local files under `docs/superpowers`, named here without a link), usage is in the guide chapter `docs/guide/22-csrf.md` and `docs/API.md` (section 4.7, the CSRF subsection, and `SecurityAutoConfiguration`), and decisions are in ADR 0089.
+
+Delivered:
+- In `oxbloom-security`: `CsrfConfig` (the settings and their builder, with `validate`), `CsrfToken` (no `Display`, a redacting `Debug`, `as_str`), `CsrfProperties` (the reader of `security.csrf`), `HttpSecurity::csrf`, `RequestSessionExt::csrf_token`, and the new `SecurityBuildError` variants `CsrfWithoutFormLogin` and `InvalidCsrfConfig`.
+- A synchronizer token of 32 random bytes (43 characters of base64url) in the session under the reserved key `oxbloom.security.csrf-token`, created lazily and never by the check. The chain checks it for every method except `GET`, `HEAD`, `OPTIONS` and `TRACE` when the session authenticates the request, and on the login and logout posts. The header `X-CSRF-TOKEN` or the urlencoded field `_csrf` carries it. A failed check is a fixed empty 403 that changes nothing.
+- Login replaces the token, logout drops it. The default login page creates the pre-login session, carries the token in a hidden field and adds `frame-ancestors 'none'` and `X-Frame-Options: DENY`. An optional token endpoint (`security.csrf.token-endpoint`) answers `{"headerName":..,"parameterName":..,"token":..}`.
+- In `oxbloom-boot` (feature `security`): `SecurityAutoConfiguration` calls `csrf` with the `security.csrf` settings when form login is on, with four property metadata entries (`security.csrf.*`); the boot stack probes did not grow.
+- `examples/todos`: the `/me` page has two forms that post the token, `POST /me/reset-visits` needs it, the tests `tests/csrf.rs` and `tests/login.rs` use the token flow, and the README and `application.toml` describe it.
+- ADR 0089, the guide chapter 22 (the roadmap chapter is now 23) and the API section.
+
+Gate numbers at the end of Slice 6d: to be filled by the controller after the final gate.
+
+Limits that users must know (also in the guide):
+- The checked set is every method except `GET`, `HEAD`, `OPTIONS` and `TRACE`, so `CONNECT` and an unknown method fail closed. The spec text listed four methods; the code is stricter.
+- Anonymous requests with no session are exempt, and so is an anonymous `POST` that carries a pre-login session without a login. `Basic` and bearer requests are exempt, also with a stray session cookie.
+- A failed check answers a fixed empty 403 and skips a custom `access_denied` handler, the same as the same-origin 403 of 6c.
+- A script on the same origin (XSS) can read the token. A multipart form needs the header, because the reader parses only urlencoded bodies. The `_csrf` field is part of the body and is visible in the `Debug` output of the request, like the 6c password; the header is marked sensitive.
+- With the cookie backend an attacker who can plant a sealed cookie also knows that session's token, so the token cannot stop that attack.
+- The login page and the token endpoint are anonymous session writers, bounded by sampled eviction but not prevented. Only the login page is protected against framing.
+- The same-origin check still covers only the login and logout posts, and it allows a request with neither `Origin` nor `Referer`.
+- The chain answers the token endpoint before the application route, so the endpoint wins on a collision. An application that invalidates or rotates the session inside its handler while it answers a `404` for the login page gets a page with a token that is no longer valid (a corner case).
+- `HttpSecurity::csrf` without `form_login` fails the build, also with `enabled(false)`. With form login off, every `security.csrf` key except `enabled = false` fails the startup and names the key. The reserved session keys now are `oxbloom.security.authentication`, `oxbloom.security.saved-request` and `oxbloom.security.csrf-token`.
+
+Follow-ups from Slice 6d, not yet scheduled:
+- A general security-headers filter, a signed double-submit cookie, a script-readable token cookie, multipart parsing, per-request tokens and extending the origin check to the application's routes.
+
+Deferred minors from the 6d reviews:
+- The doc examples on `CsrfToken` are vacuous, because there is no `compile_fail` example for the missing `Display`.
+- There are no tests for the case of the content type or for a header value that is not UTF-8.
+- `CsrfToken::from_stored` accepts a non-canonical base64 value.
+- One bad unrelated pair in a form body fails the whole body read for the token. This is inherited from 6c and fails closed.
+- The rustdoc of `csrf_token` should say that a created token marks a new session for writing, which sets the cookie.
+- The corrupt-token test does not check that the replacement is persisted, and an optional `debug_assert` on the result of the session `set` could be added.
+- The test of the safe methods `OPTIONS` and `TRACE` asserts only that the answer is not 403.
+- A rustdoc line of `HttpSecurity::csrf` in `http_security.rs` is too long.
+- The `unwrap_or_else` fallback of the JSON helper in `form_login/handlers.rs` is unreachable.
+- The doc of the token endpoint says that the missing session filter is logged once, but it is logged on every request.
+- The test names in `csrf_page.rs` overclaim: `off_by_default` asserts only that the answer is not 200, and `only_anonymous_write` checks one `GET`. One comment there is garbled.
+- The token endpoint is handled in two separate chain calls, one for the match and one for the answer.
+- Two no-echo probes in the tests of `properties.rs` are weak.
+- There is no test of `enabled = false` together with a bad name or endpoint, in the reader or in boot.
+- The test of the 403 body checks only its wording.
+- There is no test that the default `_csrf` field is rejected when a custom field name is configured.
+- The boot collision test covers only `/login`.
+- `CsrfProperties` is a unit struct that only serves as a namespace.
+- A configured token endpoint is silently ignored when `enabled = false`.
+
+Rulings made during Slice 6d:
+- The branch is `s6d-csrf`, started from `main`; nothing is pushed.
+- The check is in the chain and not in a separate filter, because the chain knows which credentials authenticated the request.
+- A failed check answers a fixed empty 403 and does not use a custom `access_denied` handler.
+- The checked set is every unsafe method, and `HttpSecurity::csrf` without `form_login` fails the build even with `enabled(false)`.
+- With form login off, every `security.csrf` key except `enabled = false` fails the startup, which is stricter than the first plan.
+- The token endpoint without a session filter logs the fixed error and passes the request on to the application. The login page gets its token only when Oxbloom renders it.
+- A refused login without a session filter logs the "add a SessionFilter" error and still answers 403.
 
 ### C10: Test support (`oxbloom-test`)
 
@@ -793,7 +850,7 @@ Deferred minors from the C10b reviews:
 
 1. **C2 Configuration v2.** Smallest dependencies, fixes open defects, and every other slice reads config.
 2. **C1 DI v2** (done). Required by C3, C4, C8 and C10.
-3. **Security Slice 6** (`PasswordEncoder`, `UserDetailsService`, Basic, form login and sessions): 6a (password encoding, user details, HTTP Basic), 6b (sessions) and 6c (form login and logout) are done, 6d (CSRF) is open. It needs beans with lifecycle and typed config, so it comes after C1 and C2.
+3. **Security Slice 6** (`PasswordEncoder`, `UserDetailsService`, Basic, form login and sessions): 6a (password encoding, user details, HTTP Basic), 6b (sessions), 6c (form login and logout) and 6d (CSRF tokens) are done. It needs beans with lifecycle and typed config, so it comes after C1 and C2.
 4. **C3 Application lifecycle** with `FailureAnalyzer` (done: C3a and C3b).
 5. **C5 Logging** (C5a and C5b done), then **C6 Web server properties, errors and JSON** (C6a, C6b-1 and C6b-2 done).
 6. **C4 Conditions and auto-configuration** (C4a, the mechanism, and C4b, auto-configuring the existing wiring with property metadata, done).

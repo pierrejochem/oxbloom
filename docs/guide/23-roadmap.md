@@ -8,7 +8,7 @@ Security slices:
 | 6a (done) | `PasswordEncoder` (Argon2id), `UserDetailsService`, `DaoAuthenticationProvider`, HTTP Basic; see [Password login](19-password-login.md#password-login) |
 | 6b (done) | Sessions: `Session`, `SessionFilter`, an in-memory store and a stateless encrypted cookie; see [Sessions](20-sessions.md#sessions) |
 | 6c (done) | Form login: login and logout handlers, the `Authentication` in the session, a saved request, a default login page, sampled eviction; see [Form login](21-form-login.md#form-login) |
-| 6d | CSRF protection |
+| 6d (done) | CSRF protection: a synchronizer token in the session, checked in the chain, the login page field and framing headers, an optional token endpoint; see [CSRF protection](22-csrf.md#csrf-protection) |
 | 7 | Session management, security headers |
 | 8 | Method security (`@PreAuthorize` equivalent) |
 | 9 | OAuth2 login and client |

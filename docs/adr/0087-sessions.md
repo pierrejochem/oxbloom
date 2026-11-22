@@ -74,7 +74,7 @@ Good:
 
 Bad:
 
-- There is no CSRF protection. The only mitigation is `SameSite=Lax`, which does not stop every cross-site request; CSRF needs tokens or `Origin` checks, which come with Slice 6d. `HttpOnly` only keeps scripts from reading the cookie and does nothing against cross-site requests. Do not build state-changing session endpoints for browsers before Slice 6d.
+- There is no CSRF protection in this slice. The only mitigation is `SameSite=Lax`, which does not stop every cross-site request; CSRF needs tokens or `Origin` checks, which come with Slice 6d (done, see [ADR 0089](0089-csrf-tokens.md)). `HttpOnly` only keeps scripts from reading the cookie and does nothing against cross-site requests. Do not build state-changing session endpoints for browsers before Slice 6d.
 - There is no login or logout endpoint in this slice, so an application builds its own on `Session` (Slice 6c adds them, see [ADR 0088](0088-form-login.md)).
 - A stateless cookie cannot be revoked on the server. A stolen copy works until it expires.
 - The in-memory store is per process, loses its sessions at a restart, and its eviction at the cap was O(n) per new save in this slice (Slice 6c made it constant, see [ADR 0088](0088-form-login.md)); an anonymous flood that writes sessions can evict the sessions of real users. The global cap can be exceeded by the number of racing saves.
