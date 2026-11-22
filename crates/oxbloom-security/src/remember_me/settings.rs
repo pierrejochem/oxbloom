@@ -13,13 +13,13 @@ use crate::http_security::SecurityBuildError;
 use crate::session::is_valid_cookie_name;
 
 /// The shortest secret, current or old, in bytes.
-const MIN_SECRET_BYTES: usize = 32;
+pub(super) const MIN_SECRET_BYTES: usize = 32;
 /// The default cookie lifetime: 14 days.
-const DEFAULT_LIFETIME: Duration = Duration::from_secs(14 * 24 * 3600);
+pub(super) const DEFAULT_LIFETIME: Duration = Duration::from_secs(14 * 24 * 3600);
 /// The shortest allowed lifetime: 1 minute.
-const MIN_LIFETIME: Duration = Duration::from_secs(60);
+pub(super) const MIN_LIFETIME: Duration = Duration::from_secs(60);
 /// The longest allowed lifetime: 365 days.
-const MAX_LIFETIME: Duration = Duration::from_secs(365 * 24 * 3600);
+pub(super) const MAX_LIFETIME: Duration = Duration::from_secs(365 * 24 * 3600);
 
 /// The remember-me settings inside [`HttpSecurity::remember_me`](crate::HttpSecurity::remember_me).
 ///

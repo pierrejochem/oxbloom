@@ -143,7 +143,7 @@ pub use password::{
 };
 pub use password_config::{Argon2Settings, HttpBasicSettings, PasswordSettings, users_from_config};
 pub use provider::{AuthenticationProvider, ProviderManager};
-pub use remember_me::RememberMe;
+pub use remember_me::{RememberMe, RememberMeProperties, RememberMeSettings};
 #[cfg(feature = "jwks")]
 pub use reqwest_fetcher::ReqwestJwksFetcher;
 pub use session::{

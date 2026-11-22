@@ -490,13 +490,15 @@ fn metadata_lists_exactly_the_keys_read() {
         Some(settings.argon2.parallelism.to_string().as_str())
     );
     assert_eq!(default_of("security.users.<name>.password"), None);
-    // Security lists the `security.form-login`, `security.csrf` and `security.headers` keys
-    // only (see `autoconfigure_form_login.rs`, `autoconfigure_csrf.rs` and
-    // `autoconfigure_session_management.rs`).
+    // Security lists the `security.form-login`, `security.csrf`, `security.headers` and
+    // `security.remember-me` keys only (see `autoconfigure_form_login.rs`,
+    // `autoconfigure_csrf.rs`, `autoconfigure_session_management.rs` and
+    // `autoconfigure_remember_me.rs`).
     assert!(SecurityAutoConfiguration::properties().iter().all(|p| {
         p.key.starts_with("security.form-login.")
             || p.key.starts_with("security.csrf.")
             || p.key.starts_with("security.headers.")
+            || p.key.starts_with("security.remember-me.")
     }));
 }
 

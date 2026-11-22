@@ -1049,6 +1049,39 @@ impl TestResponse {
         self.inner.headers().get(name)?.to_str().ok()
     }
 
+    /// Returns every value of the header `name` as text, in order, such as each `Set-Cookie`
+    /// of a response. A value that is not valid UTF-8 text is left out.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_test::TestClient;
+    /// use oxbloom_web::{App, HttpMethod, Route};
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let app = App::new().route(Route::new(HttpMethod::Get, "/two", |_| async {
+    ///     http::Response::builder()
+    ///         .header("set-cookie", "a=1")
+    ///         .header("set-cookie", "b=2")
+    ///         .body(bytes::Bytes::new())
+    ///         .unwrap()
+    /// }))?;
+    /// let res = TestClient::in_memory(app).get("/two").send().await;
+    /// assert_eq!(res.header_all("set-cookie"), ["a=1", "b=2"]);
+    /// assert!(res.header_all("x-missing").is_empty());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn header_all(&self, name: &str) -> Vec<&str> {
+        self.inner
+            .headers()
+            .get_all(name)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .collect()
+    }
+
     /// Returns the body bytes.
     ///
     /// # Examples

@@ -7,6 +7,7 @@
 
 mod autologin;
 mod cookie;
+mod properties;
 mod settings;
 mod token;
 
@@ -14,6 +15,7 @@ pub(crate) use autologin::{
     AutoLogin, Checked, check_token, invalid_cookie, no_session_error, remember_me_token,
 };
 pub(crate) use cookie::{clear_cookie, issue_cookie, sets_cookie};
+pub use properties::{RememberMeProperties, RememberMeSettings};
 pub use settings::RememberMe;
 pub(crate) use token::TokenCodec;
 
