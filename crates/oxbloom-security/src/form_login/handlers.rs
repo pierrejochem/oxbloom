@@ -31,6 +31,14 @@ struct MalformedForm;
 
 const FORM_CONTENT_TYPE: &str = "application/x-www-form-urlencoded";
 
+/// Logs that form login found no session, which means the application has no session filter.
+fn no_session_error() {
+    tracing::error!(
+        target: "oxbloom::security",
+        "form login has no session: add a SessionFilter to the application"
+    );
+}
+
 fn status(status: StatusCode) -> Response {
     let mut res = Response::new(Default::default());
     *res.status_mut() = status;
@@ -211,17 +219,21 @@ impl FormLoginHandlers {
     async fn login(&self, req: &Request, manager: Option<&ProviderManager>) -> Response {
         // The origin first, the token second, both before the form is read or the provider is
         // asked, and both with the same answer.
-        if !same_origin(req) || !self.csrf_passes(req) {
+        if !same_origin(req) {
+            return status(StatusCode::FORBIDDEN);
+        }
+        if !self.csrf_passes(req) {
+            // The answer stays the same 403; only the log names the missing filter.
+            if req.session().is_none() {
+                no_session_error();
+            }
             return status(StatusCode::FORBIDDEN);
         }
         if !is_form(req) {
             return status(StatusCode::BAD_REQUEST);
         }
         let Some(session) = req.session() else {
-            tracing::error!(
-                target: "oxbloom::security",
-                "form login has no session: add a SessionFilter to the application"
-            );
+            no_session_error();
             return redirect(&self.settings.failure_url, "/");
         };
         let form = if req.body_too_large() {

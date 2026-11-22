@@ -12,12 +12,13 @@ use super::store::peek_token;
 use super::{CsrfConfig, submitted_token};
 use crate::RequestSessionExt;
 
-/// Whether a request with this method changes state and so needs a token: `POST`, `PUT`,
-/// `PATCH` or `DELETE`.
+/// Whether a request with this method may change state and so needs a token: every method
+/// except the safe `GET`, `HEAD`, `OPTIONS` and `TRACE`. `CONNECT` and any other method token
+/// are checked, so an unknown method fails closed.
 pub(crate) fn is_checked_method(method: &HttpMethod) -> bool {
-    matches!(
+    !matches!(
         method,
-        HttpMethod::Post | HttpMethod::Put | HttpMethod::Patch | HttpMethod::Delete
+        HttpMethod::Get | HttpMethod::Head | HttpMethod::Options | HttpMethod::Trace
     )
 }
 
@@ -90,6 +91,8 @@ mod tests {
             HttpMethod::Put,
             HttpMethod::Patch,
             HttpMethod::Delete,
+            HttpMethod::Connect,
+            HttpMethod::Other("PURGE".to_owned()),
         ] {
             assert!(is_checked_method(&m), "{m:?}");
         }

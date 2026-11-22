@@ -198,6 +198,7 @@ impl Client {
             HttpMethod::Put,
             HttpMethod::Patch,
             HttpMethod::Delete,
+            HttpMethod::Other("PURGE".to_owned()),
         ] {
             for path in ["/items", "/open"] {
                 let changes = changes.clone();
@@ -718,6 +719,35 @@ async fn session_expired_between_page_and_post_is_403() {
     }
 }
 
+#[tokio::test]
+async fn every_method_but_the_safe_ones_is_checked() {
+    for kind in KINDS {
+        let c = Client::new(kind);
+        c.log_in().await;
+        let token = c.token().await;
+        let purge = || HttpMethod::Other("PURGE".to_owned());
+        assert_forbidden(&c.change(purge(), None).await, &format!("{kind:?} PURGE"));
+        assert_forbidden(
+            &c.change(HttpMethod::Connect, None).await,
+            &format!("{kind:?} CONNECT"),
+        );
+        assert_eq!(c.changes(), 0);
+        let res = c.change(purge(), Some(&token)).await;
+        assert_eq!(res.status(), 200, "{kind:?} PURGE with the token");
+        assert_eq!(body(&res), "alice");
+        assert_eq!(c.changes(), 1);
+        for method in [
+            HttpMethod::Get,
+            HttpMethod::Head,
+            HttpMethod::Options,
+            HttpMethod::Trace,
+        ] {
+            let res = c.send(c.request(method.clone(), "/secret")).await;
+            assert_ne!(res.status(), 403, "{kind:?} {method:?}");
+        }
+    }
+}
+
 // --- exemptions ---
 
 #[tokio::test]
@@ -789,6 +819,13 @@ async fn anonymous_unsafe_requests_with_no_session_are_exempt() {
             assert!(set_cookies(&res).is_empty(), "the check creates no session");
         }
         assert_eq!(c.changes(), 4);
+        // The spec's exemption: the check runs only when the session authenticates the request
+        // or on the login and logout posts, so an anonymous session with a token is not checked.
+        c.token().await;
+        assert!(c.cookie().is_some());
+        let res = c.send(c.request(HttpMethod::Post, "/open")).await;
+        assert_eq!(res.status(), 200, "{kind:?}: anonymous with a session");
+        assert_eq!(c.changes(), 5);
         // An anonymous unsafe request to a protected route is a 401 from the rules, not a 403.
         assert_eq!(c.change(HttpMethod::Post, None).await.status(), 401);
     }
@@ -955,6 +992,34 @@ fn logs() -> LogBuffer {
         logs
     })
     .clone()
+}
+
+#[tokio::test]
+async fn csrf_on_without_a_session_filter_logs_the_missing_filter_and_answers_403() {
+    let logs = logs();
+    let provider = Arc::new(dao());
+    let chain = rules(
+        HttpSecurity::new()
+            .password_provider(provider)
+            .form_login(|f| f),
+    )
+    .build()
+    .unwrap();
+    let app = App::new().filter(chain);
+    let mut req = Request::new(HttpMethod::Post, "/login");
+    req.headers.insert(header::HOST, HOST.parse().unwrap());
+    req.headers
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static(FORM));
+    req.body = "username=alice&password=s3cret&_csrf=x".into();
+    let res = app.handle(req).await;
+    assert_eq!(res.status(), 403);
+    assert!(set_cookies(&res).is_empty());
+    let text = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+    assert!(
+        text.contains("form login has no session: add a SessionFilter to the application"),
+        "{text}"
+    );
+    assert!(!text.contains("s3cret"), "{text}");
 }
 
 /// Everything a response shows: its `Debug`, its headers and its body.
