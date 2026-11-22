@@ -751,7 +751,7 @@ Delivered:
 - `examples/todos`: the `/me` page has two forms that post the token, `POST /me/reset-visits` needs it, the tests `tests/csrf.rs` and `tests/login.rs` use the token flow, and the README and `application.toml` describe it.
 - ADR 0089, the guide chapter 22 (the roadmap chapter is now 23) and the API section.
 
-Gate numbers at the end of Slice 6d: to be filled by the controller after the final gate.
+Gate numbers at the end of Slice 6d: `cargo test --workspace --all-features --no-fail-fast` 3203 passed, 0 failed, 8 ignored (3097 before Slice 6d); `cargo test -p oxbloom-boot` per feature: none 496, `security` 496, `web` 496, `logging` 516, `ssl` 496, `actuator` 509, `tasks` 520, all features 554, each with 0 failed and 1 ignored (the probe); `make check-examples` 66 (63 before); clippy `-D warnings` and `cargo fmt --check` clean; the boot stack probes are unchanged at 238 KB (237 overflows) and 239 KB with all features (238 overflows); the nine `cargo build -p oxbloom-boot` builds for `tasks`, `tasks,logging`, `tasks,ssl`, `tasks,security`, `tasks,actuator`, `security`, `security,logging`, `security,web` and `web`, each with default features off, pass; `cargo tree -i ring --workspace --all-features` finds no `ring`.
 
 Limits that users must know (also in the guide):
 - The checked set is every method except `GET`, `HEAD`, `OPTIONS` and `TRACE`, so `CONNECT` and an unknown method fail closed. The spec text listed four methods; the code is stricter.
@@ -772,7 +772,6 @@ Follow-ups from Slice 6d, not yet scheduled:
 - A general security-headers filter, a signed double-submit cookie, a script-readable token cookie, multipart parsing, per-request tokens and extending the origin check to the application's routes.
 
 Deferred minors from the 6d reviews:
-- The doc examples on `CsrfToken` are vacuous, because there is no `compile_fail` example for the missing `Display`.
 - There are no tests for the case of the content type or for a header value that is not UTF-8.
 - `CsrfToken::from_stored` accepts a non-canonical base64 value.
 - One bad unrelated pair in a form body fails the whole body read for the token. This is inherited from 6c and fails closed.
@@ -781,7 +780,6 @@ Deferred minors from the 6d reviews:
 - The test of the safe methods `OPTIONS` and `TRACE` asserts only that the answer is not 403.
 - A rustdoc line of `HttpSecurity::csrf` in `http_security.rs` is too long.
 - The `unwrap_or_else` fallback of the JSON helper in `form_login/handlers.rs` is unreachable.
-- The doc of the token endpoint says that the missing session filter is logged once, but it is logged on every request.
 - The test names in `csrf_page.rs` overclaim: `off_by_default` asserts only that the answer is not 200, and `only_anonymous_write` checks one `GET`. One comment there is garbled.
 - The token endpoint is handled in two separate chain calls, one for the match and one for the answer.
 - Two no-echo probes in the tests of `properties.rs` are weak.
