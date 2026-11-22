@@ -211,7 +211,15 @@ async fn a_tampered_cookie_is_refused_and_cleared() {
     let mut parts: Vec<&str> = value.split('.').collect();
     parts[1] = "dmlld2Vy"; // base64url of "viewer"
     let forged = format!("{REMEMBER}={}", parts.join("."));
-    assert_eq!(page(&client, "/me", &forged).await.status(), 302);
+    let reply = page(&client, "/me", &forged).await;
+    assert_eq!(reply.status(), 302);
+    let clearing = reply
+        .header_all("set-cookie")
+        .into_iter()
+        .find(|line| line.starts_with(&format!("{REMEMBER}=")))
+        .expect("a clearing cookie")
+        .to_owned();
+    assert!(clearing.contains("Max-Age=0"), "{clearing}");
 
     // The genuine cookie still works.
     assert_eq!(page(&client, "/me", &remember).await.status(), 200);
@@ -220,12 +228,27 @@ async fn a_tampered_cookie_is_refused_and_cleared() {
 }
 
 #[tokio::test]
-async fn a_header_credential_blocks_the_auto_login() {
+async fn any_authorization_header_blocks_the_auto_login() {
     let (client, handle, run) = start().await;
     let (_, remember) = login(&client, true).await;
     let remember = remember.expect("a remember-me cookie");
 
-    // Any Authorization header wins over the cookie: this wrong Basic credential is a 401.
+    // The valid cookie alone logs in.
+    assert_eq!(page(&client, "/me", &remember).await.status(), 200);
+
+    // The same valid cookie with a header of a scheme that the chain does not authenticate is
+    // not logged in: the header is what blocks the cookie, and the browser goes to the login page.
+    let reply = client
+        .get("/me")
+        .header("accept", "text/html")
+        .header("cookie", &remember)
+        .header("authorization", "Digest x")
+        .send()
+        .await;
+    assert_eq!(reply.status(), 302);
+    assert_eq!(reply.header("location"), Some("/login"));
+
+    // A wrong Basic credential is a 401.
     let reply = client
         .get("/me")
         .header("accept", "text/html")

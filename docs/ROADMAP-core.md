@@ -887,7 +887,7 @@ Limits that users must know (also in the guide):
 - The cookie holds the user name in the clear (base64url, not encrypted).
 - The `UserDetailsService` must know every form-login user; any `Authorization` header blocks auto login.
 - Log out everywhere (the 7a registry) and the session limit do not revoke remember-me: an evicted or ended session logs straight back in, and a burst of parallel requests after the session expired can each auto log in and count against the limit.
-- A changed password ends every remember-me cookie of the user at once and the sessions at the next revalidation (the 7a limit now has this aspect).
+- A changed password ends every remember-me cookie of the user at once and the sessions at the next revalidation (this adds to the 7a limit that a changed password does not end sessions: it now ends remember-me cookies at once, but a session stays until its next revalidation).
 - A JWT claim `oxbloom.remembered: true` counts as remembered (deny-only for `fully_authenticated()`); it is documented and the converter is not changed.
 - The `CookieScope` request extension carries the session cookie's `Path` and `Secure` decision to the remember-me cookie; without a session filter there is no auto login.
 - A customizer's `http.clock(..)` does not change the clock of remember-me; the keys apply only through `SecurityAutoConfiguration`.
@@ -896,29 +896,18 @@ Limits that users must know (also in the guide):
 Follow-ups from Slice 7b, not yet scheduled:
 - A persistent token store with per-device revocation and theft detection, a refreshing cookie, an admin endpoint to revoke remember-me cookies, and the 7a deferred minors.
 
-Deferred minors from the 7b reviews:
-- Task 1: minor (deferred): no test that a rejected set / ignored remove leaves the session clean (no Set-Cookie on a fresh session)
-- Task 2: minor (deferred -> Task 6): M1 a JWT claim "oxbloom.remembered": true counts as remembered (deny-only); drop the claim in the converter or document; with_details replaces details and drops the marker so Task 4 must call .remembered() after with_details
-- Task 2: minor (-> Task 3/4 briefs): M2 blanket #[allow(dead_code)] / #[allow(unused_imports)] in remember_me/token.rs and mod.rs must be removed by hand in Tasks 3 and 4
-- Task 2: minor (deferred): M3 TokenCodec::new comment gives a wrong reason for returning Result
-- Task 2: minor (deferred): boundary test is Linux-specific (should compute the bound with checked_add)
-- Task 2: minor (deferred): parse doc line over 100 columns
-- Task 3: minor (deferred): remember_cookie user_details.as_ref()? returns None with no log (unreachable after validate)
-- Task 3: minor (-> Task 4): integration test that a password login inside a remembered session drops the marker (plant remembered authentication with set_reserved); auto-login round trip should prove the codec accepts the issued token
-- Task 3: minor (deferred): the "one fixed text" logs not asserted to appear exactly once (shared process-global log buffer)
-- Task 3: minor (-> Task 5): remember-me cookie_name equal to the session cookie name would collide; Task 5 boot should reject it naming the key; Task 5 must give RememberMe.clock and the handlers' clock the same clock bean
-- Task 3: minor (-> Task 6 docs): logout after the session expired with CSRF on is 403 and keeps the cookie; auto login on the logout POST also gets the 403; token username comes from user.username() not the principal (doc line on remember_cookie); CookieScope extension recorded in the ADR
-- Task 4: minor (deferred): M1 AutoLogin derives Debug; LoggedIn(Authentication) would print the principal (never printed today)
-- Task 4: minor (deferred): M2 revalidation-ended session plus cookie costs a second user-service lookup in the same request
-- Task 4: minor (deferred): M3 log_text() global buffer shared across tests; assertions can pass because of other tests; "one fixed text" not checked as exactly one
-- Task 4: minor (deferred): M4 no test: valid session plus cookie never reads the cookie / no lookup; no test: planted anonymous session id is rotated at auto login
-- Task 4: minor (-> Task 6 docs): M5 a session evicted by the limit or ended by invalidate_all logs straight back in from the cookie (log out everywhere does not revoke remember-me); a burst of parallel requests after expiry each auto log in and count against the limit; any Authorization header blocks auto login; auto login on an unsafe request gets 403
-- Task 4: minor (-> Task 5): M6 user_details None gives Invalid (would clear every cookie): boot/build must always supply the user service (validate already requires it)
-- Task 5: minor (deferred): customizer http.clock(x) does not change remember-me's clock (boot pinned it); undocumented
-- Task 5: minor (deferred): misplaced comment ("default interval applies only with form login and a user service") now above the remember-me read in security.rs
-- Task 5: minor (deferred): short-secret test does not pin .secret vs .old-secrets[0] nor that the failure report names the key
-- Task 5: minor (deferred): header_all doc example lacks a single value and a case-insensitive name; lifetime metadata default checked as literal
-- Task 5: minor (deferred): startup-report and Debug paths for a bad disabled section covered only via read(), not via the startup report; one over-long doc line in autoconfigure/security.rs
+Known minors after the 7b reviews (none changes behavior; the ones the guide already states as limits are left out):
+- The tests do not check that a rejected `Session::set` or an ignored `Session::remove` leaves a fresh session without a `Set-Cookie`.
+- The expiry boundary test of the token assumes the Linux `SystemTime` range instead of computing the bound with `checked_add`.
+- `TokenCodec::new` returns a `Result` and its comment gives the wrong reason; one doc line of `parse` and one of `autoconfigure/security.rs` are over 100 columns, and a comment above the remember-me read in `security.rs` is misplaced.
+- `AutoLogin` derives `Debug` and its `LoggedIn` variant holds an `Authentication`, which would print the principal if anyone formatted them (nothing does today).
+- A session that revalidation ended, together with a valid cookie, costs a second user service lookup in the same request.
+- The tests that look for one fixed log text read a log buffer shared by the whole process, so they do not prove the text appears exactly once.
+- There is no test that a valid session with a cookie never reads the cookie, nor that a planted anonymous session id is rotated at auto login.
+- The `remember_cookie` path returns without a log when the user is missing, which `validate` makes unreachable.
+- The check that the remember-me cookie name differs from the session cookie name reads the configuration, so a `SessionFilter` bean with its own cookie name is not compared.
+- The short-secret boot test does not pin whether `secret` or `old-secrets[0]` is the short one, nor that the failure report names the key; the bad disabled section is tested through `read()` and not through the startup report.
+- The `header_all` doc example has no single-value case and no mixed-case name, and the lifetime metadata default is checked as a literal.
 
 Rulings made during Slice 7b:
 - The branch is `s7b-remember-me`, started from `main`; nothing is pushed.

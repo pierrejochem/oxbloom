@@ -53,7 +53,7 @@ Bad:
 - Form login that is turned on by a customizer gets no default revalidation, because the default applies only when form login comes from configuration. An explicit interval works.
 - A `SessionRegistry` injected on a store without the index fails the injection. The bean is lazy, but a consumer that asks for `Arc<SessionRegistry>` or `Option<Arc<SessionRegistry>>` fails at startup, and with the cookie store there is no bean at all.
 - The session keys of `security.session` and the `security.headers` keys apply only through `SecurityAutoConfiguration`. They are listed in the property metadata, but an application with its own `SecurityFilterChain` bean ignores them.
-- The reserved key prefix `oxbloom.security.` is not enforced by `Session::set`, so application code can write the authentication and principal keys. Revalidation reloads the user by the principal of the stored authentication to limit what a forged principal key can do, but the per-user index trusts that key.
+- (Since ADR 0091, `Session::set` enforces the prefix.) The reserved key prefix `oxbloom.security.` was not enforced by `Session::set` in this slice, so application code can write the authentication and principal keys. Revalidation reloads the user by the principal of the stored authentication to limit what a forged principal key can do, but the per-user index trusts that key.
 - Session-authenticated login and logout posts get no `Cache-Control: no-store`, because the chain does not count them as authenticated by the session in that path.
 - A header validation error shows up even when the headers are disabled.
 - `delete_of` and `invalidate_all` do not end a session that is saved while they run.

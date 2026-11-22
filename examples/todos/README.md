@@ -131,8 +131,9 @@ clear (base64url, not encrypted), and it works until it expires or the password 
 per-device revocation, and `POST /me/logout-everywhere` ends sessions only: an ended session logs back in
 from the cookie. A `POST` that auto logs in is answered 403 until a `GET` has gone through. The users of
 the example come from the configuration, so the test cannot change a password: a changed signature
-stands for a cookie that does not verify, and the crate tests of `oxbloom-security` cover a changed
-password, a disabled user and a locked user.
+stands for a cookie that does not verify, and the crate tests in
+`crates/oxbloom-security/tests/remember_me_autologin.rs` cover a changed password, a disabled user and a
+locked user.
 
 ```text
 curl -s -c jar.txt -H 'accept: text/html' http://127.0.0.1:8081/me -o /dev/null          # 302, a session cookie
@@ -142,8 +143,8 @@ curl -i -b jar.txt -c jar.txt -d "_csrf=$TOKEN&username=admin&password=changeit&
 ```
 
 The tests `tests/remember_me.rs` use `TestClient` cookie jars: a login with the checkbox, a request
-with only the remember-me cookie, a login without the checkbox, a changed signature, a wrong
-`Authorization` header and logout. The guide chapter is "Remember-me".
+with only the remember-me cookie, a login without the checkbox, a changed signature, a forged user name, an
+`Authorization` header of any scheme and logout. The guide chapter is "Remember-me".
 
 ## Actuator
 
