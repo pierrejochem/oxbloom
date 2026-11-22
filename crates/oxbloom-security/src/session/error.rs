@@ -25,6 +25,8 @@ pub enum SessionError {
     InvalidSettings,
     /// A session value could not be serialized or deserialized.
     Serialization,
+    /// The key starts with the prefix `oxbloom.security.`, which Oxbloom reserves for itself.
+    ReservedKey,
 }
 
 impl fmt::Display for SessionError {
@@ -35,6 +37,7 @@ impl fmt::Display for SessionError {
             Self::TooLarge => "the session data is too large",
             Self::InvalidSettings => "the session settings are not valid",
             Self::Serialization => "a session value could not be serialized",
+            Self::ReservedKey => "the session key is reserved for Oxbloom",
         })
     }
 }

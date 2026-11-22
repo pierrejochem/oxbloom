@@ -117,7 +117,7 @@ fn tamper_route(path: &'static str, key: &'static str, value: serde_json::Value)
         async move {
             req.session()
                 .expect("the filter ran")
-                .set(key, &value)
+                .set_reserved(key, &value)
                 .unwrap();
             "tampered"
         }

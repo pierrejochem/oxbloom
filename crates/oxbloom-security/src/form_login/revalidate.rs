@@ -178,7 +178,7 @@ mod tests {
     #[tokio::test]
     async fn a_time_from_the_future_is_due() {
         let (r, s, auth) = setup(None);
-        s.set(REVALIDATED_AT_KEY, &5000u64).unwrap();
+        s.set_reserved(REVALIDATED_AT_KEY, &5000u64).unwrap();
         assert!(matches!(
             revalidate(&r, &s, &auth, at(1001)).await,
             Revalidated::Ended
@@ -199,7 +199,8 @@ mod tests {
     async fn the_principal_key_does_not_select_the_user() {
         let user = UserDetails::new("alice", "x", []).roles(&["USER"]);
         let (r, s, auth) = setup(Some(user));
-        s.set(crate::session::PRINCIPAL_KEY, "mallory").unwrap();
+        s.set_reserved(crate::session::PRINCIPAL_KEY, "mallory")
+            .unwrap();
         assert!(matches!(
             revalidate(&r, &s, &auth, at(2000)).await,
             Revalidated::Unchanged
