@@ -199,7 +199,7 @@ impl HttpSecurity {
     ///
     /// let exp = jsonwebtoken::get_current_timestamp() + 300;
     /// let claims = serde_json::json!({ "sub": "alice", "exp": exp, "scope": "read" });
-    /// let token = encode(&Header::new(Algorithm::HS256), &claims, &EncodingKey::from_secret(secret))?;
+    /// let token = encode(&Header::new(Algorithm::HS256), &claims, &EncodingKey::from_secret(secret)?)?;
     /// let mut req = Request::new(HttpMethod::Get, "/data");
     /// req.headers.insert("authorization", format!("Bearer {token}").parse()?);
     /// assert_eq!(app.handle(req).await.status(), 200);

@@ -46,7 +46,7 @@
 //! // A signed token reaches the handler, which sees the principal.
 //! let exp = jsonwebtoken::get_current_timestamp() + 300;
 //! let claims = serde_json::json!({ "sub": "alice", "exp": exp, "roles": ["USER"] });
-//! let token = encode(&Header::new(Algorithm::HS256), &claims, &EncodingKey::from_secret(secret))?;
+//! let token = encode(&Header::new(Algorithm::HS256), &claims, &EncodingKey::from_secret(secret)?)?;
 //! let mut req = Request::new(HttpMethod::Get, "/me");
 //! req.headers.insert("authorization", format!("Bearer {token}").parse()?);
 //! let res = app.handle(req).await;

@@ -664,7 +664,7 @@ impl JwtDecoderBuilder {
     /// // The token is valid for one more hour of real time, but the clock is two hours ahead.
     /// let exp = jsonwebtoken::get_current_timestamp() + 3600;
     /// let claims = serde_json::json!({ "sub": "alice", "exp": exp });
-    /// let token = encode(&Header::new(Algorithm::HS256), &claims, &EncodingKey::from_secret(secret))?;
+    /// let token = encode(&Header::new(Algorithm::HS256), &claims, &EncodingKey::from_secret(secret)?)?;
     /// assert_eq!(decoder.decode(&token).await.unwrap_err(), AuthenticationError::Expired);
     /// # Ok(())
     /// # }
@@ -778,7 +778,9 @@ fn secret_key(algorithm: Algorithm, secret: &[u8]) -> Result<KeySource, JwtConfi
     if secret.len() < min_len {
         return Err(JwtConfigError::SecretTooShort);
     }
-    Ok(KeySource::Secret(DecodingKey::from_secret(secret)))
+    Ok(KeySource::Secret(
+        DecodingKey::from_secret(secret).map_err(|_| JwtConfigError::InvalidKey)?,
+    ))
 }
 
 fn public_key(algorithm: Algorithm, pem: &str) -> Result<DecodingKey, JwtConfigError> {
@@ -835,7 +837,7 @@ fn public_key(algorithm: Algorithm, pem: &str) -> Result<DecodingKey, JwtConfigE
 ///     .build()?;
 /// let exp = jsonwebtoken::get_current_timestamp() + 300;
 /// let claims = serde_json::json!({ "sub": "alice", "exp": exp });
-/// let token = encode(&Header::new(Algorithm::HS256), &claims, &EncodingKey::from_secret(secret))?;
+/// let token = encode(&Header::new(Algorithm::HS256), &claims, &EncodingKey::from_secret(secret)?)?;
 /// let jwt = decoder.decode(&token).await?;
 /// assert_eq!(jwt.subject(), Some("alice"));
 /// # Ok(())
@@ -1203,7 +1205,12 @@ mod tests {
     }
 
     fn sign_hs(alg: Algorithm, claims: &Value) -> String {
-        encode(&Header::new(alg), claims, &EncodingKey::from_secret(SECRET)).unwrap()
+        encode(
+            &Header::new(alg),
+            claims,
+            &EncodingKey::from_secret(SECRET).unwrap(),
+        )
+        .unwrap()
     }
 
     fn sign_rs(alg: Algorithm, claims: &Value) -> String {
@@ -1459,7 +1466,7 @@ mod tests {
         let token = encode(
             &header,
             &claims(json!({})),
-            &EncodingKey::from_secret(SECRET),
+            &EncodingKey::from_secret(SECRET).unwrap(),
         )
         .unwrap();
         let (err, reason) = reject(hs_builder(), &token).await;
@@ -1489,7 +1496,7 @@ mod tests {
         let forged = encode(
             &Header::new(Algorithm::HS256),
             &claims(json!({})),
-            &EncodingKey::from_secret(RSA_PUBLIC.as_bytes()),
+            &EncodingKey::from_secret(RSA_PUBLIC.as_bytes()).unwrap(),
         )
         .unwrap();
         let (err, reason) = reject(rs_builder(), &forged).await;

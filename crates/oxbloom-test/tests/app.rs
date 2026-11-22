@@ -107,7 +107,7 @@ mod secured {
         encode(
             &Header::new(Algorithm::HS256),
             &claims,
-            &EncodingKey::from_secret(SECRET.as_bytes()),
+            &EncodingKey::from_secret(SECRET.as_bytes()).unwrap(),
         )
         .unwrap()
     }

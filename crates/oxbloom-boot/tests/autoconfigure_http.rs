@@ -81,7 +81,7 @@ fn sign(secret: &str, sub: &str) -> String {
     encode(
         &Header::new(Algorithm::HS256),
         &serde_json::json!({ "sub": sub, "exp": exp }),
-        &EncodingKey::from_secret(secret.as_bytes()),
+        &EncodingKey::from_secret(secret.as_bytes()).unwrap(),
     )
     .unwrap()
 }

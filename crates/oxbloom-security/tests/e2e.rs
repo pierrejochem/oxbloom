@@ -90,7 +90,7 @@ fn sign_hs(claims: &serde_json::Value) -> String {
     encode(
         &Header::new(Algorithm::HS256),
         claims,
-        &EncodingKey::from_secret(SECRET),
+        &EncodingKey::from_secret(SECRET).unwrap(),
     )
     .unwrap()
 }
