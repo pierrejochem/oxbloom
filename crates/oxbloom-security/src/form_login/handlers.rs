@@ -19,9 +19,10 @@ use super::repository::{
     load_authentication, save_request, store_authentication, take_saved_request,
 };
 use super::settings::FormLogin;
+use crate::csrf::{replace_token, request_passes};
 use crate::{
     Authentication, AuthenticationEntryPoint, AuthenticationError, AuthenticationRequest,
-    ProviderManager, RequestSessionExt,
+    CsrfConfig, ProviderManager, RequestSessionExt,
 };
 
 /// The log marker of a form that could not be read.
@@ -117,14 +118,28 @@ pub(crate) fn prefers_html(req: &Request) -> bool {
     }
 }
 
-/// The form login part of a chain: the settings and the handlers that use them.
+/// The form login part of a chain: the settings, the CSRF settings when the check is on, and
+/// the handlers that use them.
 pub(crate) struct FormLoginHandlers {
     settings: Arc<FormLogin>,
+    csrf: Option<CsrfConfig>,
 }
 
 impl FormLoginHandlers {
-    pub(crate) fn new(settings: Arc<FormLogin>) -> Self {
-        Self { settings }
+    /// `csrf` is `Some` only when the CSRF check is on.
+    pub(crate) fn new(settings: Arc<FormLogin>, csrf: Option<CsrfConfig>) -> Self {
+        Self { settings, csrf }
+    }
+
+    /// The CSRF settings, when the check is on.
+    pub(crate) fn csrf(&self) -> Option<&CsrfConfig> {
+        self.csrf.as_ref()
+    }
+
+    /// Whether the request passes the CSRF check: always when the check is off or the method
+    /// is safe.
+    pub(crate) fn csrf_passes(&self, req: &Request) -> bool {
+        request_passes(req, self.csrf.as_ref())
     }
 
     fn is_login_post(&self, req: &Request) -> bool {
@@ -194,7 +209,9 @@ impl FormLoginHandlers {
     }
 
     async fn login(&self, req: &Request, manager: Option<&ProviderManager>) -> Response {
-        if !same_origin(req) {
+        // The origin first, the token second, both before the form is read or the provider is
+        // asked, and both with the same answer.
+        if !same_origin(req) || !self.csrf_passes(req) {
             return status(StatusCode::FORBIDDEN);
         }
         if !is_form(req) {
@@ -231,6 +248,10 @@ impl FormLoginHandlers {
         };
         // A new id first, so a planted or stolen anonymous id never carries the login.
         session.rotate_id();
+        // A new token too, so a token known before the login is dead after it.
+        if self.csrf.is_some() {
+            replace_token(&session);
+        }
         if store_authentication(&session, &authentication, SystemTime::now()).is_err() {
             tracing::error!(
                 target: "oxbloom::security",
@@ -246,7 +267,7 @@ impl FormLoginHandlers {
     }
 
     fn logout(&self, req: &Request) -> Response {
-        if !same_origin(req) {
+        if !same_origin(req) || !self.csrf_passes(req) {
             return status(StatusCode::FORBIDDEN);
         }
         if let Some(session) = req.session() {

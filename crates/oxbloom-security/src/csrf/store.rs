@@ -31,6 +31,16 @@ pub(crate) fn stored_token(session: &Session) -> Option<CsrfToken> {
     }
 }
 
+/// Reads the stored token without changing the session: a value that is not a valid token
+/// gives `None` and stays where it is. The check uses this, so a failed check changes nothing.
+pub(crate) fn peek_token(session: &Session) -> Option<CsrfToken> {
+    session
+        .get::<String>(CSRF_TOKEN_KEY)
+        .ok()
+        .flatten()
+        .and_then(CsrfToken::from_stored)
+}
+
 /// Returns the stored token, or mints a new one and stores it.
 pub(crate) fn ensure_token(session: &Session) -> CsrfToken {
     stored_token(session).unwrap_or_else(|| replace_token(session))

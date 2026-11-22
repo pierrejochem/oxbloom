@@ -233,6 +233,8 @@ fn security_filter_chain(
     }
     if let Some(form) = form {
         http = http.form_login(move |_| form);
+        // Temporary until the configuration reader lands (Slice 6d Task 5).
+        http = http.csrf(|c| c.enabled(false));
     }
     if basic.enabled || form_enabled {
         for provider in providers {

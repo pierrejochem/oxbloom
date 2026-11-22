@@ -10,6 +10,7 @@ use oxbloom_config::Secret;
 use oxbloom_core::HttpMethod;
 use oxbloom_web::{Filter, Next, Request, Response};
 
+use crate::csrf::hide_token_header;
 use crate::form_login::FormLoginHandlers;
 use crate::{
     AuthenticationError, AuthenticationRequest, AuthorizationRule, ProviderManager, RequestMatcher,
@@ -367,6 +368,9 @@ impl Filter for SecurityFilterChain {
         if let header::Entry::Occupied(mut entry) = req.headers.entry(header::AUTHORIZATION) {
             entry.iter_mut().for_each(|v| v.set_sensitive(true));
         }
+        if let Some(cfg) = self.form_login.as_ref().and_then(|f| f.csrf()) {
+            hide_token_header(&mut req, cfg);
+        }
         // Form login answers its two posts itself and serves its page only at the configured
         // paths, before the authorization rules.
         if let Some(form) = &self.form_login {
@@ -407,10 +411,15 @@ impl Filter for SecurityFilterChain {
                 }
             }
         }
-        // Credentials in the header win; the session is the fallback.
+        // Credentials in the header win; the session is the fallback. A request the session
+        // authenticates must carry the CSRF token when it changes state.
         if context.authentication().is_none()
-            && let Some(authentication) = self.form_login.as_ref().and_then(|f| f.restore(&req))
+            && let Some(form) = &self.form_login
+            && let Some(authentication) = form.restore(&req)
         {
+            if !form.csrf_passes(&req) {
+                return empty(StatusCode::FORBIDDEN);
+            }
             context = SecurityContext::authenticated(authentication);
         }
         req.extensions_mut().insert(context);

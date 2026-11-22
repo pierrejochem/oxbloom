@@ -90,8 +90,6 @@ mod authentication;
 mod authorization;
 mod chain;
 mod config;
-// The reader and the token helpers are consumed by the chain check in a later slice task.
-#[allow(dead_code)]
 mod csrf;
 mod dao;
 #[cfg(feature = "di")]
