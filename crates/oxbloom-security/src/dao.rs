@@ -7,7 +7,7 @@ use async_trait::async_trait;
 
 use crate::{
     Authentication, AuthenticationError, AuthenticationProvider, AuthenticationRequest,
-    PasswordEncoder, UserDetailsService,
+    PasswordEncoder, UserDetails, UserDetailsService,
 };
 
 /// The longest username or password, in bytes, that is checked at all.
@@ -155,9 +155,12 @@ impl AuthenticationProvider for DaoAuthenticationProvider {
         if user.is_locked() {
             return Err(fail(AuthenticationError::AccountLocked, len));
         }
-        Ok(Authentication::new(
-            user.username(),
-            user.authorities().iter().cloned(),
-        ))
+        Ok(authentication_of(&user))
     }
+}
+
+/// The authentication of a loaded user: the username as principal and the user's authorities,
+/// without details. Revalidation uses the same mapping.
+pub(crate) fn authentication_of(user: &UserDetails) -> Authentication {
+    Authentication::new(user.username(), user.authorities().iter().cloned())
 }

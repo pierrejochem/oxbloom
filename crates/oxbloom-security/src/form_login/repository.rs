@@ -56,11 +56,26 @@ pub(crate) fn store_principal(
     now: SystemTime,
 ) -> Result<(), SessionError> {
     session.set(PRINCIPAL_KEY, &principal)?;
+    store_revalidated_at(session, now)
+}
+
+/// Stores `now` as the time of the last check of the user.
+///
+/// # Errors
+///
+/// [`SessionError::Serialization`] when the value cannot be turned into JSON.
+pub(crate) fn store_revalidated_at(session: &Session, now: SystemTime) -> Result<(), SessionError> {
     session.set(REVALIDATED_AT_KEY, &epoch_seconds(now))
 }
 
+/// The seconds since the epoch of the last check of the user, `None` when the value is missing
+/// or is not a number.
+pub(crate) fn load_revalidated_at(session: &Session) -> Option<u64> {
+    session.get::<u64>(REVALIDATED_AT_KEY).ok().flatten()
+}
+
 /// Seconds since the epoch, zero for a time before it.
-fn epoch_seconds(now: SystemTime) -> u64 {
+pub(crate) fn epoch_seconds(now: SystemTime) -> u64 {
     now.duration_since(SystemTime::UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_secs())
 }
@@ -75,7 +90,35 @@ pub(crate) fn store_authentication(
     authentication: &Authentication,
     now: SystemTime,
 ) -> Result<(), SessionError> {
-    let login = epoch_seconds(now);
+    write_authentication(session, authentication, epoch_seconds(now))
+}
+
+/// Replaces the stored authentication and keeps the stored login time. The caller passes the
+/// details it wants kept as part of `authentication`.
+///
+/// # Errors
+///
+/// [`SessionError::Serialization`] when no valid authentication is stored, so there is no login
+/// time to keep, or when the authentication cannot be turned into JSON.
+pub(crate) fn refresh_authentication(
+    session: &Session,
+    authentication: &Authentication,
+) -> Result<(), SessionError> {
+    let login = session
+        .get::<serde_json::Value>(AUTHENTICATION_KEY)
+        .ok()
+        .flatten()
+        .filter(|stored| stored.get("v").and_then(serde_json::Value::as_u64) == Some(VERSION))
+        .and_then(|stored| stored.get("login").and_then(serde_json::Value::as_u64))
+        .ok_or(SessionError::Serialization)?;
+    write_authentication(session, authentication, login)
+}
+
+fn write_authentication(
+    session: &Session,
+    authentication: &Authentication,
+    login: u64,
+) -> Result<(), SessionError> {
     let authentication =
         serde_json::to_value(authentication).map_err(|_| SessionError::Serialization)?;
     session.set(
@@ -144,6 +187,40 @@ mod tests {
         assert_eq!(loaded.principal(), "alice");
         assert!(loaded.has_role("USER"));
         assert_eq!(loaded.details()["tenant"], "acme");
+    }
+
+    #[test]
+    fn refresh_keeps_the_login_time_and_replaces_the_authentication() {
+        let s = session();
+        store_authentication(&s, &alice(), now()).unwrap();
+        let fresh = Authentication::new("alice", [GrantedAuthority::new("ROLE_ADMIN")])
+            .with_details(alice().details().clone());
+        refresh_authentication(&s, &fresh).unwrap();
+        let stored: serde_json::Value = s.get(AUTHENTICATION_KEY).unwrap().unwrap();
+        assert_eq!(stored["login"], 1_800_000_000u64);
+        let loaded = load_authentication(&s).unwrap();
+        assert!(loaded.has_role("ADMIN") && !loaded.has_role("USER"));
+        assert_eq!(loaded.details()["tenant"], "acme");
+    }
+
+    #[test]
+    fn refresh_without_a_stored_authentication_fails_and_writes_nothing() {
+        let s = session();
+        assert_eq!(
+            refresh_authentication(&s, &alice()),
+            Err(SessionError::Serialization)
+        );
+        assert!(s.take_state().is_empty_untouched());
+    }
+
+    #[test]
+    fn the_revalidation_time_round_trips_and_a_bad_value_reads_as_missing() {
+        let s = session();
+        assert_eq!(load_revalidated_at(&s), None);
+        store_revalidated_at(&s, now()).unwrap();
+        assert_eq!(load_revalidated_at(&s), Some(1_800_000_000));
+        s.set(REVALIDATED_AT_KEY, "soon").unwrap();
+        assert_eq!(load_revalidated_at(&s), None);
     }
 
     #[test]

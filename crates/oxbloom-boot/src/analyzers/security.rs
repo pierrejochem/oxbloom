@@ -76,6 +76,14 @@ impl FailureAnalyzer for SecurityAnalyzer {
                 "The session limit is zero.",
                 "Allow at least one session per user, or remove the session limit.",
             ),
+            SecurityBuildError::RevalidateWithoutFormLogin => (
+                "Session revalidation is configured but form login is not.",
+                "Configure `form_login`, or remove the revalidation.",
+            ),
+            SecurityBuildError::InvalidRevalidateInterval => (
+                "The session revalidation interval is zero.",
+                "Use an interval of at least one second, or leave revalidation out to turn it off.",
+            ),
         };
         Some(FailureAnalysis::new(description, action))
     }
@@ -275,6 +283,24 @@ mod tests {
             SecurityBuildError::InvalidSessionLimit,
             "The session limit is zero.",
             "Allow at least one session per user, or remove the session limit.",
+        );
+    }
+
+    #[test]
+    fn revalidate_without_form_login_text() {
+        check(
+            SecurityBuildError::RevalidateWithoutFormLogin,
+            "Session revalidation is configured but form login is not.",
+            "Configure `form_login`, or remove the revalidation.",
+        );
+    }
+
+    #[test]
+    fn invalid_revalidate_interval_text() {
+        check(
+            SecurityBuildError::InvalidRevalidateInterval,
+            "The session revalidation interval is zero.",
+            "Use an interval of at least one second, or leave revalidation out to turn it off.",
         );
     }
 

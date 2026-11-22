@@ -21,6 +21,7 @@ mod origin;
 mod page;
 mod redirect;
 mod repository;
+mod revalidate;
 mod settings;
 
 pub use config::FormLoginConfig;
@@ -28,5 +29,6 @@ pub(crate) use form::urlencoded_pairs;
 pub(crate) use handlers::{FormLoginEntryPoint, FormLoginHandlers, is_form};
 pub use redirect::is_safe_redirect_target;
 pub(crate) use redirect::path_of;
+pub(crate) use revalidate::Revalidation;
 pub use settings::FormLogin;
 pub(crate) use settings::is_valid_field_name;

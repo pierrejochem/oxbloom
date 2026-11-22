@@ -438,11 +438,14 @@ impl SecurityFilterChain {
                 }
             }
         }
-        // Credentials in the header win; the session is the fallback. A request the session
-        // authenticates must carry the CSRF token when it changes state.
+        // Credentials in the header win; the session is the fallback. The user of a session is
+        // revalidated first, so an ended session is anonymous to the CSRF check and to the
+        // rules. A request the session authenticates must carry the CSRF token when it changes
+        // state.
         if context.authentication().is_none()
             && let Some(form) = &self.form_login
             && let Some(authentication) = form.restore(&req)
+            && let Some(authentication) = form.revalidate(&req, authentication).await
         {
             if !form.csrf_passes(&req) {
                 return (empty(StatusCode::FORBIDDEN), true);
