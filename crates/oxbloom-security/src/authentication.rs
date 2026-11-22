@@ -3,6 +3,7 @@ use std::fmt;
 
 use oxbloom_config::Secret;
 use oxbloom_web::Request;
+use serde::{Deserialize, Serialize};
 
 /// A single permission or role held by an authenticated principal, e.g. `ROLE_ADMIN` or `SCOPE_read`.
 ///
@@ -15,7 +16,7 @@ use oxbloom_web::Request;
 /// assert_eq!(authority.as_str(), "ROLE_ADMIN");
 /// assert_eq!(authority.to_string(), "ROLE_ADMIN");
 /// ```
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct GrantedAuthority(String);
 
 impl GrantedAuthority {
@@ -54,7 +55,8 @@ impl fmt::Display for GrantedAuthority {
 
 /// An authenticated principal with its authorities and extra details (e.g. token claims).
 ///
-/// `Debug` prints only the principal and authority names, never the details.
+/// `Debug` prints only the principal and authority names, never the details. The serialized form
+/// holds the principal, the authorities and the details, and never a credential.
 ///
 /// # Examples
 ///
@@ -65,7 +67,7 @@ impl fmt::Display for GrantedAuthority {
 /// assert_eq!(auth.principal(), "alice");
 /// assert!(auth.has_role("ADMIN"));
 /// ```
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Authentication {
     principal: String,
     authorities: BTreeSet<GrantedAuthority>,

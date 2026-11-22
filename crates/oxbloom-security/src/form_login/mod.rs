@@ -18,6 +18,7 @@ mod form;
 mod origin;
 mod page;
 mod redirect;
+mod repository;
 mod settings;
 
 // Consumed by the form login filter.
@@ -27,5 +28,11 @@ pub(crate) use form::parse_login_form;
 pub(crate) use origin::same_origin;
 #[allow(unused_imports)]
 pub(crate) use page::{escape_html, login_page};
+// Consumed by the form login filter.
 pub use redirect::is_safe_redirect_target;
+#[allow(unused_imports)]
+pub(crate) use repository::{
+    AUTHENTICATION_KEY, SAVED_REQUEST_KEY, load_authentication, save_request, store_authentication,
+    take_saved_request,
+};
 pub use settings::FormLogin;

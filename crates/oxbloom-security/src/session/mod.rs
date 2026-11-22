@@ -24,7 +24,7 @@ mod cookie;
 mod cookie_backend;
 mod error;
 mod filter;
-mod handle;
+pub(crate) mod handle;
 mod memory;
 mod settings;
 mod store;
