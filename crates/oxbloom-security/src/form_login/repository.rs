@@ -6,6 +6,7 @@
 
 use std::time::SystemTime;
 
+use super::redirect::path_of;
 use crate::{Authentication, Session, SessionError, is_safe_redirect_target};
 
 /// The session key that holds the stored authentication and the login time.
@@ -57,11 +58,6 @@ pub(crate) fn store_authentication(
         AUTHENTICATION_KEY,
         &serde_json::json!({ "v": VERSION, "login": login, "authentication": authentication }),
     )
-}
-
-/// The path of a target, without its query.
-fn path_of(target: &str) -> &str {
-    target.split('?').next().unwrap_or(target)
 }
 
 /// Saves `path_and_query` as the request to return to, when it passes the redirect rule. A saved

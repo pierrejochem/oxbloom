@@ -30,3 +30,8 @@ pub fn is_safe_redirect_target(target: &str) -> bool {
     let path = target.split('?').next().unwrap_or(target);
     !path.contains("://")
 }
+
+/// The path of a URL or target, without its query.
+pub(super) fn path_of(url: &str) -> &str {
+    url.split('?').next().unwrap_or(url)
+}

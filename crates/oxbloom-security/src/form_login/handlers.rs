@@ -14,6 +14,7 @@ use oxbloom_web::{Request, Response};
 use super::form::parse_login_form;
 use super::origin::same_origin;
 use super::page::login_page;
+use super::redirect::path_of;
 use super::repository::{
     load_authentication, save_request, store_authentication, take_saved_request,
 };
@@ -22,6 +23,10 @@ use crate::{
     Authentication, AuthenticationEntryPoint, AuthenticationError, AuthenticationRequest,
     ProviderManager, RequestSessionExt,
 };
+
+/// The log marker of a form that could not be read.
+#[derive(Debug)]
+struct MalformedForm;
 
 const FORM_CONTENT_TYPE: &str = "application/x-www-form-urlencoded";
 
@@ -40,10 +45,6 @@ fn redirect(target: &str, fallback: &str) -> Response {
     let mut res = status(StatusCode::FOUND);
     res.headers_mut().insert(header::LOCATION, value);
     res
-}
-
-fn path_of(url: &str) -> &str {
-    url.split('?').next().unwrap_or(url)
 }
 
 /// Whether the request body is declared as `application/x-www-form-urlencoded`, parameters such
@@ -182,10 +183,10 @@ impl FormLoginHandlers {
         load_authentication(&session)
     }
 
-    fn failure(&self, error: &str, username_len: usize) -> Response {
+    fn failure(&self, error: &dyn std::fmt::Debug, username_len: usize) -> Response {
         tracing::debug!(
             target: "oxbloom::security",
-            error = %error,
+            error = ?error,
             username_len,
             "form login failed"
         );
@@ -216,7 +217,7 @@ impl FormLoginHandlers {
             )
         };
         let Some((username, password)) = form else {
-            return self.failure("MalformedForm", 0);
+            return self.failure(&MalformedForm, 0);
         };
         let username_len = username.chars().count();
         let request = AuthenticationRequest::UsernamePassword { username, password };
@@ -226,7 +227,7 @@ impl FormLoginHandlers {
         };
         let authentication = match result {
             Ok(authentication) => authentication,
-            Err(error) => return self.failure(&format!("{error:?}"), username_len),
+            Err(error) => return self.failure(&error, username_len),
         };
         // A new id first, so a planted or stolen anonymous id never carries the login.
         session.rotate_id();

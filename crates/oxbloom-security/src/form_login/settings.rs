@@ -2,7 +2,7 @@
 
 use crate::http_security::SecurityBuildError;
 
-use super::redirect::is_safe_redirect_target;
+use super::redirect::{is_safe_redirect_target, path_of};
 
 /// The form login settings: the URLs and the names of the two form fields.
 ///
@@ -66,10 +66,6 @@ pub(super) fn is_valid_field_name(name: &str) -> bool {
         && name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-}
-
-fn path_of(url: &str) -> &str {
-    url.split('?').next().unwrap_or(url)
 }
 
 macro_rules! setter {

@@ -190,7 +190,7 @@ let app = oxbloom_web::App::new().filter(filter);
 
 ## Limits
 
-- There is no CSRF protection yet; CSRF tokens come with Slice 6d. Until then `SameSite=Lax` is the only mitigation, and it does not stop every cross-site request. `HttpOnly` only keeps scripts from reading the cookie. Do not build state-changing endpoints on sessions for browsers before that.
+- There is no CSRF protection yet; CSRF tokens come with Slice 6d. Until then `SameSite=Lax` is the only mitigation, and it does not stop every cross-site request. `HttpOnly` only keeps scripts from reading the cookie. Do not build state-changing endpoints on sessions for browsers before that. Form login turns exactly this on: after a login the cookie authenticates every route, and the same-origin check of Slice 6c covers only the login and logout posts.
 - Form login and logout exist since Slice 6c (see [Form login](21-form-login.md#form-login)). An application that builds its own login should call `rotate_id` at login and `invalidate` at logout. The session keys under the prefix `oxbloom.security.` are reserved for Oxbloom.
 - A stateless cookie cannot be revoked on the server; a copy stays valid until its expiry.
 - The in-memory store is per process: sessions are lost at a restart and not shared between instances.

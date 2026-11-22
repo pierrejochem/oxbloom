@@ -70,7 +70,7 @@ curl -i -b jar.txt -X POST http://127.0.0.1:8081/logout       # 302 to /login?lo
 
 There are no CSRF tokens yet (Slice 6d). The two posts are protected by a same-origin check and
 the `SameSite=Lax` cookie, and a request with neither `Origin` nor `Referer` (such as `curl`) is
-allowed. The in-memory sessions are lost at a restart. The test `tests/login.rs` walks through
+allowed. After a login the cookie authenticates every route, and the same-origin check covers only these two posts, so state-changing routes have only `SameSite=Lax` until Slice 6d, which does not stop a same-site attacker such as a sibling subdomain. The in-memory sessions are lost at a restart. The test `tests/login.rs` walks through
 the flow: the redirect, the login, the page, the logout and a wrong password.
 
 ## Actuator

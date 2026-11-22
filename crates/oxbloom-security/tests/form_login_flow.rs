@@ -799,9 +799,10 @@ impl<'a> MakeWriter<'a> for LogBuffer {
     }
 }
 
-/// The log output of every test in this binary. A global subscriber, installed before any app
-/// runs, avoids the race of a thread-scoped one with the callsite cache of concurrent tests; it
-/// also means every test's logs are checked for leaks.
+/// The log output of the tests in this binary. A global subscriber avoids the race of a
+/// thread-scoped one with the callsite cache of concurrent tests. It is installed when the first
+/// test that needs the buffer starts (the log-leak test), so logs of other tests that run later
+/// land in the same buffer, which only makes the leak check stricter.
 fn logs() -> LogBuffer {
     static LOGS: OnceLock<LogBuffer> = OnceLock::new();
     LOGS.get_or_init(|| {
