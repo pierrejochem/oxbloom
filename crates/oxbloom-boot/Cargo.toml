@@ -43,7 +43,7 @@ tokio = { version = "1.54.1", features = ["rt", "sync", "time", "macros", "signa
 
 [dev-dependencies]
 http = "1.5.0"
-jsonwebtoken = { version = "11.1.0", features = ["rust_crypto"] }
+jsonwebtoken = { version = "12.0.0", features = ["rust_crypto"] }
 # These features turn boot's `web`, `security` and `ssl` (through `tls`) on for every
 # `cargo test -p oxbloom-boot` build, so no boot test run builds `web` without `security` or
 # without `ssl`. Feature-off coverage is the compile-only `cargo build -p oxbloom-boot

@@ -50,7 +50,7 @@ tokio-rustls = { version = "0.26.6", default-features = false, optional = true }
 [dev-dependencies]
 bytes = "1.12.1"
 http = "1.5.0"
-jsonwebtoken = { version = "11.1.0", features = ["rust_crypto"] }
+jsonwebtoken = { version = "12.0.0", features = ["rust_crypto"] }
 oxbloom-security = { version = "0.1.0", path = "../oxbloom-security" }
 oxbloom-web = { version = "0.1.0", path = "../oxbloom-web" }
 # Test certificates for `tests/https.rs` are generated at test time; `aws-lc-rs` only, no `ring`.
