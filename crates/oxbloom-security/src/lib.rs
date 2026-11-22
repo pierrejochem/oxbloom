@@ -93,8 +93,6 @@ mod config;
 mod dao;
 #[cfg(feature = "di")]
 mod di;
-// The `pub(crate)` helpers inside are consumed by the form login filter.
-#[allow(dead_code)]
 mod form_login;
 mod http_security;
 mod jwks;
