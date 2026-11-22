@@ -14,15 +14,15 @@ use std::time::{Duration, SystemTime};
 use async_trait::async_trait;
 use http::StatusCode;
 use oxbloom_boot::{
-    AutoConfiguration, RunListener, SecurityAutoConfiguration, SessionAutoConfiguration,
-    StartupPhase, auto_configurations,
+    AutoConfiguration, RunListener, SecurityAutoConfiguration, SecurityCustomizer,
+    SessionAutoConfiguration, StartupPhase, auto_configurations,
 };
 use oxbloom_config::{Config, ConfigError};
 use oxbloom_core::SystemClock;
 use oxbloom_di::{Container, ContainerBuilder, DiError};
 use oxbloom_security::{
     Argon2PasswordEncoder, DelegatingPasswordEncoder, HeadersConfig, HeadersProperties,
-    InMemorySessionStore, PasswordEncoder, SessionConfig, SessionData, SessionError,
+    HttpSecurity, InMemorySessionStore, PasswordEncoder, SessionConfig, SessionData, SessionError,
     SessionManagement, SessionManagementProperties, SessionRegistry, SessionSettings, SessionStore,
     UserDetails, UserDetailsError, UserDetailsService,
 };
@@ -227,6 +227,38 @@ async fn headers_keys_change_the_response() {
     ] {
         assert_eq!(res.header(name), None, "{name}");
     }
+    app.stop().await;
+}
+
+/// Opens everything and changes one header, on top of whatever the configuration set.
+struct SameOriginFrames;
+
+impl SecurityCustomizer for SameOriginFrames {
+    fn customize(&self, http: HttpSecurity) -> HttpSecurity {
+        http.authorize(|a| a.any_request().permit_all())
+            .headers(|h| h.frame_options(Some("SAMEORIGIN")))
+    }
+}
+
+#[tokio::test]
+async fn a_customizer_composes_on_the_configured_headers() {
+    let app = TestApp::secured()
+        .config_str(
+            "[security.headers]\nreferrer-policy = \"same-origin\"\ncontent-type-options = \"off\"\n",
+        )
+        .configure(wiring)
+        .configure(|b| {
+            b.instance(SameOriginFrames)
+                .provides(|c: Arc<SameOriginFrames>| -> Arc<dyn SecurityCustomizer> { c })
+        })
+        .start()
+        .await;
+    let res = app.client().get("/secret").send().await;
+    assert_eq!(res.status(), StatusCode::OK);
+    // The customizer's header and the configured ones are all there.
+    assert_eq!(res.header("x-frame-options"), Some("SAMEORIGIN"));
+    assert_eq!(res.header("referrer-policy"), Some("same-origin"));
+    assert_eq!(res.header("x-content-type-options"), None);
     app.stop().await;
 }
 

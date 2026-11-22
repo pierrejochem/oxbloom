@@ -153,7 +153,8 @@ pub trait SecurityCustomizer: Send + Sync {
 ///
 /// These settings and the optional `dyn Clock` bean (`HttpSecurity::clock`, default the system
 /// clock) are applied before the customizers, so a `SecurityCustomizer` can still change them;
-/// a customizer that calls `headers` starts from the default headers.
+/// a customizer that calls `headers` receives the configured headers and changes only what it
+/// touches.
 ///
 /// A `SessionRegistry` bean is registered, unless the application has one, when there is a
 /// `SessionFilter` bean and `security.session.store` is `memory` (or missing). It is lazy: it is

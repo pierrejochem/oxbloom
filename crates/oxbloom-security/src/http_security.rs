@@ -569,7 +569,10 @@ impl HttpSecurity {
     }
 
     /// Tunes or turns off the security response headers. See [`HeadersConfig`] for the defaults.
-    /// Without this call the defaults apply to every response of the chain.
+    /// `f` receives the current settings: the defaults on a fresh `HttpSecurity`, or the result
+    /// of an earlier call, so several calls compose (boot applies the `security.headers`
+    /// configuration first, and a `SecurityCustomizer` changes only what it touches). Without
+    /// this call the defaults apply to every response of the chain.
     /// [`build`](Self::build) fails with [`SecurityBuildError::InvalidHeadersConfig`] when
     /// [`HeadersConfig::validate`] fails.
     ///
@@ -583,10 +586,21 @@ impl HttpSecurity {
     ///     .headers(|h| h.frame_options(Some("SAMEORIGIN")).hsts(|s| s.preload(true)))
     ///     .build()?;
     /// # let _ = chain;
+    ///
+    /// // A second call starts from the first one's result, not from the defaults.
+    /// use oxbloom_security::HeadersConfig;
+    /// let mut seen = None;
+    /// let _ = HttpSecurity::new()
+    ///     .headers(|h| h.referrer_policy(None))
+    ///     .headers(|h| {
+    ///         seen = Some(h.clone());
+    ///         h.frame_options(Some("SAMEORIGIN"))
+    ///     });
+    /// assert_eq!(seen, Some(HeadersConfig::default().referrer_policy(None)));
     /// # Ok::<(), oxbloom_security::SecurityBuildError>(())
     /// ```
     pub fn headers(mut self, f: impl FnOnce(HeadersConfig) -> HeadersConfig) -> Self {
-        self.headers = f(HeadersConfig::default());
+        self.headers = f(std::mem::take(&mut self.headers));
         self
     }
 
