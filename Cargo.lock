@@ -3034,6 +3034,7 @@ dependencies = [
  "oxbloom-actuator",
  "oxbloom-boot",
  "oxbloom-config",
+ "oxbloom-core",
  "oxbloom-di",
  "oxbloom-security",
  "oxbloom-tasks",

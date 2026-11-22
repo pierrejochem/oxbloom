@@ -695,7 +695,7 @@ Delivered:
 - Sampled eviction in `InMemorySessionStore`: the oldest of a sample of at most 16 entries, starting at a random shard and a random position within the first 64 entries of it; the method `eviction_probes` is hidden from the docs and exists for the tests.
 - In `oxbloom-boot` (feature `security`): `SecurityAutoConfiguration` applies `form_login` when `security.form-login.enabled` is true, with ten property metadata entries (`security.form-login.*`); it needs the table `security.session` and a password provider bean.
 - `examples/todos`: the HTML page `GET /me` behind the login, `[security.form-login]` in `application.toml`, a test `tests/login.rs` and README notes.
-- ADR 0088, the guide chapter 21 (the roadmap chapter is now 23) and the API section.
+- ADR 0088, the guide chapter 21 (the roadmap chapter is now 24 since Slice 7a) and the API section.
 
 Gate numbers at the end of Slice 6c: `cargo test --workspace --all-features --no-fail-fast` 3097 passed, 0 failed, 8 ignored (2993 before Slice 6c); `cargo test -p oxbloom-boot` per feature: none 484, `security` 484, `web` 484, `logging` 504, `ssl` 484, `actuator` 497, `tasks` 508, all features 542, each with 0 failed and 1 ignored (the probe); `make check-examples` 63 (61 before); clippy `-D warnings` and `cargo fmt --check` clean; the boot stack probes are unchanged at 238 KB (237 overflows) and 239 KB with all features (238 overflows); the nine `cargo build -p oxbloom-boot` builds for `tasks`, `tasks,logging`, `tasks,ssl`, `tasks,security`, `tasks,actuator`, `security`, `security,logging`, `security,web` and `web`, each with default features off, pass; `cargo tree -i ring --workspace --all-features` finds no `ring`. The flaky `oxbloom-ssl` validity test from Slice 6b did not fail in this gate run.
 
@@ -711,8 +711,8 @@ Limits that users must know (also in the guide):
 
 Follow-ups from Slice 6c, not yet scheduled:
 - CSRF protection and the framing of the default login page: done in Slice 6d.
-- Refreshing or revalidating the stored authentication.
-- Remember-me, concurrent-session limits, OAuth2 login, registration, password reset and per-user rate limiting.
+- Refreshing or revalidating the stored authentication (done in Slice 7a).
+- Remember-me (Slice 7b), concurrent-session limits (done in Slice 7a), OAuth2 login, registration, password reset and per-user rate limiting.
 - A themeable login page.
 
 Deferred minors from the 6c reviews:
@@ -749,7 +749,7 @@ Delivered:
 - Login replaces the token, logout drops it. The default login page creates the pre-login session, carries the token in a hidden field and adds `frame-ancestors 'none'` and `X-Frame-Options: DENY`. An optional token endpoint (`security.csrf.token-endpoint`) answers `{"headerName":..,"parameterName":..,"token":..}`.
 - In `oxbloom-boot` (feature `security`): `SecurityAutoConfiguration` calls `csrf` with the `security.csrf` settings when form login is on, with four property metadata entries (`security.csrf.*`); the boot stack probes did not grow.
 - `examples/todos`: the `/me` page has two forms that post the token, `POST /me/reset-visits` needs it, the tests `tests/csrf.rs` and `tests/login.rs` use the token flow, and the README and `application.toml` describe it.
-- ADR 0089, the guide chapter 22 (the roadmap chapter is now 23) and the API section.
+- ADR 0089, the guide chapter 22 (the roadmap chapter is now 24 since Slice 7a) and the API section.
 
 Gate numbers at the end of Slice 6d: `cargo test --workspace --all-features --no-fail-fast` 3203 passed, 0 failed, 8 ignored (3097 before Slice 6d); `cargo test -p oxbloom-boot` per feature: none 496, `security` 496, `web` 496, `logging` 516, `ssl` 496, `actuator` 509, `tasks` 520, all features 554, each with 0 failed and 1 ignored (the probe); `make check-examples` 66 (63 before); clippy `-D warnings` and `cargo fmt --check` clean; the boot stack probes are unchanged at 238 KB (237 overflows) and 239 KB with all features (238 overflows); the nine `cargo build -p oxbloom-boot` builds for `tasks`, `tasks,logging`, `tasks,ssl`, `tasks,security`, `tasks,actuator`, `security`, `security,logging`, `security,web` and `web`, each with default features off, pass; `cargo tree -i ring --workspace --all-features` finds no `ring`.
 
@@ -769,7 +769,7 @@ Limits that users must know (also in the guide):
 - `HttpSecurity::csrf` without `form_login` fails the build, also with `enabled(false)`. With form login off, every `security.csrf` key except `enabled = false` fails the startup and names the key. The reserved session keys now are `oxbloom.security.authentication`, `oxbloom.security.saved-request` and `oxbloom.security.csrf-token`.
 
 Follow-ups from Slice 6d, not yet scheduled:
-- A general security-headers filter, a signed double-submit cookie, a script-readable token cookie, multipart parsing, per-request tokens and extending the origin check to the application's routes.
+- A general security-headers filter (done in Slice 7a), a signed double-submit cookie, a script-readable token cookie, multipart parsing, per-request tokens and extending the origin check to the application's routes.
 
 Deferred minors from the 6d reviews:
 - There are no tests for the case of the content type or for a header value that is not UTF-8.
@@ -802,6 +802,69 @@ Rulings made during Slice 6d:
 - With form login off, every `security.csrf` key except `enabled = false` fails the startup, which is stricter than the first plan.
 - The token endpoint without a session filter logs the fixed error and passes the request on to the application. The login page gets its token only when Oxbloom renders it.
 - A refused login without a session filter logs the "add a SessionFilter" error and still answers 403.
+
+### Security Slice 7a: Security headers and session management (`oxbloom-security`) — done
+Done on 2026-11-22; the design is the Slice 7a spec `2026-11-22-session-management-design.md` and the plan is `2026-11-22-session-management.md` (both local files under `docs/superpowers`, named here without a link), usage is in the guide chapter `docs/guide/23-session-management.md` and `docs/API.md` (section 4.7, the slice 7a subsection, and `SecurityAutoConfiguration` in section 4.8), the decisions are in ADR 0090. Remember-me is Slice 7b and is next.
+
+Delivered:
+- Headers: `HttpSecurity::headers`, `HeadersConfig`, `HstsConfig`, `HeadersProperties` and the new `SecurityBuildError::InvalidHeadersConfig`. The chain adds `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options`, `Cache-Control: no-store` (authenticated requests only) and HSTS (`https` requests only) to every response, never over a header the response has. `headers` composes on the current settings.
+- Per-user sessions: `PrincipalSessions` (`sessions_of`, `delete_of`, `evict_oldest`), `SessionSummary`, `SessionRegistry` (`sessions_of`, `invalidate_all`, `invalidate_others`), `SessionStore::principal_sessions` and `SessionFilter::principal_sessions`. The in-memory store implements the trait by scanning its shards for the reserved key `oxbloom.security.principal`; the cookie backend has no index.
+- Limit: `HttpSecurity::session_limit` and `security.session.max-sessions-per-user` (the key `security.session.max-sessions` stays the cap of the whole store). Form login evicts the oldest sessions of the user at login and writes `oxbloom.security.principal` and `oxbloom.security.revalidated-at`.
+- Revalidation: `HttpSecurity::revalidate`, `HttpSecurity::clock` and `security.session.revalidate-interval` (default 5 minutes, `0` is off, at least one second otherwise). The user is reloaded by the principal of the stored authentication; a missing, disabled or locked user ends the session.
+- In `oxbloom-boot` (feature `security`): `SecurityAutoConfiguration` reads the keys and applies them before the customizers, a lazy `SessionRegistry` bean, the `SessionManagementAnalyzer`, nine `security.headers.*` metadata entries and two `security.session.*` entries. The boot stack probes did not grow.
+- `examples/todos`: `security.session.max-sessions-per-user = 2`, `POST /me/logout-everywhere` (`LogoutEverywhereController`, which injects `SessionRegistry` and calls `invalidate_others`), the `/me` page has a third form, and `tests/session_management.rs` (3 tests with cookie jars). `tests/csrf.rs` now expects three `_csrf` fields. `oxbloom-core` became a dev-dependency of the example for the doc example.
+- ADR 0090, the guide chapter 23 (the roadmap chapter is now 24, renamed with `git mv`) and the API section.
+
+Gate numbers at the end of Slice 7a: `cargo test --workspace --all-features --no-fail-fast` 3330 passed, 0 failed, 8 ignored (3203 before Slice 7a; counted by summing the `test result` lines, doctests included); `cargo test -p oxbloom-boot` per feature, summed the same way: none 522, `web` 522, `logging` 542, `security` 522, `ssl` 522, `actuator` 535, `tasks` 546, all features 580, each with 0 failed and 1 ignored (the probe); `make check-examples` 70 passed (66 before), 0 failed; clippy `-D warnings` and `cargo fmt --check` clean; the boot stack probes are unchanged at 238 KB (237 overflows, exit 101) and 239 KB with all features (238 overflows, exit 101); the fourteen `cargo build -p oxbloom-boot --no-default-features` builds of CI (none, `logging`, `web`, `security`, `ssl`, `actuator`, `actuator,logging`, `actuator,ssl`, `actuator,security`, `tasks`, `tasks,logging`, `tasks,ssl`, `tasks,security` and `tasks,actuator`) and the four `oxbloom-security` builds (no features, `di`, `jwks`, `di,jwks`) pass; `cargo tree -i ring --workspace --all-features` finds no `ring`.
+
+Limits that users must know (also in the guide):
+- Concurrent logins of one user can overshoot the limit by the number of racing logins until the next login evicts the extra.
+- The cookie backend has no index, so no limit, no registry and no "log out everywhere"; with it a copy of the cookie that was taken after the last check stays valid for up to one interval after the session ended, and a replayed old cookie works again if the user is enabled again before the replay.
+- A changed password does not end any session. Revalidation is bounded by the interval, and a user service outage keeps the sessions (no backoff, one warning per due request).
+- A `SessionRegistry` consumer on a store without the index fails the injection (also `Option<Arc<SessionRegistry>>`, at startup); with the cookie store there is no bean.
+- The `security.headers.*` and the two session keys are applied only by `SecurityAutoConfiguration`, and are ignored with a user `SecurityFilterChain` bean, as for form login and CSRF.
+- `Session::set` does not enforce the reserved prefix `oxbloom.security.`, so application code can write the authentication and principal keys. Revalidation reloads the user by the principal of the stored authentication for that reason; the per-user index trusts the principal key.
+- Boot applies the headers, the limit, the revalidation and the clock before the customizers (a customizer can override or compose), and form login and CSRF after them (configuration wins).
+- Form login that a customizer turns on gets no default revalidation; an explicit interval works.
+
+Follow-ups from Slice 7a, not yet scheduled:
+- Remember-me is Slice 7b. A default content security policy, `Permissions-Policy`, a refuse-new-login policy, ending the sessions of a user on a password change, an admin endpoint for sessions and Redis or SQL indexes.
+
+Deferred minors from the 7a reviews:
+- Task 1: validate runs when headers disabled (document or leave).
+- Task 1: session-authenticated login/logout POST responses get no no-store (authenticated=false in handle_post path).
+- Task 1: headers tests lack assertions for token endpoint, CSRF 403, authenticated 403 no-store, malformed-credentials early return.
+- Task 1: debug_assert on unreachable HeaderValue::from_str failure in apply.rs.
+- Task 2: M1 remove_ids does not re-check principal ownership under the shard lock.
+- Task 2: M2 concurrency test should assert store.len() equals loadable sessions.
+- Task 2: M3 wrong comment in tests/session_principal.rs ("b and c go" -> "b goes").
+- Task 2: M4 PrincipalSessions methods and SessionSummary accessors lack own doc examples.
+- Task 2: M5 docs: delete_of/invalidate_all do not end a session saved while they run.
+- Task 3: partial write if store_principal fails after store_authentication (unreachable today); write principal first or roll back.
+- Task 3: handler takes plain usize max, relies on build rejecting zero; NonZeroUsize would make it structural.
+- Task 3: log-leak test on normal path checks only "\"alice\"" and username=alice; use the stricter plain-alice check.
+- Task 3: concurrent logins can overshoot max+1; document in ADR/guide (already in plan docs list).
+- Task 4: no check fresh.principal()==stored principal (defence in depth; end session on mismatch).
+- Task 4: cookie backend replay window: a cookie captured after the last check stays authenticated for up to one interval after the session ended; one sentence in the revalidate doc/guide/ADR.
+- Task 4: derived Debug on Revalidated::Updated(Authentication) would print the principal (never formatted today).
+- Task 4: interval.as_secs() rounds down; sub-second interval checks every request; Task 5 reader should require interval >= 1s (or document).
+- Task 4: no backoff during user-service outage, one warn per due request.
+- Task 5: default revalidation keys on form login from config only (form login enabled by a customizer gets no default revalidation; explicit interval works).
+- Task 5: limit/interval without form login fail via SecurityBuildError that does not name the key (CSRF reader uses ConfigError).
+- Task 5: SessionRegistry bean lazy; store without index -> injecting fails with RegistryWithoutIndex, Option<Arc<SessionRegistry>> consumers fail startup too; precedence split (headers/limit/revalidation/clock before customizers, form login and CSRF after).
+- Task 5: session keys advertised in SESSION metadata but applied only by SecurityAutoConfiguration (ignored with a user SecurityFilterChain bean; same for form login and CSRF).
+- Task 5: hsts.max-age accepts fractional seconds (1500ms truncates).
+- Task 5: boot header test checks only a 401; no no-store / configured cache-control on an authenticated boot response.
+- Task 5: over-long doc line at autoconfigure/security.rs:295.
+- Task 5: boot compose test covers referrer-policy/content-type-options but not hsts/cache-control keys.
+
+Rulings made during Slice 7a:
+- The branch is `s7a-session-management`, started from `main`; nothing is pushed.
+- The per-user limit key is `security.session.max-sessions-per-user`, because `security.session.max-sessions` already caps the whole store.
+- There is no "expired" check, because `UserDetails` has only `enabled` and `locked`.
+- The index is a scan of the in-memory store, not a second map, and `PrincipalSessions` has a third method `evict_oldest`.
+- Revalidation reloads the user by the principal of the stored authentication, never by the principal key.
+- A revalidate interval above zero and under one second is refused.
 
 ### C10: Test support (`oxbloom-test`)
 

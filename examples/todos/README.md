@@ -58,8 +58,9 @@ rule (`any_request().authenticated()`) applies. `application.toml` has `[securit
 with `enabled = true`, which needs the `[security.session]` section and the demo users above.
 A browser that asks for `/me` with `Accept: text/html` and has no session gets a 302 to `/login`,
 which Oxbloom serves as its default login page. After a login with `admin` and `changeit` the
-browser goes back to `/me`, which shows the user name and two forms: a button that posts to `/logout`
-and a button that posts to `/me/reset-visits`, which removes the visit counter from the session.
+browser goes back to `/me`, which shows the user name and three forms: a button that posts to `/logout`,
+a button that posts to `/me/reset-visits`, which removes the visit counter from the session, and a button
+that posts to `/me/logout-everywhere`, which ends the other sessions of the user.
 A request without a browser `Accept` header, such as `curl`, still gets 401 and no session.
 
 CSRF protection follows form login and is on by default. The login page and the `/me` page carry the
@@ -85,11 +86,36 @@ curl -i -b jar.txt -d "_csrf=$TOKEN" http://127.0.0.1:8081/logout               
 The example runs HTTP Basic and form login together. A request authenticated by Basic is not checked, and a browser that cached Basic credentials sends them on forged requests, so use Basic for non-browser clients only.
 
 The two posts of the login flow also pass a same-origin check, and a request with neither `Origin` nor
-`Referer` (such as `curl`) is allowed there. The cookie is `SameSite=Lax`. Only the login page is
-protected against framing. A script on the same origin can read the token from the page, and a
+`Referer` (such as `curl`) is allowed there. The cookie is `SameSite=Lax`. Every response of
+the chain carries `X-Frame-Options: DENY`, and only the login page has `frame-ancestors 'none'`. A script on the same origin can read the token from the page, and a
 multipart form needs the header. The in-memory sessions are lost at a restart. The tests
 `tests/login.rs` and `tests/csrf.rs` walk through the flow: the redirect, the login with the token
 from the page, the page, the refused posts without the token, the logout and a wrong password.
+
+## Session management and security headers
+
+`application.toml` sets `security.session.max-sessions-per-user = 2`. At a form login the session of the
+same user that was touched longest ago is ended when the user would otherwise have three, so a third
+browser logs the oldest one out. The limit is checked at the login, so two logins at the same moment can
+leave three sessions until the next login (see the guide chapter on session management). The key needs the
+in-memory store, and the cookie store would refuse it at start.
+
+`POST /me/logout-everywhere` (`LogoutEverywhereController`) injects the `SessionRegistry` bean that boot
+registers for the in-memory store and calls `invalidate_others` with the user name and the id of the current
+session. It ends every other session of the user, keeps the current one and answers 303 to `/me`. It is a
+state change of a logged-in session, so it needs the CSRF token like every other post and answers 403 without it.
+
+```text
+curl -i -b jar.txt -X POST http://127.0.0.1:8081/me/logout-everywhere                      # 403, no token
+curl -i -b jar.txt -d "_csrf=$TOKEN" http://127.0.0.1:8081/me/logout-everywhere            # 303 to /me
+```
+
+The logged-in user is also checked against the user service every five minutes (the default of
+`security.session.revalidate-interval`), and every response of the chain carries `X-Content-Type-Options`,
+`Referrer-Policy` and `X-Frame-Options`, and `Cache-Control: no-store` for authenticated requests. The
+tests `tests/session_management.rs` show the headers, the third login and the route with `TestClient`
+cookie jars. A copy of the stateless cookie cannot be ended on the server, so none of this works with
+`store = "cookie"`.
 
 ## Actuator
 

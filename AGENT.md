@@ -207,8 +207,8 @@ Per slice, or per task that changes public behavior:
 
 ## Planned work (not started, do not describe as available)
 
-Session management and
-security headers (Slice 7), method security (Slice 8) and OAuth2 login (Slice 9),
+Remember-me (Slice 7b; Slice 7a, session management and security headers, is done),
+method security (Slice 8) and OAuth2 login (Slice 9),
 health and observability, database, jobs/queue/scheduler, React integration, `oxbloom-ai`,
 `oxbloom add`, MVC web style, DI scopes (transient, request). See `docs/ROADMAP-core.md`.
 

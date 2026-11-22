@@ -24,7 +24,7 @@ use std::sync::Arc;
 use http::{HeaderValue, StatusCode, header};
 use oxbloom_boot::SecurityCustomizer;
 use oxbloom_di::component;
-use oxbloom_security::{HttpSecurity, RequestSecurityExt, RequestSessionExt};
+use oxbloom_security::{HttpSecurity, RequestSecurityExt, RequestSessionExt, SessionRegistry};
 use oxbloom_web::{HttpError, IntoResponse, Json, Request, Response, controller};
 use serde::{Deserialize, Serialize};
 
@@ -220,8 +220,8 @@ fn escape_html(value: &str) -> String {
 
 #[controller("/me")]
 impl MeController {
-    /// `GET /me`: the name of the logged-in user, escaped, and two forms, one that posts to
-    /// `/logout` and one that posts to `/me/reset-visits`. Each form holds the CSRF token of the
+    /// `GET /me`: the name of the logged-in user, escaped, and three forms, which post to
+    /// `/logout`, `/me/reset-visits` and `/me/logout-everywhere`. Each form holds the CSRF token of the
     /// session in a hidden field named `_csrf`, escaped like the name. Without an authentication
     /// (the rules keep that from happening) the answer is 401.
     #[get("")]
@@ -242,6 +242,7 @@ impl MeController {
             "<!DOCTYPE html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\"><title>Me</title></head>\n\
              <body>\n<h1>Hello, {name}</h1>\n\
              <form method=\"post\" action=\"/me/reset-visits\">{hidden}<button type=\"submit\">Reset the visit counter</button></form>\n\
+             <form method=\"post\" action=\"/me/logout-everywhere\">{hidden}<button type=\"submit\">Log out everywhere else</button></form>\n\
              <form method=\"post\" action=\"/logout\">{hidden}<button type=\"submit\">Log out</button></form>\n\
              </body>\n</html>\n"
         );
@@ -266,6 +267,74 @@ impl MeController {
                 .into_response();
         };
         session.remove("visits");
+        let mut res = Response::new(Default::default());
+        *res.status_mut() = StatusCode::SEE_OTHER;
+        res.headers_mut()
+            .insert(header::LOCATION, HeaderValue::from_static("/me"));
+        res
+    }
+}
+
+/// The route that ends every other session of the logged-in user.
+///
+/// It injects the [`SessionRegistry`] that boot registers for the in-memory session store, so it
+/// needs `security.session.store = "memory"`. It is a state change of a logged-in session, so the
+/// chain refuses it with 403 unless it carries the CSRF token.
+///
+/// # Examples
+///
+/// ```
+/// use std::sync::Arc;
+/// use oxbloom_core::SystemClock;
+/// use oxbloom_security::{
+///     Authentication, InMemorySessionStore, SecurityContext, SessionRegistry, SessionSettings,
+///     SessionStore,
+/// };
+/// use oxbloom_web::{App, HttpMethod, Request};
+/// use todos::api::LogoutEverywhereController;
+///
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let store = Arc::new(InMemorySessionStore::new(&SessionSettings::default(), Arc::new(SystemClock)));
+/// let registry = Arc::new(SessionRegistry::new(store.principal_sessions().unwrap()));
+/// let app = App::new().routes(Arc::new(LogoutEverywhereController { registry }).routes())?;
+/// // Without a session filter the route answers 503.
+/// let mut req = Request::new(HttpMethod::Post, "/me/logout-everywhere");
+/// req.extensions_mut()
+///     .insert(SecurityContext::authenticated(Authentication::new("alice", [])));
+/// assert_eq!(app.handle(req).await.status(), 503);
+/// # Ok(())
+/// # }
+/// ```
+#[component]
+pub struct LogoutEverywhereController {
+    /// The registry over the in-memory session store.
+    pub registry: Arc<SessionRegistry>,
+}
+
+#[controller("/me/logout-everywhere")]
+impl LogoutEverywhereController {
+    /// `POST /me/logout-everywhere`: ends every other session of the logged-in user and keeps
+    /// the current one, then redirects to `/me` with 303. Without a session or without an
+    /// authentication the answer is 503 or 401. A store error answers 500.
+    #[post("")]
+    async fn logout_everywhere(&self, req: Request) -> Response {
+        let Some(session) = req.session() else {
+            return HttpError::new(StatusCode::SERVICE_UNAVAILABLE)
+                .detail("sessions are not configured")
+                .into_response();
+        };
+        let Some(auth) = req.authentication() else {
+            return StatusCode::UNAUTHORIZED.into_response();
+        };
+        if self
+            .registry
+            .invalidate_others(auth.principal(), &session.id())
+            .await
+            .is_err()
+        {
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
         let mut res = Response::new(Default::default());
         *res.status_mut() = StatusCode::SEE_OTHER;
         res.headers_mut()

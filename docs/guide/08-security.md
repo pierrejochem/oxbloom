@@ -23,7 +23,9 @@ let app = App::new().filter(chain);  // handlers read `req.authentication()` (tr
 - If `oauth2_resource_server` is called while another bearer provider is registered, the first bearer provider wins.
 - Sessions (slice 6b) are a separate filter at `SESSION_ORDER` (-101) that runs before the chain; see [Sessions](20-sessions.md#sessions). With form login on, the chain also checks a CSRF token on every unsafe request that the session authenticates; see [CSRF protection](22-csrf.md#csrf-protection).
 - CSRF protection (slice 6d) is a synchronizer token in the session, on whenever form login is on. `Basic` and bearer requests, and anonymous requests, are not checked.
-- Not implemented (deliberate cuts): method security, a general security-headers filter (only the default login page has framing headers), OAuth2 login, opaque-token introspection, several chains per app.
+- Security headers (slice 7a) are added to every response of the chain by default: `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options`, `Cache-Control: no-store` for authenticated requests and HSTS on `https` requests. A header that the response already has is kept. See [Session management and security headers](23-session-management.md#security-headers).
+- Session management (slice 7a): `security.session.max-sessions-per-user` evicts the oldest session of a user at login, `SessionRegistry` lists and ends the sessions of a user (in-memory store only), and `security.session.revalidate-interval` (default 5 minutes) checks the stored login against the user service again. See [Session management and security headers](23-session-management.md#session-management-and-security-headers).
+- Not implemented (deliberate cuts): remember-me (slice 7b), a default content security policy, method security, OAuth2 login, opaque-token introspection, several chains per app.
 
 ## JWT
 

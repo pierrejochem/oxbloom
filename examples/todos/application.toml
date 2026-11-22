@@ -135,8 +135,17 @@ roles = ["USER"]
 # (they are lost at a restart and not shared between instances). The other keys have their
 # defaults: the cookie `OXBLOOM_SESSION` is HttpOnly and `SameSite=Lax`, `Secure` follows the
 # request scheme, and a session ends after 30 minutes unused or 8 hours in total.
+#
+# Session management: a user may hold at most two sessions. At a form login the session that was
+# touched longest ago is ended when the user would otherwise have three. `POST /me/logout-everywhere`
+# ends the other sessions of the logged-in user through the `SessionRegistry` bean. The user is
+# also checked again against the user service every `revalidate-interval` (default `5m`, `0` is
+# off). The limit needs the in-memory store and does not hold exactly under logins that race.
+# Response headers (`X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options`, `Cache-Control`
+# on authenticated answers) are on by default and are set under `security.headers`.
 [security.session]
 store = "memory"
+max-sessions-per-user = 2
 
 # Form login for browsers. `GET /me` is an HTML page behind the login: a browser without a
 # session is redirected to `/login`, which Oxbloom serves as a default page, and comes back to

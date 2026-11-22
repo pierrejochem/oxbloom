@@ -33,7 +33,10 @@ use oxbloom_security::SECRET_KEY;
 use oxbloom_tasks::Scheduling;
 use oxbloom_web::Controller;
 
-use crate::api::{AdminController, MeController, PublicPaths, TodoController, VisitController};
+use crate::api::{
+    AdminController, LogoutEverywhereController, MeController, PublicPaths, TodoController,
+    VisitController,
+};
 use crate::cleanup::{TodoCleanup, cleanup_bean};
 use crate::todo::TodoStore;
 
@@ -99,6 +102,8 @@ pub fn application(config_dir: impl Into<PathBuf>) -> OxbloomApplicationBuilder 
                 .provides(|c: Arc<VisitController>| -> Arc<dyn Controller> { c })
                 .component::<MeController>()
                 .provides(|c: Arc<MeController>| -> Arc<dyn Controller> { c })
+                .component::<LogoutEverywhereController>()
+                .provides(|c: Arc<LogoutEverywhereController>| -> Arc<dyn Controller> { c })
                 .component::<AdminController>()
                 .provides(|c: Arc<AdminController>| -> Arc<dyn Controller> { c })
                 .bean(|| PublicPaths)

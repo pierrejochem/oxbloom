@@ -9,7 +9,8 @@ Security slices:
 | 6b (done) | Sessions: `Session`, `SessionFilter`, an in-memory store and a stateless encrypted cookie; see [Sessions](20-sessions.md#sessions) |
 | 6c (done) | Form login: login and logout handlers, the `Authentication` in the session, a saved request, a default login page, sampled eviction; see [Form login](21-form-login.md#form-login) |
 | 6d (done) | CSRF protection: a synchronizer token in the session, checked in the chain, the login page field and framing headers, an optional token endpoint; see [CSRF protection](22-csrf.md#csrf-protection) |
-| 7 | Session management, security headers |
+| 7a (done) | Security headers added by the chain, a per-user view of the in-memory sessions with a limit at login and `SessionRegistry`, and a revalidation of the stored login on an interval; see [Session management and security headers](23-session-management.md#session-management-and-security-headers) |
+| 7b | Remember-me (next) |
 | 8 | Method security (`@PreAuthorize` equivalent) |
 | 9 | OAuth2 login and client |
 
