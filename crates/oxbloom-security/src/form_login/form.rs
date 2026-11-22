@@ -43,6 +43,23 @@ fn decode(s: &str) -> Option<String> {
     String::from_utf8(out).ok()
 }
 
+/// Splits an `application/x-www-form-urlencoded` body into decoded `(name, value)` pairs, in
+/// order. A body over 4096 bytes, invalid UTF-8 or a pair that does not decode to UTF-8 gives
+/// `None`.
+pub(crate) fn urlencoded_pairs(body: &[u8]) -> Option<Vec<(String, String)>> {
+    if body.len() > MAX_BODY_BYTES {
+        return None;
+    }
+    let body = std::str::from_utf8(body).ok()?;
+    body.split('&')
+        .filter(|p| !p.is_empty())
+        .map(|pair| {
+            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+            Some((decode(key)?, decode(value)?))
+        })
+        .collect()
+}
+
 /// Reads the username and the password from a login body. The first occurrence of a duplicated
 /// field wins. A body over 4096 bytes, invalid UTF-8, a missing field or an empty username gives
 /// `None`.
@@ -51,16 +68,9 @@ pub(crate) fn parse_login_form(
     username_field: &str,
     password_field: &str,
 ) -> Option<(String, Secret<String>)> {
-    if body.len() > MAX_BODY_BYTES {
-        return None;
-    }
-    let body = std::str::from_utf8(body).ok()?;
     let mut username: Option<String> = None;
     let mut password: Option<String> = None;
-    for pair in body.split('&').filter(|p| !p.is_empty()) {
-        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
-        let key = decode(key)?;
-        let value = decode(value)?;
+    for (key, value) in urlencoded_pairs(body)? {
         if key == username_field {
             username.get_or_insert(value);
         } else if key == password_field {

@@ -32,6 +32,6 @@ pub fn is_safe_redirect_target(target: &str) -> bool {
 }
 
 /// The path of a URL or target, without its query.
-pub(super) fn path_of(url: &str) -> &str {
+pub(crate) fn path_of(url: &str) -> &str {
     url.split('?').next().unwrap_or(url)
 }

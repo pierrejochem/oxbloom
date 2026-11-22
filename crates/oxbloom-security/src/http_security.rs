@@ -50,6 +50,12 @@ pub enum SecurityBuildError {
     /// A form login URL is not a safe redirect target, two URLs collide, or a form field name is
     /// empty or has a character outside ASCII letters, digits, `_` and `-`.
     InvalidFormLoginUrl,
+    /// CSRF protection is on but form login is not configured, so there is no session flow to
+    /// protect.
+    CsrfWithoutFormLogin,
+    /// A CSRF field or header name is empty or has a character outside ASCII letters, digits,
+    /// `_` and `-`, or the token endpoint is not a safe path or collides with a form login URL.
+    InvalidCsrfConfig,
 }
 
 impl fmt::Display for SecurityBuildError {
@@ -66,6 +72,8 @@ impl fmt::Display for SecurityBuildError {
             Self::InvalidRealm => "invalid http basic realm",
             Self::FormLoginWithoutProvider => "form_login configured without a password provider",
             Self::InvalidFormLoginUrl => "invalid form login url or field name",
+            Self::CsrfWithoutFormLogin => "csrf protection configured without form login",
+            Self::InvalidCsrfConfig => "invalid csrf field name, header name or token endpoint",
         })
     }
 }

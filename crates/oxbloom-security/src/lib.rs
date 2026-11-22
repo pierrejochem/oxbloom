@@ -90,6 +90,9 @@ mod authentication;
 mod authorization;
 mod chain;
 mod config;
+// The reader and the token helpers are consumed by the chain check in a later slice task.
+#[allow(dead_code)]
+mod csrf;
 mod dao;
 #[cfg(feature = "di")]
 mod di;
@@ -118,6 +121,7 @@ pub use chain::{
 pub use config::{
     SECRET_KEY, jwks_ssl_bundle, jwt_decoder_from_config, jwt_decoder_from_config_with_clock,
 };
+pub use csrf::{CsrfConfig, CsrfToken};
 pub use dao::DaoAuthenticationProvider;
 #[cfg(feature = "di")]
 pub use di::SecurityContainerExt;

@@ -24,6 +24,9 @@ mod repository;
 mod settings;
 
 pub use config::FormLoginConfig;
+pub(crate) use form::urlencoded_pairs;
 pub(crate) use handlers::{FormLoginEntryPoint, FormLoginHandlers};
 pub use redirect::is_safe_redirect_target;
+pub(crate) use redirect::path_of;
 pub use settings::FormLogin;
+pub(crate) use settings::is_valid_field_name;

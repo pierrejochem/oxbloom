@@ -53,6 +53,16 @@ impl FailureAnalyzer for SecurityAnalyzer {
                 "Use paths that start with a single `/`, a logout URL that differs from the login \
                  URLs, and plain field names such as `username`.",
             ),
+            SecurityBuildError::CsrfWithoutFormLogin => (
+                "CSRF protection is configured but form login is not.",
+                "Configure `form_login`, or turn CSRF protection off.",
+            ),
+            SecurityBuildError::InvalidCsrfConfig => (
+                "A CSRF field or header name is not made of ASCII letters, digits, `_` and `-`, or \
+                 the token endpoint is not a safe local path or collides with a form login URL.",
+                "Use plain names such as `_csrf` and `X-CSRF-TOKEN`, and a token endpoint that \
+                 starts with a single `/` and differs from the form login URLs.",
+            ),
         };
         Some(FailureAnalysis::new(description, action))
     }
@@ -207,6 +217,24 @@ mod tests {
             SecurityBuildError::InvalidFormLoginUrl,
             "A form login URL is not a safe local path, two form login URLs collide, or a form field name is not made of ASCII letters, digits, `_` and `-`.",
             "Use paths that start with a single `/`, a logout URL that differs from the login URLs, and plain field names such as `username`.",
+        );
+    }
+
+    #[test]
+    fn csrf_without_form_login_text() {
+        check(
+            SecurityBuildError::CsrfWithoutFormLogin,
+            "CSRF protection is configured but form login is not.",
+            "Configure `form_login`, or turn CSRF protection off.",
+        );
+    }
+
+    #[test]
+    fn invalid_csrf_config_text() {
+        check(
+            SecurityBuildError::InvalidCsrfConfig,
+            "A CSRF field or header name is not made of ASCII letters, digits, `_` and `-`, or the token endpoint is not a safe local path or collides with a form login URL.",
+            "Use plain names such as `_csrf` and `X-CSRF-TOKEN`, and a token endpoint that starts with a single `/` and differs from the form login URLs.",
         );
     }
 
