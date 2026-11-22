@@ -10,6 +10,7 @@ use crate::chain::{
     ChallengeEntryPoint, Challenges, DefaultAccessDeniedHandler, DefaultEntryPoint,
 };
 use crate::form_login::{FormLoginEntryPoint, FormLoginHandlers, Revalidation};
+use crate::remember_me::RememberMeRuntime;
 use crate::{
     AccessDeniedHandler, AuthenticationEntryPoint, AuthenticationProvider, AuthorizationManager,
     AuthorizationRule, CsrfConfig, FormLogin, HeadersConfig, JwtAuthenticationConverter,
@@ -875,11 +876,12 @@ impl HttpSecurity {
                 revalidate.map(|(interval, users)| Revalidation::new(interval, users))
             }
         };
-        match (&self.form_login, &self.remember_me) {
+        let remember_me = match (&self.form_login, self.remember_me) {
             (None, Some(_)) => return Err(SecurityBuildError::RememberMeWithoutFormLogin),
-            (Some(_), Some(remember_me)) => remember_me.validate()?,
-            (_, None) => {}
-        }
+            (_, remember_me) => remember_me
+                .map(|r| RememberMeRuntime::new(r).map(Arc::new))
+                .transpose()?,
+        };
         let challenges = Challenges {
             basic_realm: self.basic.map(|b| Arc::from(b.realm)),
             bearer: self.bearer,
@@ -905,7 +907,7 @@ impl HttpSecurity {
             self.access_denied,
             challenges,
             form_login.map(|settings| {
-                FormLoginHandlers::new(settings, csrf, limit, revalidation, self.clock)
+                FormLoginHandlers::new(settings, csrf, limit, revalidation, remember_me, self.clock)
             }),
             self.headers,
         ))

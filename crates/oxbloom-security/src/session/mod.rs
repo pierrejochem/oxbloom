@@ -33,6 +33,7 @@ mod store;
 
 pub use backend::SessionBackend;
 pub use config::{SESSION_OLD_SECRETS_KEY, SESSION_SECRET_KEY, SessionConfig, StoreKind};
+pub(crate) use cookie::{CookieScope, build_set_cookie, parse_cookie_header};
 pub use cookie_backend::CookieSessionBackend;
 pub use error::SessionError;
 pub use filter::{RequestSessionExt, SESSION_ORDER, SessionFilter};

@@ -1,8 +1,8 @@
 //! The form login handlers the chain runs: login, logout, the login page fallback, the restore of
 //! the authentication from the session and the content-negotiated entry point.
 //!
-//! No username, password, session id or saved path reaches a log line. A failed login logs at
-//! `debug` the error variant and the length of the username only.
+//! No username, password, session id, saved path or remember-me cookie reaches a log line. A
+//! failed login logs at `debug` the error variant and the length of the username only.
 
 use std::sync::Arc;
 
@@ -10,7 +10,7 @@ use http::{HeaderValue, StatusCode, header};
 use oxbloom_core::{Clock, HttpMethod};
 use oxbloom_web::{Request, Response};
 
-use super::form::parse_login_form;
+use super::form::{LoginForm, parse_login_form};
 use super::origin::same_origin;
 use super::page::login_page;
 use super::redirect::path_of;
@@ -20,6 +20,8 @@ use super::repository::{
 use super::revalidate::{Revalidated, Revalidation, revalidate};
 use super::settings::FormLogin;
 use crate::csrf::{ensure_token, replace_token, request_passes};
+use crate::remember_me::{RememberMeRuntime, clear_cookie, issue_cookie};
+use crate::session::CookieScope;
 use crate::{
     Authentication, AuthenticationEntryPoint, AuthenticationError, AuthenticationRequest,
     CsrfConfig, PrincipalSessions, ProviderManager, RequestSessionExt, Session,
@@ -156,18 +158,21 @@ pub(crate) struct FormLoginHandlers {
     csrf: Option<CsrfConfig>,
     limit: Option<(Arc<dyn PrincipalSessions>, usize)>,
     revalidation: Option<Revalidation>,
+    remember_me: Option<Arc<RememberMeRuntime>>,
     clock: Arc<dyn Clock>,
 }
 
 impl FormLoginHandlers {
     /// `csrf` is `Some` only when the CSRF check is on. `limit` is the per-user index and the
     /// positive maximum of sessions per user, when a limit is configured. `revalidation` is
-    /// `Some` when revalidation is on. `clock` gives the login time and the revalidation time.
+    /// `Some` when revalidation is on. `remember_me` is `Some` when remember-me is on. `clock`
+    /// gives the login time and the revalidation time.
     pub(crate) fn new(
         settings: Arc<FormLogin>,
         csrf: Option<CsrfConfig>,
         limit: Option<(Arc<dyn PrincipalSessions>, usize)>,
         revalidation: Option<Revalidation>,
+        remember_me: Option<Arc<RememberMeRuntime>>,
         clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
@@ -175,6 +180,7 @@ impl FormLoginHandlers {
             csrf,
             limit,
             revalidation,
+            remember_me,
             clock,
         }
     }
@@ -251,7 +257,11 @@ impl FormLoginHandlers {
                 }
             });
             let field = token.as_ref().map(|(name, token)| (*name, token.as_str()));
-            login_page(&self.settings, flags.0, flags.1, field)
+            let remember_me = self
+                .remember_me
+                .as_ref()
+                .map(|r| r.settings.field_name.as_str());
+            login_page(&self.settings, flags.0, flags.1, field, remember_me)
         } else {
             res
         }
@@ -341,9 +351,17 @@ impl FormLoginHandlers {
                 &req.body,
                 &self.settings.username_field,
                 &self.settings.password_field,
+                self.remember_me
+                    .as_ref()
+                    .map(|r| r.settings.field_name.as_str()),
             )
         };
-        let Some((username, password)) = form else {
+        let Some(LoginForm {
+            username,
+            password,
+            remember_me,
+        }) = form
+        else {
             return self.failure(&MalformedForm, 0);
         };
         let username_len = username.chars().count();
@@ -352,8 +370,9 @@ impl FormLoginHandlers {
             Some(manager) => manager.authenticate(&request).await,
             None => Err(AuthenticationError::ProviderUnavailable),
         };
+        // A password login is never remembered, whatever the provider put in the details.
         let authentication = match result {
-            Ok(authentication) => authentication,
+            Ok(authentication) => authentication.not_remembered(),
             Err(error) => return self.failure(&error, username_len),
         };
         // The id of the session the login replaces, read before the rotation removes it.
@@ -380,11 +399,49 @@ impl FormLoginHandlers {
             return redirect(&self.settings.failure_url, "/");
         }
         self.apply_limit(&principal, &replaced_id).await;
+        let cookie = match (&self.remember_me, remember_me) {
+            (Some(runtime), true) => self.remember_cookie(runtime, req, &principal).await,
+            _ => None,
+        };
         let target = take_saved_request(&session);
         let target = target
             .as_deref()
             .unwrap_or(&self.settings.default_success_url);
-        redirect(target, &self.settings.default_success_url)
+        let mut res = redirect(target, &self.settings.default_success_url);
+        if let Some(cookie) = cookie {
+            res.headers_mut().append(header::SET_COOKIE, cookie);
+        }
+        res
+    }
+
+    /// The remember-me cookie for `principal`, who just logged in with a password. The user is
+    /// loaded once more, through the remember-me user service, for the stored password hash the
+    /// token is bound to. A failed or empty load, or a token that would be too long, logs one
+    /// fixed text and gives `None`: the login goes on without a cookie.
+    async fn remember_cookie(
+        &self,
+        runtime: &RememberMeRuntime,
+        req: &Request,
+        principal: &str,
+    ) -> Option<HeaderValue> {
+        let settings = &runtime.settings;
+        let users = settings.user_details.as_ref()?;
+        let Ok(Some(user)) = users.load_user_by_username(principal).await else {
+            tracing::warn!(
+                target: "oxbloom::security",
+                "the remember-me cookie was not issued: the user could not be loaded"
+            );
+            return None;
+        };
+        let now = settings.clock.now();
+        let cookie = issue_cookie(settings, &runtime.codec, &user, now, &CookieScope::of(req));
+        if cookie.is_none() {
+            tracing::warn!(
+                target: "oxbloom::security",
+                "the remember-me cookie was not issued: the token would be too long"
+            );
+        }
+        cookie
     }
 
     /// Evicts the oldest sessions of `principal` until `max - 1` others remain. The session being
@@ -419,7 +476,12 @@ impl FormLoginHandlers {
         if let Some(session) = req.session() {
             session.invalidate();
         }
-        redirect(&self.settings.logout_success_url, "/")
+        let mut res = redirect(&self.settings.logout_success_url, "/");
+        if let Some(runtime) = &self.remember_me {
+            let cookie = clear_cookie(&runtime.settings, &CookieScope::of(req));
+            res.headers_mut().append(header::SET_COOKIE, cookie);
+        }
+        res
     }
 }
 

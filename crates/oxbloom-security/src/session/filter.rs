@@ -8,14 +8,14 @@ use std::time::{Duration, SystemTime};
 use async_trait::async_trait;
 use http::{HeaderValue, StatusCode, header};
 use oxbloom_core::{Clock, SystemClock};
-use oxbloom_web::{Filter, Next, Request, Response, Scheme};
+use oxbloom_web::{Filter, Next, Request, Response};
 
 use super::backend::{CookieAction, SessionBackend};
-use super::cookie::{build_set_cookie, parse_cookie_header};
+use super::cookie::{CookieScope, build_set_cookie, is_secure, parse_cookie_header};
 use super::error::SessionError;
 use super::handle::Session;
 use super::principal::PrincipalSessions;
-use super::settings::{SecureMode, SessionSettings};
+use super::settings::SessionSettings;
 
 /// The slot of the [`SessionFilter`]: one step before the security chain, so authentication
 /// can read the session.
@@ -63,8 +63,10 @@ const MAINTAIN_INTERVAL: Duration = Duration::from_secs(60);
 ///    every `Set-Cookie` is marked sensitive. `Cache-Control: no-store` is added with it unless
 ///    the response already has a `Cache-Control` header.
 ///
-/// `Secure` follows [`SecureMode`]: `Auto` sets it when [`Request::scheme`] is HTTPS, directly
-/// or as reported by a trusted proxy; `Always` and `Never` override.
+/// `Secure` follows [`SecureMode`](crate::SecureMode): `Auto` sets it when [`Request::scheme`]
+/// is HTTPS, directly or as reported by a trusted proxy; `Always` and `Never` override. The
+/// cookie `Path` and this decision also go into the request extensions, so the remember-me
+/// cookie of the security chain carries the same `Path` and `Secure`.
 ///
 /// A [`SessionError`] while loading or committing, such as a failed store or a session over
 /// the cookie size limit, answers 503 with an empty body and logs a fixed line at `error`
@@ -119,6 +121,8 @@ const MAINTAIN_INTERVAL: Duration = Duration::from_secs(60);
 pub struct SessionFilter {
     backend: SessionBackend,
     settings: SessionSettings,
+    /// The cookie `Path`, shared with every request through its [`CookieScope`].
+    cookie_path: Arc<str>,
     clock: Arc<dyn Clock>,
     last_maintain: Mutex<Option<SystemTime>>,
 }
@@ -175,6 +179,7 @@ impl SessionFilter {
         settings.validate()?;
         Ok(Self {
             backend,
+            cookie_path: Arc::from(settings.path.as_str()),
             settings,
             clock: Arc::new(SystemClock),
             last_maintain: Mutex::new(None),
@@ -255,14 +260,6 @@ impl SessionFilter {
             self.backend.maintain().await;
         }
     }
-
-    fn secure(&self, req: &Request) -> bool {
-        match self.settings.secure {
-            SecureMode::Always => true,
-            SecureMode::Never => false,
-            SecureMode::Auto => req.scheme() == Scheme::Https,
-        }
-    }
 }
 
 #[async_trait]
@@ -286,9 +283,13 @@ impl Filter for SessionFilter {
             );
             return unavailable();
         };
-        let secure = self.secure(&req);
+        let secure = is_secure(self.settings.secure, &req);
         let session = Session::from_state(state);
         req.extensions_mut().insert(session.clone());
+        req.extensions_mut().insert(CookieScope {
+            path: self.cookie_path.clone(),
+            secure,
+        });
 
         let mut res = next.run(req).await;
 

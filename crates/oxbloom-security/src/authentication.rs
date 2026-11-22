@@ -153,6 +153,13 @@ impl Authentication {
         self.details.get(REMEMBERED_DETAIL) == Some(&serde_json::Value::Bool(true))
     }
 
+    /// Removes the remembered marker, whatever its value, and keeps the other details. A
+    /// password login stores its authentication through this, so no provider can mark it.
+    pub(crate) fn not_remembered(mut self) -> Self {
+        self.details.remove(REMEMBERED_DETAIL);
+        self
+    }
+
     /// The principal name (for JWTs, the `sub` claim).
     ///
     /// # Examples
