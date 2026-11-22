@@ -170,7 +170,8 @@ impl RememberMeProperties {
     /// assert!(settings.secret.is_none());
     ///
     /// // A short secret is an error that names the key and not the value.
-    /// let config = Config::from_str("[security.remember-me]\nenabled = true\nsecret = \"short\"")?;
+    /// let config =
+    ///     Config::from_str("[security.remember-me]\nenabled = true\nsecret = \"short\"")?;
     /// let err = RememberMeProperties::from_config(&config).unwrap_err();
     /// assert!(err.to_string().contains("security.remember-me.secret"));
     /// assert!(!format!("{err} {err:?}").contains("short\""));

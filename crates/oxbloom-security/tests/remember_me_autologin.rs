@@ -747,6 +747,74 @@ async fn the_cookie_works_until_its_last_second() {
 }
 
 #[tokio::test]
+async fn a_cookie_issued_under_a_longer_lifetime_is_refused_without_a_lookup() {
+    for kind in KINDS {
+        // Issued under the default 14 days, checked by an app that now allows one hour.
+        let env = Env::new(kind);
+        let token = env.issue().await;
+        let short = Env::build(
+            kind,
+            env.users.clone(),
+            env.clock.clone(),
+            true,
+            Box::new(|s, _, _| s.remember_me(|r| r.lifetime(Duration::from_secs(3600)))),
+        );
+        let calls = short.users.calls();
+        let answer = probe(&short, &token).await;
+        assert_eq!(answer[0].1, "anonymous", "{kind:?}");
+        assert_eq!(answer[0].2, vec![CLEARING.to_owned()], "{kind:?}");
+        assert_eq!(short.users.calls(), calls, "{kind:?}");
+    }
+}
+
+#[tokio::test]
+async fn a_cookie_issued_under_the_current_lifetime_works_at_the_boundary() {
+    for kind in KINDS {
+        let env = Env::build(
+            kind,
+            Users::new(),
+            clock(),
+            true,
+            Box::new(|s, _, _| s.remember_me(|r| r.lifetime(Duration::from_secs(3600)))),
+        );
+        let token = env.issue().await;
+        // Its expiry is exactly now plus the lifetime: allowed.
+        let b = env.remembered_browser(&token);
+        assert_eq!(b.who().await, "alice|true|false", "{kind:?}");
+        // One second later it is below the bound still.
+        env.clock.advance(Duration::from_secs(1));
+        let b = env.remembered_browser(&token);
+        assert_eq!(b.who().await, "alice|true|false", "{kind:?}");
+    }
+}
+
+#[tokio::test]
+async fn the_security_headers_are_on_the_clearing_cookie_and_the_403_answers() {
+    for kind in KINDS {
+        let env = Env::new(kind);
+        let res = env.remembered_browser("garbage").get("/whoami").await;
+        assert_eq!(set_cookies(&res), vec![CLEARING.to_owned()], "{kind:?}");
+        assert_eq!(
+            res.headers()["x-content-type-options"],
+            "nosniff",
+            "{kind:?}"
+        );
+        assert!(res.headers().contains_key("referrer-policy"), "{kind:?}");
+
+        let token = env.issue().await;
+        let b = env.remembered_browser(&token);
+        let res = b.send(b.form("/change", "a=b")).await;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN, "{kind:?}");
+        assert_eq!(
+            res.headers()["x-content-type-options"],
+            "nosniff",
+            "{kind:?}"
+        );
+        assert!(res.headers().contains_key("referrer-policy"), "{kind:?}");
+    }
+}
+
+#[tokio::test]
 async fn the_clearing_cookie_is_not_added_when_the_response_sets_the_cookie() {
     for kind in KINDS {
         let env = Env::new(kind);

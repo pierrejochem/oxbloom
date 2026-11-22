@@ -385,6 +385,11 @@ impl FormLoginHandlers {
         }
         let cookie = match (&self.remember_me, remember_me) {
             (Some(runtime), true) => self.remember_cookie(runtime, req, &principal).await,
+            // A login without the box ends the remember-me of the browser: a cookie left from an
+            // earlier user would otherwise log that user in again when this session idles out.
+            (Some(runtime), false) if remember_me_token(runtime, req).is_some() => {
+                Some(clear_cookie(&runtime.settings, &CookieScope::of(req)))
+            }
             _ => None,
         };
         let target = take_saved_request(&session);

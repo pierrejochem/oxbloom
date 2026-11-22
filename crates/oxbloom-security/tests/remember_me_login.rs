@@ -296,6 +296,21 @@ impl Browser<'_> {
         self.send(self.form("/login", &body)).await
     }
 
+    /// Like [`login`](Self::login), with a remember-me cookie of `value` in the request.
+    async fn login_carrying(&self, user: &str, pass: &str, extra: &str, value: &str) -> Response {
+        let token = self.token().await;
+        let body = format!("username={user}&password={pass}&_csrf={token}{extra}");
+        let mut req = self.form("/login", &body);
+        let jar = self.jar.lock().unwrap().clone().unwrap();
+        req.headers.insert(
+            header::COOKIE,
+            format!("{SESSION}={jar}; {REMEMBER}={value}")
+                .parse()
+                .unwrap(),
+        );
+        self.send(req).await
+    }
+
     async fn logout(&self) -> Response {
         let token = self.token().await;
         self.send(self.form("/logout", &format!("_csrf={token}")))
@@ -625,6 +640,52 @@ async fn logout_clears_the_cookie() {
         // Logout clears it even when this login asked for no cookie, as another one may have.
         b.login("alice", "s3cret", "").await;
         assert!(cookie_named(&b.logout().await, REMEMBER).is_some());
+    }
+}
+
+#[tokio::test]
+async fn a_login_without_the_box_clears_a_cookie_it_carries() {
+    for kind in KINDS {
+        let env = Env::new(kind, true);
+        let b = env.browser();
+        let res = b.login_carrying("alice", "s3cret", "", "stale").await;
+        assert_success(&res);
+        assert_eq!(
+            cookie_named(&res, REMEMBER).unwrap(),
+            format!("{REMEMBER}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"),
+            "{kind:?}"
+        );
+        assert_eq!(b.who().await, "alice|false");
+    }
+}
+
+#[tokio::test]
+async fn a_login_without_the_box_and_without_a_cookie_sets_no_cookie_of_that_name() {
+    for kind in KINDS {
+        let env = Env::new(kind, true);
+        let b = env.browser();
+        let res = b.login("alice", "s3cret", "").await;
+        assert_success(&res);
+        assert_eq!(cookie_named(&res, REMEMBER), None, "{kind:?}");
+    }
+}
+
+#[tokio::test]
+async fn a_failed_login_with_a_cookie_clears_nothing_and_a_ticked_one_issues_a_fresh_cookie() {
+    for kind in KINDS {
+        let env = Env::new(kind, true);
+        let b = env.browser();
+        let res = b.login_carrying("alice", "wrong", "", "stale").await;
+        assert_eq!(res.headers()[header::LOCATION], "/login?error", "{kind:?}");
+        assert_eq!(cookie_named(&res, REMEMBER), None, "{kind:?}");
+
+        let res = b
+            .login_carrying("alice", "s3cret", "&remember-me=on", "stale")
+            .await;
+        assert_success(&res);
+        let fresh = value_of(&res, REMEMBER).unwrap();
+        assert_ne!(fresh, "", "{kind:?}");
+        assert!(fresh.starts_with("v1."), "{fresh}");
     }
 }
 

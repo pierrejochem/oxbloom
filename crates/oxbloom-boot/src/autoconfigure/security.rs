@@ -155,12 +155,13 @@ pub trait SecurityCustomizer: Send + Sync {
 /// Remember-me follows `security.remember-me` (read with
 /// `oxbloom_security::RememberMeProperties::from_config`). It is off unless `enabled` is `true`,
 /// but its keys are checked either way: an unknown key or a bad value fails the startup even
-/// while it is off. When on, the chain calls `remember_me` with the configured secret, old secrets, lifetime, field
-/// name and cookie name, the `dyn UserDetailsService` bean (the same bean revalidation uses)
-/// and the clock below. Enabled remember-me needs form login, a secret and that bean: without
-/// form login the startup fails with an error that names `security.form-login.enabled`,
-/// without a secret one that names `security.remember-me.secret`, and without the bean one
-/// that names `security.remember-me.enabled`. A cookie name equal to the session cookie name
+/// while it is off. When on, the chain calls `remember_me` with the configured secret, old
+/// secrets, lifetime, field name and cookie name, the `dyn UserDetailsService` bean (the same
+/// bean revalidation uses) and the clock below. Enabled remember-me needs form login, a secret
+/// and that bean: without form login the startup fails with an error that names
+/// `security.form-login.enabled`, without a secret one that names
+/// `security.remember-me.secret`, and without the bean one that names
+/// `security.remember-me.enabled`. A cookie name equal to the session cookie name
 /// fails the startup with an error that names `security.remember-me.cookie-name`, since the
 /// two cookies would overwrite each other. No error or report shows a secret.
 ///
@@ -295,8 +296,6 @@ fn security_filter_chain(
             }
         },
     };
-    // The default interval applies only with form login and a user service; an explicit one
-    // is passed on, so the build reports it when form login is off.
     let remember_me = RememberMeProperties::from_config(&config).map_err(creation)?;
     let remember_me = match remember_me {
         Some(settings) => Some(remember_me_parts(
@@ -307,6 +306,8 @@ fn security_filter_chain(
         )?),
         None => None,
     };
+    // The default interval applies only with form login and a user service; an explicit one
+    // is passed on, so the build reports it when form login is off.
     let revalidate = match (management.revalidate_interval, users) {
         (Some(interval), Some(users)) if form_enabled || management.revalidate_explicit => {
             Some((interval, users))

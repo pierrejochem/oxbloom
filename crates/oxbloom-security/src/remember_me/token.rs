@@ -112,7 +112,8 @@ impl TokenCodec {
 
     /// Checks the format only: four parts separated by `.`, the version `v1`, a base64url
     /// username that is UTF-8, an expiry of decimal digits without a leading zero that fits a
-    /// `u64` and, as seconds after the epoch, a `SystemTime`, and a base64url MAC of 32 bytes. A token over 1 KiB is refused unread. Never panics.
+    /// `u64` and, as seconds after the epoch, a `SystemTime`, and a base64url MAC of 32 bytes. A
+    /// token over 1 KiB is refused unread. Never panics.
     pub(crate) fn parse(&self, token: &str) -> Option<ParsedToken> {
         if token.len() > MAX_TOKEN_BYTES {
             return None;

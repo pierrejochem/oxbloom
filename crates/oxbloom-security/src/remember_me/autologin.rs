@@ -1,7 +1,8 @@
 //! Auto login: the remember-me cookie of a request that has neither a header credential nor a
 //! session login is checked, and a valid one names the user to log in.
 //!
-//! The checks run from the cheapest to the dearest: the format, then the expiry, both before the
+//! The checks run from the cheapest to the dearest: the format, then the expiry (past, or beyond
+//! the configured lifetime from now), both before the
 //! user service is asked, so a forged or stale cookie costs no lookup; then the user, who must
 //! exist, be enabled and not be locked; then the MAC over that user's stored password hash. The
 //! client cannot tell which check failed. No cookie, token or username reaches a log line.
@@ -48,8 +49,12 @@ pub(crate) async fn check_token(runtime: &RememberMeRuntime, token: &str) -> Che
     let Some(parsed) = runtime.codec.parse(token) else {
         return Checked::Invalid;
     };
-    // Expired before any lookup, so a stale or forged expiry costs no call to the user service.
-    if parsed.expires() <= runtime.settings.clock.now() {
+    // Expired, or issued under a longer lifetime than the configured one, before any lookup, so
+    // a stale or forged expiry costs no call to the user service and a shorter lifetime takes
+    // effect on the cookies already out.
+    let now = runtime.settings.clock.now();
+    let latest = now.checked_add(runtime.settings.lifetime);
+    if parsed.expires() <= now || latest.is_none_or(|latest| parsed.expires() > latest) {
         return Checked::Invalid;
     }
     let Some(users) = runtime.settings.user_details.as_ref() else {
