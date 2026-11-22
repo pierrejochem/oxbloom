@@ -81,7 +81,7 @@ Form login stores the user name of the login under the reserved session key `oxb
 
 `SessionRegistry` is the application's view of it:
 
-- `sessions_of(name)` lists the live sessions as `SessionSummary` values (the id, the created time and the touched time, the one touched longest ago first). The id of a session is a credential, so `Debug` of a summary prints none of it.
+- `sessions_of(name)` lists the live sessions as `SessionSummary` values (the id, the created time and the touched time, the one touched longest ago first; the last use of a session is recorded at most once a minute). The id of a session is a credential, so `Debug` of a summary prints none of it.
 - `invalidate_all(name)` ends every session of the user and returns how many there were.
 - `invalidate_others(name, current_id)` ends every session except the one with `current_id`, which you get from `req.session()`.
 
@@ -89,7 +89,7 @@ With the in-memory store and a `security.session` section, boot registers a `Ses
 
 ## Limiting the sessions of a user
 
-`security.session.max-sessions-per-user` (a positive integer, no default) or `HttpSecurity::session_limit(sessions, max)` limits a user to `max` sessions. At a successful login the sessions of that user that were touched longest ago are ended until `max - 1` others remain, so the new session fits. The session that the login replaces is never counted. A failed login ends nothing. A store error is logged with a fixed text and never fails the login. A new login is never refused because of the limit.
+`security.session.max-sessions-per-user` (a positive integer, no default) or `HttpSecurity::session_limit(sessions, max)` limits a user to `max` sessions. At a successful login the sessions of that user that were touched longest ago are ended until `max - 1` others remain, so the new session fits. The last use of a session is recorded at most once a minute, so "touched longest ago" is accurate to about a minute. The session that the login replaces is never counted. A failed login ends nothing. A store error is logged with a fixed text and never fails the login. A new login is never refused because of the limit.
 
 The key `security.session.max-sessions` is a different setting: it caps the whole in-memory store. The two do not interact.
 
@@ -104,7 +104,7 @@ A session keeps the authentication of the login, so a user that was disabled or 
 - With no change, only the time of the check advances.
 - When the user service fails, the session stays and the time does not advance, so the next request tries again. A fixed warning is logged.
 
-`UserDetails` has `enabled` and `locked`, and no flag for expired accounts, so these are the two checks. With form login configured and a `UserDetailsService` bean, the default interval applies without a key. An explicit interval without that bean fails the startup with an error that names `security.session.revalidate-interval`, and an explicit interval without form login fails `build` with `SecurityBuildError::RevalidateWithoutFormLogin`. `HttpSecurity::clock` sets the clock for the check (default the system clock), and boot passes the `Clock` bean, so tests use `ManualClock` and move time without sleeping.
+`UserDetails` has `enabled` and `locked`, and no flag for expired accounts, so these are the two checks. With form login configured and a `UserDetailsService` bean, the default interval applies without a key. The `UserDetailsService` bean must know every user that form login authenticates. If form login authenticates through another provider (LDAP, a custom database provider) while a `security.users` bean exists, every session ends at the first check after the interval. Set `security.session.revalidate-interval = "0s"` or provide a service that knows those users. An explicit interval without that bean fails the startup with an error that names `security.session.revalidate-interval`, and an explicit interval without form login fails `build` with `SecurityBuildError::RevalidateWithoutFormLogin`. `HttpSecurity::clock` sets the clock for the check (default the system clock), and boot passes the `Clock` bean, so tests use `ManualClock` and move time without sleeping.
 
 ## Settings in the configuration
 
@@ -126,7 +126,7 @@ Boot applies the headers, the limit, the revalidation and the clock before the c
 
 ## Limits
 
-- **Racing logins.** The limit is checked at a login, before the session of a concurrent login is saved. Two logins of one user at the same moment can leave `max + 1` sessions until the next login ends the extra one.
+- **Racing logins.** The limit is checked at a login, before the session of a concurrent login is saved. Two logins of one user at the same moment can leave `max + 1` sessions until the next login ends the extra one. With N logins at the same moment, up to N - 1 extra sessions can exist. A re-login from an authenticated session X can also race another login of the same user that evicts X as the oldest. Then the rotation of X finds nothing, no cookie is set and the redirect still goes to the success URL. The result is fail-closed and rare: the user is anonymous and logs in again.
 - **The cookie backend.** It keeps no state on the server, so it has no limit, no registry and no "log out everywhere". Setting the limit with it fails the startup. Revalidation works, but the cookie is the session: a copy of the cookie that was taken after the last check stays valid for up to one interval after the session ended, and a replayed old cookie works again if the user was enabled again before the replay.
 - **A changed password.** It does not end any session. Revalidation compares only whether the user exists, `enabled`, `locked` and the authorities. Call `invalidate_all` yourself when a password changes.
 - **The interval.** Revalidation is bounded by the interval: a user that is disabled keeps the session for up to one interval, and a changed role takes effect after up to one interval. A shorter interval calls the user service more often.

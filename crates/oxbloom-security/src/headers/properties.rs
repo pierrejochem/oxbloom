@@ -159,7 +159,7 @@ impl HeadersProperties {
 
 /// `None` for `off`, the value when it is a valid header value, otherwise an error naming `key`.
 fn header_value(key: &str, value: String) -> Result<Option<String>, ConfigError> {
-    if value == OFF {
+    if value.eq_ignore_ascii_case(OFF) {
         return Ok(None);
     }
     let value = Some(value);
@@ -209,9 +209,11 @@ mod tests {
                 .referrer_policy(None)
                 .cache_control(None)
         );
-        // Only the exact word turns a header off.
-        let headers = read("[security.headers]\nframe-options = \"OFF\"").unwrap();
-        assert_eq!(headers.frame_options.as_deref(), Some("OFF"));
+        // The word `off` turns a header off in any letter case.
+        for word in ["OFF", "Off"] {
+            let headers = read(&format!("[security.headers]\nframe-options = \"{word}\"")).unwrap();
+            assert_eq!(headers.frame_options, None, "{word}");
+        }
     }
 
     #[test]

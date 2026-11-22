@@ -120,9 +120,9 @@ pub trait SecurityCustomizer: Send + Sync {
 ///
 /// A `SecurityBuildError` fails the build as `DiError::Creation` with that error as source; a
 /// bad `security.http-basic`, `security.form-login`, `security.csrf`, `security.headers` or
-/// session management key fails it the same way with the `ConfigError` naming the key. The metadata of this auto-configuration lists the
-/// `security.form-login`, `security.csrf` and `security.headers` keys, so excluding it hides
-/// them.
+/// session management key fails it the same way with the `ConfigError` naming the key. The
+/// metadata of this auto-configuration lists the `security.form-login`, `security.csrf` and
+/// `security.headers` keys, so excluding it hides them.
 ///
 /// CSRF protection follows form login (read with `oxbloom_security::CsrfProperties::from_config`).
 /// With form login on, the chain calls `csrf` with the `security.csrf` settings: the check is on

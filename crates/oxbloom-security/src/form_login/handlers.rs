@@ -374,6 +374,9 @@ impl FormLoginHandlers {
                 target: "oxbloom::security",
                 "the authentication could not be stored in the session"
             );
+            // A half-written login must not stay: without the principal key the session would
+            // escape the limit and the registry.
+            session.invalidate();
             return redirect(&self.settings.failure_url, "/");
         }
         self.apply_limit(&principal, &replaced_id).await;

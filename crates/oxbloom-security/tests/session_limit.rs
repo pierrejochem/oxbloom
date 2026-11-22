@@ -71,6 +71,7 @@ fn security() -> HttpSecurity {
 struct Env {
     app: App,
     clock: Arc<ManualClock>,
+    index: Arc<dyn PrincipalSessions>,
 }
 
 impl Env {
@@ -86,7 +87,7 @@ impl Env {
         let filter = SessionFilter::new(SessionBackend::Server(store), settings)
             .unwrap()
             .with_clock(clock.clone());
-        let chain = configure(security().form_login(|f| f), index)
+        let chain = configure(security().form_login(|f| f), index.clone())
             .build()
             .unwrap();
         let app = App::new()
@@ -131,7 +132,7 @@ impl Env {
                 },
             ))
             .unwrap();
-        Self { app, clock }
+        Self { app, clock, index }
     }
 
     fn browser(&self) -> Browser<'_> {
@@ -244,6 +245,35 @@ async fn the_third_login_evicts_the_least_recently_used_session() {
     assert_eq!(a.who().await, "anonymous");
     assert_eq!(b.who().await, "alice");
     assert_eq!(c.who().await, "alice");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn parallel_logins_all_succeed_and_a_later_login_trims_the_extra_sessions() {
+    const RACERS: usize = 8;
+    let env = Arc::new(limited(2));
+    let mut tasks = tokio::task::JoinSet::new();
+    for _ in 0..RACERS {
+        let env = env.clone();
+        tasks.spawn(async move {
+            let browser = env.browser();
+            browser.log_in("alice", "s3cret").await;
+            browser.cookie()
+        });
+    }
+    let mut cookies = Vec::new();
+    while let Some(done) = tasks.join_next().await {
+        cookies.push(done.unwrap());
+    }
+    // Every login succeeded (`log_in` asserts the redirect) and got its own session.
+    assert_eq!(cookies.len(), RACERS);
+    assert!(cookies.iter().all(|c| !c.is_empty()));
+    // At most limit + racers - 1 sessions.
+    let after_race = env.index.sessions_of("alice").await.unwrap().len();
+    assert!(after_race < 2 + RACERS, "{after_race} sessions");
+    // One more login at a quiet moment leaves at most the limit.
+    env.browser().log_in("alice", "s3cret").await;
+    let after = env.index.sessions_of("alice").await.unwrap().len();
+    assert!(after <= 2, "{after} sessions");
 }
 
 #[tokio::test]

@@ -153,7 +153,8 @@ async fn a_third_login_ends_the_oldest_session() {
     assert_eq!(page(&client, "/me", &second).await.status(), 200);
 
     // The limit is 2, so the third login evicts the session that was touched longest ago. The
-    // page reads above touched both, `second` last.
+    // page reads above do not reorder them: a touch is written back only after the backend touch
+    // interval of 60 seconds, so `first` is the oldest because it logged in first.
     let (third, _) = login(&client).await;
     let reply = page(&client, "/me", &first).await;
     assert_eq!(reply.status(), 302);
