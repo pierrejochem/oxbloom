@@ -331,11 +331,35 @@ pub trait RequestSessionExt {
     /// }
     /// ```
     fn session(&self) -> Option<Session>;
+
+    /// The CSRF token of the session, or `None` when no session filter ran.
+    ///
+    /// The token is created on the first call and kept in the session, so a later request of
+    /// the same session sees the same value. A stored value that is not a valid token is
+    /// replaced by a new one. The call creates no session: without a `SessionFilter` it gives
+    /// `None`. Put the value in a form field or a meta tag with
+    /// [`as_str`](crate::CsrfToken::as_str); never log it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_security::RequestSessionExt;
+    /// use oxbloom_web::{HttpMethod, Request};
+    ///
+    /// // Without a `SessionFilter` there is no session and so no token.
+    /// assert!(Request::new(HttpMethod::Get, "/").csrf_token().is_none());
+    /// ```
+    fn csrf_token(&self) -> Option<crate::CsrfToken>;
 }
 
 impl RequestSessionExt for Request {
     fn session(&self) -> Option<Session> {
         self.extensions().get::<Session>().cloned()
+    }
+
+    fn csrf_token(&self) -> Option<crate::CsrfToken> {
+        self.session()
+            .map(|session| crate::csrf::ensure_token(&session))
     }
 }
 

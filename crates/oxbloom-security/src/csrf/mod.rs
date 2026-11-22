@@ -6,9 +6,11 @@
 
 mod reader;
 mod settings;
+mod store;
 mod token;
 
 #[allow(unused_imports)] // Consumed by the chain check in a later task.
 pub(crate) use reader::submitted_token;
 pub use settings::CsrfConfig;
+pub(crate) use store::ensure_token;
 pub use token::CsrfToken;
