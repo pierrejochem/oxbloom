@@ -53,6 +53,9 @@ impl fmt::Display for GrantedAuthority {
     }
 }
 
+/// The `details` entry that marks an authentication restored from a remember-me cookie.
+const REMEMBERED_DETAIL: &str = "oxbloom.remembered";
+
 /// An authenticated principal with its authorities and extra details (e.g. token claims).
 ///
 /// `Debug` prints only the principal and authority names, never the details. The serialized form
@@ -111,6 +114,43 @@ impl Authentication {
     pub fn with_details(mut self, details: serde_json::Map<String, serde_json::Value>) -> Self {
         self.details = details;
         self
+    }
+
+    /// Marks the authentication as restored from a remember-me cookie, by setting the `details`
+    /// entry `oxbloom.remembered` to `true`. The marker travels with the details, so it survives
+    /// the stored session value and a revalidation; [`with_details`](Self::with_details) replaces
+    /// the details and drops it. A remembered user passes `authenticated()` rules but not
+    /// `fully_authenticated()` ones.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_security::Authentication;
+    ///
+    /// let auth = Authentication::new("alice", []).remembered();
+    /// assert!(auth.is_remembered());
+    /// assert_eq!(auth.details()["oxbloom.remembered"], true);
+    /// ```
+    pub fn remembered(mut self) -> Self {
+        self.details
+            .insert(REMEMBERED_DETAIL.to_owned(), serde_json::Value::Bool(true));
+        self
+    }
+
+    /// True when the authentication was restored from a remember-me cookie: the `details` entry
+    /// `oxbloom.remembered` is the boolean `true`. A password, Basic or bearer login is not
+    /// remembered.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_security::Authentication;
+    ///
+    /// assert!(!Authentication::new("alice", []).is_remembered());
+    /// assert!(Authentication::new("alice", []).remembered().is_remembered());
+    /// ```
+    pub fn is_remembered(&self) -> bool {
+        self.details.get(REMEMBERED_DETAIL) == Some(&serde_json::Value::Bool(true))
     }
 
     /// The principal name (for JWTs, the `sub` claim).

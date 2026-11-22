@@ -131,6 +131,11 @@ fn is_token_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || "!#$%&'*+-.^_`|~".contains(c)
 }
 
+/// Whether `name` is a non-empty HTTP token, the rule for every cookie name of the crate.
+pub(crate) fn is_valid_cookie_name(name: &str) -> bool {
+    !name.is_empty() && name.chars().all(is_token_char)
+}
+
 impl SessionSettings {
     /// Sets the cookie name.
     ///
@@ -292,7 +297,7 @@ impl SessionSettings {
     /// );
     /// ```
     pub fn validate(&self) -> Result<(), SessionError> {
-        let name_ok = !self.cookie_name.is_empty() && self.cookie_name.chars().all(is_token_char);
+        let name_ok = is_valid_cookie_name(&self.cookie_name);
         let path_ok = self.path.starts_with('/')
             && !self
                 .path

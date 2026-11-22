@@ -41,5 +41,6 @@ pub use management_properties::{SessionManagement, SessionManagementProperties};
 pub use memory::InMemorySessionStore;
 pub(crate) use principal::PRINCIPAL_KEY;
 pub use principal::{PrincipalSessions, SessionRegistry, SessionSummary};
+pub(crate) use settings::is_valid_cookie_name;
 pub use settings::{SameSite, SecureMode, SessionSettings};
 pub use store::{SessionData, SessionStore};

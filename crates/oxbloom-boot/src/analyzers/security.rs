@@ -86,6 +86,19 @@ impl FailureAnalyzer for SecurityAnalyzer {
                 "The session revalidation interval is zero.",
                 "Use an interval of at least one second, or leave revalidation out to turn it off.",
             ),
+            SecurityBuildError::RememberMeWithoutFormLogin => (
+                "Remember-me is configured but form login is not.",
+                "Configure `form_login`, or remove remember-me.",
+            ),
+            SecurityBuildError::InvalidRememberMe => (
+                "A remember-me setting is missing or out of range: a secret shorter than 32 bytes, \
+                 a missing secret or user service, a lifetime outside 1 minute to 365 days, a \
+                 cookie name that is not an HTTP token, or a field name not made of ASCII \
+                 letters, digits, `_` and `-`.",
+                "Set secrets of at least 32 bytes and a `UserDetailsService`, a lifetime between \
+                 1 minute and 365 days, and plain names such as `OXBLOOM_REMEMBER_ME` and \
+                 `remember-me`.",
+            ),
         };
         Some(FailureAnalysis::new(description, action))
     }
@@ -335,6 +348,24 @@ mod tests {
             SecurityBuildError::InvalidRevalidateInterval,
             "The session revalidation interval is zero.",
             "Use an interval of at least one second, or leave revalidation out to turn it off.",
+        );
+    }
+
+    #[test]
+    fn remember_me_without_form_login_text() {
+        check(
+            SecurityBuildError::RememberMeWithoutFormLogin,
+            "Remember-me is configured but form login is not.",
+            "Configure `form_login`, or remove remember-me.",
+        );
+    }
+
+    #[test]
+    fn invalid_remember_me_text() {
+        check(
+            SecurityBuildError::InvalidRememberMe,
+            "A remember-me setting is missing or out of range: a secret shorter than 32 bytes, a missing secret or user service, a lifetime outside 1 minute to 365 days, a cookie name that is not an HTTP token, or a field name not made of ASCII letters, digits, `_` and `-`.",
+            "Set secrets of at least 32 bytes and a `UserDetailsService`, a lifetime between 1 minute and 365 days, and plain names such as `OXBLOOM_REMEMBER_ME` and `remember-me`.",
         );
     }
 

@@ -55,6 +55,11 @@ pub trait AuthorizationManager: Send + Sync {
 /// let rule = AuthorizationRule::HasRole("ADMIN".into());
 /// assert!(rule.grants(Some(&admin), &req));
 /// assert!(!rule.grants(None, &req));
+///
+/// // A remembered user is authenticated but not fully authenticated.
+/// let remembered = Authentication::new("a", []).remembered();
+/// assert!(AuthorizationRule::Authenticated.grants(Some(&remembered), &req));
+/// assert!(!AuthorizationRule::FullyAuthenticated.grants(Some(&remembered), &req));
 /// ```
 #[derive(Clone)]
 pub enum AuthorizationRule {
@@ -62,8 +67,12 @@ pub enum AuthorizationRule {
     PermitAll,
     /// Nobody.
     DenyAll,
-    /// Any authenticated caller.
+    /// Any authenticated caller, also one restored from a remember-me cookie.
     Authenticated,
+    /// An authenticated caller that was not restored from a remember-me cookie (see
+    /// [`Authentication::is_remembered`]). A password login, Basic and a bearer token count as
+    /// fully authenticated; a remembered user gets the normal 401 or 403 answer.
+    FullyAuthenticated,
     /// Authority `ROLE_<name>`.
     HasRole(String),
     /// Any one of the roles (each as `ROLE_<name>`).
@@ -82,6 +91,7 @@ impl fmt::Debug for AuthorizationRule {
             Self::PermitAll => f.write_str("PermitAll"),
             Self::DenyAll => f.write_str("DenyAll"),
             Self::Authenticated => f.write_str("Authenticated"),
+            Self::FullyAuthenticated => f.write_str("FullyAuthenticated"),
             Self::HasRole(r) => f.debug_tuple("HasRole").field(r).finish(),
             Self::HasAnyRole(r) => f.debug_tuple("HasAnyRole").field(r).finish(),
             Self::HasAuthority(a) => f.debug_tuple("HasAuthority").field(a).finish(),
@@ -109,6 +119,7 @@ impl AuthorizationRule {
             Self::PermitAll => true,
             Self::DenyAll => false,
             Self::Authenticated => auth.is_some(),
+            Self::FullyAuthenticated => auth.is_some_and(|a| !a.is_remembered()),
             Self::HasRole(r) => auth.is_some_and(|a| a.has_role(r)),
             Self::HasAnyRole(rs) => auth.is_some_and(|a| rs.iter().any(|r| a.has_role(r))),
             Self::HasAuthority(x) => auth.is_some_and(|a| a.has_authority(x)),
@@ -150,6 +161,14 @@ mod tests {
     fn authenticated_needs_authentication() {
         assert!(!AuthorizationRule::Authenticated.grants(None, &req()));
         assert!(AuthorizationRule::Authenticated.grants(Some(&user(&[])), &req()));
+    }
+
+    #[test]
+    fn fully_authenticated_refuses_anonymous_and_remembered() {
+        let rule = AuthorizationRule::FullyAuthenticated;
+        assert!(!rule.grants(None, &req()));
+        assert!(rule.grants(Some(&user(&[])), &req()));
+        assert!(!rule.grants(Some(&user(&[]).remembered()), &req()));
     }
 
     #[test]

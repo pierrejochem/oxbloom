@@ -13,8 +13,8 @@ use crate::form_login::{FormLoginEntryPoint, FormLoginHandlers, Revalidation};
 use crate::{
     AccessDeniedHandler, AuthenticationEntryPoint, AuthenticationProvider, AuthorizationManager,
     AuthorizationRule, CsrfConfig, FormLogin, HeadersConfig, JwtAuthenticationConverter,
-    JwtAuthenticationProvider, JwtDecoder, PrincipalSessions, ProviderManager, RequestMatcher,
-    SecurityFilterChain, UserDetailsService,
+    JwtAuthenticationProvider, JwtDecoder, PrincipalSessions, ProviderManager, RememberMe,
+    RequestMatcher, SecurityFilterChain, UserDetailsService,
 };
 
 /// Why [`HttpSecurity::build`] refused to build a chain.
@@ -70,6 +70,13 @@ pub enum SecurityBuildError {
     RevalidateWithoutFormLogin,
     /// The revalidation interval is zero. Leave `revalidate` out to turn revalidation off.
     InvalidRevalidateInterval,
+    /// Remember-me is configured but form login is not, so no login would issue a cookie.
+    RememberMeWithoutFormLogin,
+    /// A remember-me setting is out of range: a missing secret or one, current or old, shorter
+    /// than 32 bytes, a missing user service, a lifetime outside 1 minute to 365 days, a cookie
+    /// name that is not an HTTP token, or a field name with a character outside ASCII letters,
+    /// digits, `_` and `-`.
+    InvalidRememberMe,
 }
 
 impl fmt::Display for SecurityBuildError {
@@ -93,6 +100,10 @@ impl fmt::Display for SecurityBuildError {
             Self::InvalidSessionLimit => "session limit must be at least one",
             Self::RevalidateWithoutFormLogin => "revalidation configured without form login",
             Self::InvalidRevalidateInterval => "revalidation interval must be greater than zero",
+            Self::RememberMeWithoutFormLogin => "remember-me configured without form login",
+            Self::InvalidRememberMe => {
+                "invalid remember-me secret, user service, lifetime, cookie name or field name"
+            }
         })
     }
 }
@@ -128,6 +139,7 @@ pub struct HttpSecurity {
     headers: HeadersConfig,
     session_limit: Option<(Arc<dyn PrincipalSessions>, usize)>,
     revalidate: Option<(Duration, Arc<dyn UserDetailsService>)>,
+    remember_me: Option<RememberMe>,
     clock: Arc<dyn Clock>,
 }
 
@@ -164,6 +176,7 @@ impl HttpSecurity {
             headers: HeadersConfig::default(),
             session_limit: None,
             revalidate: None,
+            remember_me: None,
             clock: Arc::new(SystemClock),
         }
     }
@@ -547,6 +560,48 @@ impl HttpSecurity {
         self
     }
 
+    /// Turns on remember-me for form login. See [`RememberMe`] for the settings and their
+    /// defaults; a secret of at least 32 bytes and a
+    /// [`UserDetailsService`](crate::UserDetailsService) are required.
+    ///
+    /// [`build`](Self::build) fails with [`SecurityBuildError::RememberMeWithoutFormLogin`] when
+    /// `form_login` is not configured and with [`SecurityBuildError::InvalidRememberMe`] when a
+    /// setting is missing or out of range. Neither error contains a value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use oxbloom_config::Secret;
+    /// use oxbloom_security::{
+    ///     Argon2PasswordEncoder, DaoAuthenticationProvider, HttpSecurity,
+    ///     InMemoryUserDetailsService, SecurityBuildError,
+    /// };
+    ///
+    /// let users = Arc::new(InMemoryUserDetailsService::new(vec![])?);
+    /// let encoder = Arc::new(Argon2PasswordEncoder::new(8, 1, 1)?);
+    /// let secret = || Secret::new("a-remember-me-secret-of-32-bytes".to_owned());
+    /// let chain = HttpSecurity::new()
+    ///     .password_provider(Arc::new(DaoAuthenticationProvider::new(users.clone(), encoder)))
+    ///     .form_login(|f| f)
+    ///     .remember_me(|r| r.secret(secret()).user_details(users.clone()))
+    ///     .authorize(|a| a.path("/account/**").fully_authenticated().any_request().authenticated())
+    ///     .build();
+    /// assert!(chain.is_ok());
+    ///
+    /// let err = HttpSecurity::new()
+    ///     .remember_me(|r| r.secret(secret()).user_details(users))
+    ///     .authorize(|a| a.any_request().authenticated())
+    ///     .build()
+    ///     .err();
+    /// assert_eq!(err, Some(SecurityBuildError::RememberMeWithoutFormLogin));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn remember_me(mut self, f: impl FnOnce(RememberMe) -> RememberMe) -> Self {
+        self.remember_me = Some(f(RememberMe::new()));
+        self
+    }
+
     /// Replaces the clock of form login: the login time and the time of the last revalidation
     /// come from it. The default is [`SystemClock`]; tests pass a clock they can move.
     ///
@@ -725,7 +780,9 @@ impl HttpSecurity {
     /// and [`SecurityBuildError::InvalidSessionLimit`] for a session limit without form login or
     /// of zero, [`SecurityBuildError::RevalidateWithoutFormLogin`] and
     /// [`SecurityBuildError::InvalidRevalidateInterval`] for revalidation without form login or
-    /// with a zero interval, and [`SecurityBuildError::InvalidHeadersConfig`]
+    /// with a zero interval, [`SecurityBuildError::RememberMeWithoutFormLogin`] and
+    /// [`SecurityBuildError::InvalidRememberMe`] for remember-me without form login or with a
+    /// missing or out-of-range setting, and [`SecurityBuildError::InvalidHeadersConfig`]
     /// when the header settings fail [`HeadersConfig::validate`].
     ///
     /// # Examples
@@ -818,6 +875,11 @@ impl HttpSecurity {
                 revalidate.map(|(interval, users)| Revalidation::new(interval, users))
             }
         };
+        match (&self.form_login, &self.remember_me) {
+            (None, Some(_)) => return Err(SecurityBuildError::RememberMeWithoutFormLogin),
+            (Some(_), Some(remember_me)) => remember_me.validate()?,
+            (_, None) => {}
+        }
         let challenges = Challenges {
             basic_realm: self.basic.map(|b| Arc::from(b.realm)),
             bearer: self.bearer,
@@ -1137,7 +1199,8 @@ impl RuleBuilder {
     simple_rules! {
         permit_all => AuthorizationRule::PermitAll, "Allows everyone, including anonymous requests.";
         deny_all => AuthorizationRule::DenyAll, "Denies everyone: 401 when anonymous, 403 otherwise.";
-        authenticated => AuthorizationRule::Authenticated, "Allows any authenticated request.";
+        authenticated => AuthorizationRule::Authenticated, "Allows any authenticated request, also one restored from a remember-me cookie.";
+        fully_authenticated => AuthorizationRule::FullyAuthenticated, "Allows an authenticated request that was not restored from a remember-me cookie. A password login, Basic and a bearer token count; a remembered user gets the normal 401 or 403 answer.";
     }
 
     /// Requires the authority `ROLE_<role>`.

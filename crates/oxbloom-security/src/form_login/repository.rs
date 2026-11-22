@@ -204,6 +204,23 @@ mod tests {
     }
 
     #[test]
+    fn the_remembered_marker_survives_the_stored_value_and_a_refresh() {
+        let s = session();
+        store_authentication(&s, &alice().remembered(), now()).unwrap();
+        let loaded = load_authentication(&s).unwrap();
+        assert!(loaded.is_remembered());
+        assert_eq!(loaded.details()["tenant"], "acme");
+        // Revalidation keeps the details, and with them the marker.
+        let fresh = Authentication::new("alice", [GrantedAuthority::new("ROLE_ADMIN")])
+            .with_details(loaded.details().clone());
+        refresh_authentication(&s, &fresh).unwrap();
+        assert!(load_authentication(&s).unwrap().is_remembered());
+        // A plain login stores no marker.
+        store_authentication(&s, &alice(), now()).unwrap();
+        assert!(!load_authentication(&s).unwrap().is_remembered());
+    }
+
+    #[test]
     fn refresh_without_a_stored_authentication_fails_and_writes_nothing() {
         let s = session();
         assert_eq!(
