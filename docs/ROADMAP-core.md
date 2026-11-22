@@ -697,7 +697,7 @@ Delivered:
 - `examples/todos`: the HTML page `GET /me` behind the login, `[security.form-login]` in `application.toml`, a test `tests/login.rs` and README notes.
 - ADR 0088, the guide chapter 21 (the roadmap chapter is now 22) and the API section.
 
-Gate numbers at the end of Slice 6c: to be filled by the controller after the final gate.
+Gate numbers at the end of Slice 6c: `cargo test --workspace --all-features --no-fail-fast` 3097 passed, 0 failed, 8 ignored (2993 before Slice 6c); `cargo test -p oxbloom-boot` per feature: none 484, `security` 484, `web` 484, `logging` 504, `ssl` 484, `actuator` 497, `tasks` 508, all features 542, each with 0 failed and 1 ignored (the probe); `make check-examples` 63 (61 before); clippy `-D warnings` and `cargo fmt --check` clean; the boot stack probes are unchanged at 238 KB (237 overflows) and 239 KB with all features (238 overflows); the nine `cargo build -p oxbloom-boot` builds for `tasks`, `tasks,logging`, `tasks,ssl`, `tasks,security`, `tasks,actuator`, `security`, `security,logging`, `security,web` and `web`, each with default features off, pass; `cargo tree -i ring --workspace --all-features` finds no `ring`. The flaky `oxbloom-ssl` validity test from Slice 6b did not fail in this gate run.
 
 Limits that users must know (also in the guide):
 - No CSRF tokens yet: the same-origin check and `SameSite=Lax` are the interim measure. A request with neither `Origin` nor `Referer` is allowed. Slice 6d adds tokens.
