@@ -32,7 +32,9 @@ mod settings;
 mod store;
 
 pub use backend::SessionBackend;
+pub(crate) use config::refuse_command_line;
 pub use config::{SESSION_OLD_SECRETS_KEY, SESSION_SECRET_KEY, SessionConfig, StoreKind};
+pub(crate) use cookie::{CookieScope, build_set_cookie, parse_cookie_header};
 pub use cookie_backend::CookieSessionBackend;
 pub use error::SessionError;
 pub use filter::{RequestSessionExt, SESSION_ORDER, SessionFilter};
@@ -41,5 +43,6 @@ pub use management_properties::{SessionManagement, SessionManagementProperties};
 pub use memory::InMemorySessionStore;
 pub(crate) use principal::PRINCIPAL_KEY;
 pub use principal::{PrincipalSessions, SessionRegistry, SessionSummary};
+pub(crate) use settings::is_valid_cookie_name;
 pub use settings::{SameSite, SecureMode, SessionSettings};
 pub use store::{SessionData, SessionStore};

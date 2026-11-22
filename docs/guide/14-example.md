@@ -57,4 +57,4 @@ curl -X POST -H 'content-type: application/json' -d '{"title":"try it"}' http://
 curl "http://127.0.0.1:<port>/api/todos?done=false"
 ```
 
-`PUT` and `PATCH` on an unknown id are 404 (they never create), and concurrent `POST`s never share an id. The example's security rules open `/api/todos/**` so that it runs without a token; the doc comment of `PublicPaths` shows how to protect the writes. This opening is intentional for the example, and the example must not be deployed as it is.
+`PUT` and `PATCH` on an unknown id are 404 (they never create), and concurrent `POST`s never share an id. The example's security rules open `/api/todos/**` so that it runs without a token; the doc comment of `PublicPaths` shows how to protect the writes. This opening is intentional for the example, and the example must not be deployed as it is. Its `application.toml` also enables remember-me with a development secret that is public: replace it before any real use (see [Remember-me](24-remember-me.md#remember-me)).

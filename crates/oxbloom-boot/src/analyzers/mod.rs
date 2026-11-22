@@ -31,6 +31,8 @@ pub(crate) fn builtin() -> Vec<Arc<dyn FailureAnalyzer>> {
     #[cfg(feature = "security")]
     analyzers.push(Arc::new(security::SessionManagementAnalyzer));
     #[cfg(feature = "security")]
+    analyzers.push(Arc::new(security::RememberMeAnalyzer));
+    #[cfg(feature = "security")]
     analyzers.push(Arc::new(security::JwtConfigAnalyzer));
     #[cfg(feature = "logging")]
     analyzers.push(Arc::new(logging::LoggingConfigAnalyzer));

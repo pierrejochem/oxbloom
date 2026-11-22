@@ -1,10 +1,10 @@
-//! The security analyzers: security build errors, the session management startup failures and
-//! invalid `security.jwt` keys.
+//! The security analyzers: security build errors, the session management and remember-me
+//! startup failures and invalid `security.jwt` keys.
 
 use oxbloom_config::ConfigError;
 use oxbloom_security::SecurityBuildError;
 
-use crate::autoconfigure::SessionManagementError;
+use crate::autoconfigure::{RememberMeError, SessionManagementError};
 use crate::error::StartupError;
 use crate::failure::{FailureAnalysis, FailureAnalyzer};
 
@@ -86,6 +86,19 @@ impl FailureAnalyzer for SecurityAnalyzer {
                 "The session revalidation interval is zero.",
                 "Use an interval of at least one second, or leave revalidation out to turn it off.",
             ),
+            SecurityBuildError::RememberMeWithoutFormLogin => (
+                "Remember-me is configured but form login is not.",
+                "Configure `form_login`, or remove remember-me.",
+            ),
+            SecurityBuildError::InvalidRememberMe => (
+                "A remember-me setting is missing or out of range: a secret shorter than 32 bytes, \
+                 a missing secret or user service, a lifetime outside 1 minute to 365 days, a \
+                 cookie name that is not an HTTP token, or a field name not made of ASCII \
+                 letters, digits, `_` and `-`.",
+                "Set secrets of at least 32 bytes and a `UserDetailsService`, a lifetime between \
+                 1 minute and 365 days, and plain names such as `OXBLOOM_REMEMBER_ME` and \
+                 `remember-me`.",
+            ),
         };
         Some(FailureAnalysis::new(description, action))
     }
@@ -117,6 +130,41 @@ impl FailureAnalyzer for SessionManagementAnalyzer {
                  sessions of a user.",
                 "Use the in-memory store (`security.session.store = \"memory\"`) or a store \
                  that implements `PrincipalSessions`, or do not inject `SessionRegistry`.",
+            ),
+        };
+        Some(FailureAnalysis::new(description, action))
+    }
+}
+
+/// Recognises a `RememberMeError` of `SecurityAutoConfiguration` anywhere in the cause chain.
+pub(crate) struct RememberMeAnalyzer;
+
+impl FailureAnalyzer for RememberMeAnalyzer {
+    fn analyze(&self, failure: &StartupError) -> Option<FailureAnalysis> {
+        // Exhaustive on purpose: a new variant must get its own text here.
+        let (description, action) = match failure.find_cause::<RememberMeError>()? {
+            RememberMeError::WithoutFormLogin => (
+                "`security.remember-me.enabled` is `true`, but form login is off.",
+                "Set `security.form-login.enabled = true`, or turn remember-me off.",
+            ),
+            RememberMeError::WithoutSecret => (
+                "`security.remember-me.enabled` is `true`, but `security.remember-me.secret` is \
+                 not set.",
+                "Set `security.remember-me.secret` to a secret of at least 32 bytes in a file or \
+                 an environment variable (`APP_SECURITY__REMEMBER_ME__SECRET`), never on the \
+                 command line.",
+            ),
+            RememberMeError::WithoutUserService => (
+                "`security.remember-me.enabled` is `true`, but there is no `UserDetailsService` \
+                 bean to load the user named in the cookie.",
+                "Add users under `security.users` or register a `dyn UserDetailsService` bean, or \
+                 set `security.remember-me.enabled = false`.",
+            ),
+            RememberMeError::CookieNameClash => (
+                "`security.remember-me.cookie-name` is the session cookie name, so the two \
+                 cookies would overwrite each other.",
+                "Choose a different `security.remember-me.cookie-name`, such as the default \
+                 `OXBLOOM_REMEMBER_ME`.",
             ),
         };
         Some(FailureAnalysis::new(description, action))
@@ -338,6 +386,24 @@ mod tests {
         );
     }
 
+    #[test]
+    fn remember_me_without_form_login_text() {
+        check(
+            SecurityBuildError::RememberMeWithoutFormLogin,
+            "Remember-me is configured but form login is not.",
+            "Configure `form_login`, or remove remember-me.",
+        );
+    }
+
+    #[test]
+    fn invalid_remember_me_text() {
+        check(
+            SecurityBuildError::InvalidRememberMe,
+            "A remember-me setting is missing or out of range: a secret shorter than 32 bytes, a missing secret or user service, a lifetime outside 1 minute to 365 days, a cookie name that is not an HTTP token, or a field name not made of ASCII letters, digits, `_` and `-`.",
+            "Set secrets of at least 32 bytes and a `UserDetailsService`, a lifetime between 1 minute and 365 days, and plain names such as `OXBLOOM_REMEMBER_ME` and `remember-me`.",
+        );
+    }
+
     fn analyze_session(e: SessionManagementError) -> FailureAnalysis {
         let di = DiError::creation_from::<u8>(e);
         SessionManagementAnalyzer
@@ -374,6 +440,47 @@ mod tests {
         assert!(a.action().unwrap().contains("PrincipalSessions"));
         assert!(
             SessionManagementAnalyzer
+                .analyze(&StartupError::new(StartupPhase::Container, std::fmt::Error))
+                .is_none()
+        );
+    }
+
+    fn analyze_remember_me(e: RememberMeError) -> FailureAnalysis {
+        let di = DiError::creation_from::<u8>(e);
+        RememberMeAnalyzer
+            .analyze(&StartupError::new(StartupPhase::Container, di))
+            .expect("an analysis")
+    }
+
+    #[test]
+    fn remember_me_texts_name_the_key() {
+        let a = analyze_remember_me(RememberMeError::WithoutFormLogin);
+        assert_eq!(
+            a.description(),
+            "`security.remember-me.enabled` is `true`, but form login is off."
+        );
+        assert_eq!(
+            a.action(),
+            Some("Set `security.form-login.enabled = true`, or turn remember-me off.")
+        );
+        let a = analyze_remember_me(RememberMeError::WithoutSecret);
+        assert!(a.description().contains("`security.remember-me.secret`"));
+        assert!(a.action().unwrap().contains("never on the command line"));
+        let a = analyze_remember_me(RememberMeError::WithoutUserService);
+        assert!(a.description().contains("`security.remember-me.enabled`"));
+        assert!(
+            a.action()
+                .unwrap()
+                .contains("`dyn UserDetailsService` bean")
+        );
+        let a = analyze_remember_me(RememberMeError::CookieNameClash);
+        assert!(
+            a.description()
+                .contains("`security.remember-me.cookie-name`")
+        );
+        assert!(a.action().unwrap().contains("OXBLOOM_REMEMBER_ME"));
+        assert!(
+            RememberMeAnalyzer
                 .analyze(&StartupError::new(StartupPhase::Container, std::fmt::Error))
                 .is_none()
         );

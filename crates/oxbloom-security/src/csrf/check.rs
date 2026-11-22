@@ -138,7 +138,7 @@ mod tests {
 
         // A corrupt stored value stays where it is: the check only reads.
         let s = loaded();
-        s.set(CSRF_TOKEN_KEY, "corrupt").unwrap();
+        s.set_reserved(CSRF_TOKEN_KEY, "corrupt").unwrap();
         assert!(!token_check_passes(&post(Some(&s), Some("corrupt")), &cfg));
         assert_eq!(
             s.get::<String>(CSRF_TOKEN_KEY).unwrap().as_deref(),

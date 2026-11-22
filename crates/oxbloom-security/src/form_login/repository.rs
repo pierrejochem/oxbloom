@@ -29,7 +29,7 @@ pub(crate) fn load_authentication(session: &Session) -> Option<Authentication> {
         Ok(Some(value)) => value,
         Ok(None) => return None,
         Err(_) => {
-            session.remove(AUTHENTICATION_KEY);
+            session.remove_reserved(AUTHENTICATION_KEY);
             return None;
         }
     };
@@ -39,7 +39,7 @@ pub(crate) fn load_authentication(session: &Session) -> Option<Authentication> {
         .and_then(|_| stored.get("authentication").cloned())
         .and_then(|value| serde_json::from_value::<Authentication>(value).ok());
     if parsed.is_none() {
-        session.remove(AUTHENTICATION_KEY);
+        session.remove_reserved(AUTHENTICATION_KEY);
     }
     parsed
 }
@@ -55,7 +55,7 @@ pub(crate) fn store_principal(
     principal: &str,
     now: SystemTime,
 ) -> Result<(), SessionError> {
-    session.set(PRINCIPAL_KEY, &principal)?;
+    session.set_reserved(PRINCIPAL_KEY, &principal)?;
     store_revalidated_at(session, now)
 }
 
@@ -65,7 +65,7 @@ pub(crate) fn store_principal(
 ///
 /// [`SessionError::Serialization`] when the value cannot be turned into JSON.
 pub(crate) fn store_revalidated_at(session: &Session, now: SystemTime) -> Result<(), SessionError> {
-    session.set(REVALIDATED_AT_KEY, &epoch_seconds(now))
+    session.set_reserved(REVALIDATED_AT_KEY, &epoch_seconds(now))
 }
 
 /// The seconds since the epoch of the last check of the user, `None` when the value is missing
@@ -121,7 +121,7 @@ fn write_authentication(
 ) -> Result<(), SessionError> {
     let authentication =
         serde_json::to_value(authentication).map_err(|_| SessionError::Serialization)?;
-    session.set(
+    session.set_reserved(
         AUTHENTICATION_KEY,
         &serde_json::json!({ "v": VERSION, "login": login, "authentication": authentication }),
     )
@@ -139,7 +139,7 @@ pub(crate) fn save_request(session: &Session, path_and_query: &str) {
         return;
     }
     // A target that is a plain string always serializes; a failure leaves the session unchanged.
-    let _ = session.set(SAVED_REQUEST_KEY, path_and_query);
+    let _ = session.set_reserved(SAVED_REQUEST_KEY, path_and_query);
 }
 
 /// Removes and returns the saved request, or `None` when none is stored or the stored value
@@ -147,7 +147,7 @@ pub(crate) fn save_request(session: &Session, path_and_query: &str) {
 pub(crate) fn take_saved_request(session: &Session) -> Option<String> {
     let stored = session.get::<String>(SAVED_REQUEST_KEY);
     if !matches!(stored, Ok(None)) {
-        session.remove(SAVED_REQUEST_KEY);
+        session.remove_reserved(SAVED_REQUEST_KEY);
     }
     stored
         .ok()
@@ -204,6 +204,23 @@ mod tests {
     }
 
     #[test]
+    fn the_remembered_marker_survives_the_stored_value_and_a_refresh() {
+        let s = session();
+        store_authentication(&s, &alice().remembered(), now()).unwrap();
+        let loaded = load_authentication(&s).unwrap();
+        assert!(loaded.is_remembered());
+        assert_eq!(loaded.details()["tenant"], "acme");
+        // Revalidation keeps the details, and with them the marker.
+        let fresh = Authentication::new("alice", [GrantedAuthority::new("ROLE_ADMIN")])
+            .with_details(loaded.details().clone());
+        refresh_authentication(&s, &fresh).unwrap();
+        assert!(load_authentication(&s).unwrap().is_remembered());
+        // A plain login stores no marker.
+        store_authentication(&s, &alice(), now()).unwrap();
+        assert!(!load_authentication(&s).unwrap().is_remembered());
+    }
+
+    #[test]
     fn refresh_without_a_stored_authentication_fails_and_writes_nothing() {
         let s = session();
         assert_eq!(
@@ -219,7 +236,7 @@ mod tests {
         assert_eq!(load_revalidated_at(&s), None);
         store_revalidated_at(&s, now()).unwrap();
         assert_eq!(load_revalidated_at(&s), Some(1_800_000_000));
-        s.set(REVALIDATED_AT_KEY, "soon").unwrap();
+        s.set_reserved(REVALIDATED_AT_KEY, "soon").unwrap();
         assert_eq!(load_revalidated_at(&s), None);
     }
 
@@ -234,7 +251,7 @@ mod tests {
     #[test]
     fn a_corrupt_stored_value_is_dropped_and_removed() {
         let s = session();
-        s.set(
+        s.set_reserved(
             AUTHENTICATION_KEY,
             &serde_json::json!({"v": 1, "login": 1, "authentication": {"principal": 5}}),
         )
@@ -253,7 +270,7 @@ mod tests {
         store_authentication(&s, &alice(), now()).unwrap();
         let mut stored: serde_json::Value = s.get(AUTHENTICATION_KEY).unwrap().unwrap();
         stored["v"] = serde_json::json!(2);
-        s.set(AUTHENTICATION_KEY, &stored).unwrap();
+        s.set_reserved(AUTHENTICATION_KEY, &stored).unwrap();
         assert!(load_authentication(&s).is_none());
         assert!(
             s.get::<serde_json::Value>(AUTHENTICATION_KEY)
@@ -271,7 +288,7 @@ mod tests {
             serde_json::json!(null),
         ] {
             let s = session();
-            s.set(AUTHENTICATION_KEY, &value).unwrap();
+            s.set_reserved(AUTHENTICATION_KEY, &value).unwrap();
             assert!(load_authentication(&s).is_none(), "{value}");
             assert!(
                 s.get::<serde_json::Value>(AUTHENTICATION_KEY)
@@ -317,9 +334,9 @@ mod tests {
     #[test]
     fn a_tampered_saved_request_is_rejected_when_taken() {
         let s = session();
-        s.set(SAVED_REQUEST_KEY, "//evil.com").unwrap();
+        s.set_reserved(SAVED_REQUEST_KEY, "//evil.com").unwrap();
         assert!(take_saved_request(&s).is_none());
-        s.set(SAVED_REQUEST_KEY, &5).unwrap();
+        s.set_reserved(SAVED_REQUEST_KEY, &5).unwrap();
         assert!(take_saved_request(&s).is_none());
     }
 

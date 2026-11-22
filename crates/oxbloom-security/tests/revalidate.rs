@@ -296,7 +296,7 @@ impl Env {
                 "/forget",
                 |req: Request| async move {
                     if let Some(session) = req.session() {
-                        session.remove(REVALIDATED_KEY);
+                        session.remove_reserved(REVALIDATED_KEY);
                     }
                     "forgotten"
                 },

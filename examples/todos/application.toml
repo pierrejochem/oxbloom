@@ -166,3 +166,21 @@ enabled = true
 # field-name = "_csrf"           # `GET /me` writes the hidden field with this name
 # header-name = "X-CSRF-TOKEN"
 # token-endpoint = "/csrf"       # GET answers {"headerName":..,"parameterName":..,"token":..}
+
+# Remember-me: a login with the "Remember me" checkbox also gets the cookie `OXBLOOM_REMEMBER_ME`
+# (HttpOnly, `SameSite=Lax`, valid for `lifetime`, 14 days by default and fixed from the login).
+# A browser that has lost its session cookie is then logged in again, as a user who is
+# "remembered" and not "fully authenticated". The cookie is signed with this secret and bound to
+# the password of the user, so a password change ends every cookie of that user at once. THE
+# SECRET BELOW IS A DEVELOPMENT VALUE FOR THIS EXAMPLE ONLY: it is public, so anyone could forge a
+# cookie. Replace it with a random value of at least 32 bytes from your secret store, and never
+# pass it on the command line (Oxbloom refuses that). To rotate it, put the new secret in
+# `secret` and move the old one to `old-secrets`. The cookie holds the user name in the clear
+# (base64url, not encrypted), and there is no per-device revocation (see the guide).
+[security.remember-me]
+enabled = true
+secret = "development-only-remember-me-secret-change-me-0123456789"
+# old-secrets = ["the-previous-secret-of-at-least-32-bytes"]
+# lifetime = "14d"               # 1 minute to 365 days
+# field-name = "remember-me"     # the login form field of the checkbox
+# cookie-name = "OXBLOOM_REMEMBER_ME"

@@ -305,7 +305,7 @@ impl SessionConfig {
 }
 
 /// An error when the leaf `key` was set on the command line.
-fn refuse_command_line(config: &Config, key: &str) -> Result<(), ConfigError> {
+pub(crate) fn refuse_command_line(config: &Config, key: &str) -> Result<(), ConfigError> {
     match config.origin(key) {
         Some(origin @ Origin::Cli { .. }) => Err(ConfigError::Invalid {
             key: key.to_owned(),

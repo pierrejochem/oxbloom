@@ -468,6 +468,7 @@ fn metadata_keys_match_config() {
         p.key.starts_with("security.form-login.")
             || p.key.starts_with("security.csrf.")
             || p.key.starts_with("security.headers.")
+            || p.key.starts_with("security.remember-me.")
     }));
 }
 

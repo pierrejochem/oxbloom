@@ -34,7 +34,7 @@ pub use password::PasswordEncoderAutoConfiguration;
 #[cfg(feature = "web")]
 pub use request_log::RequestLogAutoConfiguration;
 #[cfg(feature = "security")]
-pub(crate) use security::SessionManagementError;
+pub(crate) use security::{RememberMeError, SessionManagementError};
 #[cfg(feature = "security")]
 pub use security::{SecurityAutoConfiguration, SecurityCustomizer};
 #[cfg(feature = "web")]
@@ -99,18 +99,20 @@ use crate::autoconfig::AutoConfigurations;
 ///     assert_eq!(keys(all().exclude::<JwtDecoderAutoConfiguration>(), "security.jwt."), 0);
 ///     // 8 `security.jwt` keys, 4 `security.password` keys, 2 `security.http-basic` keys,
 ///     // 4 `security.users` keys, 12 `security.session` keys, 10 `security.form-login` keys,
-///     // 4 `security.csrf` keys and 9 `security.headers` keys (the last three listed by
-///     // `SecurityAutoConfiguration`, so excluding it hides them).
-///     assert_eq!(keys(all(), "security."), 53);
-///     assert_eq!(keys(all().exclude::<PasswordEncoderAutoConfiguration>(), "security."), 43);
+///     // 4 `security.csrf` keys, 9 `security.headers` keys and 6 `security.remember-me` keys
+///     // (the last four listed by `SecurityAutoConfiguration`, so excluding it hides them).
+///     assert_eq!(keys(all(), "security."), 59);
+///     assert_eq!(keys(all().exclude::<PasswordEncoderAutoConfiguration>(), "security."), 49);
 ///     assert_eq!(keys(all(), "security.session."), 12);
-///     assert_eq!(keys(all().exclude::<SessionAutoConfiguration>(), "security."), 41);
+///     assert_eq!(keys(all().exclude::<SessionAutoConfiguration>(), "security."), 47);
 ///     assert_eq!(keys(all(), "security.form-login."), 10);
 ///     assert_eq!(keys(all().exclude::<SecurityAutoConfiguration>(), "security.form-login."), 0);
 ///     assert_eq!(keys(all(), "security.csrf."), 4);
 ///     assert_eq!(keys(all().exclude::<SecurityAutoConfiguration>(), "security.csrf."), 0);
 ///     assert_eq!(keys(all(), "security.headers."), 9);
 ///     assert_eq!(keys(all().exclude::<SecurityAutoConfiguration>(), "security.headers."), 0);
+///     assert_eq!(keys(all(), "security.remember-me."), 6);
+///     assert_eq!(keys(all().exclude::<SecurityAutoConfiguration>(), "security.remember-me."), 0);
 /// }
 /// #[cfg(feature = "web")]
 /// {

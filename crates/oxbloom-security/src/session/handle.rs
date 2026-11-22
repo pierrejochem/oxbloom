@@ -13,6 +13,13 @@ use serde::de::DeserializeOwned;
 use super::error::SessionError;
 use super::store::SessionData;
 
+/// The prefix of the session keys Oxbloom reserves for itself.
+pub(crate) const RESERVED_PREFIX: &str = "oxbloom.security.";
+
+fn is_reserved(key: &str) -> bool {
+    key.starts_with(RESERVED_PREFIX)
+}
+
 /// Mints a new session id: 256 random bits from the system random number generator,
 /// base64url without padding (43 characters).
 ///
@@ -242,10 +249,14 @@ impl Session {
     /// Stores `value` under `key` and marks the session for writing back. After
     /// [`invalidate`](Self::invalidate), this starts a new session with a new id.
     ///
+    /// Keys that start with `oxbloom.security.` are reserved for Oxbloom's own login, CSRF and
+    /// session bookkeeping, so that application code cannot overwrite them by accident.
+    ///
     /// # Errors
     ///
+    /// [`SessionError::ReservedKey`] when `key` starts with `oxbloom.security.`.
     /// [`SessionError::Serialization`] when `value` cannot be turned into JSON. The session
-    /// is unchanged then.
+    /// is unchanged in both cases.
     ///
     /// # Examples
     ///
@@ -255,8 +266,41 @@ impl Session {
     /// fn remember_theme(session: &Session, theme: &str) -> Result<(), SessionError> {
     ///     session.set("theme", &theme)
     /// }
+    ///
+    /// fn try_reserved(session: &Session) {
+    ///     let result = session.set("oxbloom.security.authentication", "x");
+    ///     assert_eq!(result, Err(SessionError::ReservedKey));
+    /// }
     /// ```
     pub fn set<T: Serialize + ?Sized>(&self, key: &str, value: &T) -> Result<(), SessionError> {
+        if is_reserved(key) {
+            return Err(SessionError::ReservedKey);
+        }
+        self.set_reserved(key, value)
+    }
+
+    /// Stores `value` under `key` without the check for the reserved prefix. For Oxbloom's own
+    /// writers and this repository's tests; application code uses [`set`](Self::set).
+    ///
+    /// # Errors
+    ///
+    /// [`SessionError::Serialization`] when `value` cannot be turned into JSON.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_security::{Session, SessionError};
+    ///
+    /// fn plant(session: &Session) -> Result<(), SessionError> {
+    ///     session.set_reserved("oxbloom.security.x", "value")
+    /// }
+    /// ```
+    #[doc(hidden)]
+    pub fn set_reserved<T: Serialize + ?Sized>(
+        &self,
+        key: &str,
+        value: &T,
+    ) -> Result<(), SessionError> {
         let value = serde_json::to_value(value).map_err(|_| SessionError::Serialization)?;
         let mut state = self.lock();
         if state.invalidated {
@@ -267,7 +311,8 @@ impl Session {
         Ok(())
     }
 
-    /// Removes the value under `key`, if any.
+    /// Removes the value under `key`, if any. A key that starts with `oxbloom.security.` is
+    /// reserved and is silently ignored.
     ///
     /// # Examples
     ///
@@ -279,6 +324,26 @@ impl Session {
     /// }
     /// ```
     pub fn remove(&self, key: &str) {
+        if is_reserved(key) {
+            return;
+        }
+        self.remove_reserved(key);
+    }
+
+    /// Removes the value under `key` without the check for the reserved prefix. For Oxbloom's
+    /// own writers and this repository's tests; application code uses [`remove`](Self::remove).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_security::Session;
+    ///
+    /// fn drop_marker(session: &Session) {
+    ///     session.remove_reserved("oxbloom.security.x");
+    /// }
+    /// ```
+    #[doc(hidden)]
+    pub fn remove_reserved(&self, key: &str) {
         let mut state = self.lock();
         if state.data.values_mut().remove(key).is_some() {
             state.dirty = true;

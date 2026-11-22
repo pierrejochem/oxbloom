@@ -20,12 +20,12 @@ pub(crate) fn stored_token(session: &Session) -> Option<CsrfToken> {
         Ok(Some(value)) => {
             let token = CsrfToken::from_stored(value);
             if token.is_none() {
-                session.remove(CSRF_TOKEN_KEY);
+                session.remove_reserved(CSRF_TOKEN_KEY);
             }
             token
         }
         Err(_) => {
-            session.remove(CSRF_TOKEN_KEY);
+            session.remove_reserved(CSRF_TOKEN_KEY);
             None
         }
     }
@@ -50,7 +50,7 @@ pub(crate) fn ensure_token(session: &Session) -> CsrfToken {
 pub(crate) fn replace_token(session: &Session) -> CsrfToken {
     let token = CsrfToken::generate();
     // A plain string always serializes, so the store cannot fail here.
-    let _ = session.set(CSRF_TOKEN_KEY, token.as_str());
+    let _ = session.set_reserved(CSRF_TOKEN_KEY, token.as_str());
     token
 }
 
@@ -100,7 +100,7 @@ mod tests {
             &format!("{}+", "A".repeat(42)),
         ] {
             let s = session();
-            s.set(CSRF_TOKEN_KEY, bad).unwrap();
+            s.set_reserved(CSRF_TOKEN_KEY, bad).unwrap();
             assert!(stored_token(&s).is_none(), "{bad:?}");
             assert!(raw(&s).is_none(), "{bad:?}");
         }
@@ -116,7 +116,7 @@ mod tests {
             serde_json::json!(true),
         ] {
             let s = session();
-            s.set(CSRF_TOKEN_KEY, &value).unwrap();
+            s.set_reserved(CSRF_TOKEN_KEY, &value).unwrap();
             assert!(stored_token(&s).is_none(), "{value}");
             assert!(raw(&s).is_none(), "{value}");
             let fresh = ensure_token(&s);

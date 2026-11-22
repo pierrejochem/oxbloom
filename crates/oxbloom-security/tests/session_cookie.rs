@@ -93,6 +93,7 @@ fn session_error_texts_are_fixed() {
         SessionError::TooLarge,
         SessionError::InvalidSettings,
         SessionError::Serialization,
+        SessionError::ReservedKey,
     ] {
         let text = e.to_string();
         assert!(!text.is_empty());

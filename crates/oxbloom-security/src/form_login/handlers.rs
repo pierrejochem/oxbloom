@@ -1,8 +1,8 @@
 //! The form login handlers the chain runs: login, logout, the login page fallback, the restore of
 //! the authentication from the session and the content-negotiated entry point.
 //!
-//! No username, password, session id or saved path reaches a log line. A failed login logs at
-//! `debug` the error variant and the length of the username only.
+//! No username, password, session id, saved path or remember-me cookie reaches a log line. A
+//! failed login logs at `debug` the error variant and the length of the username only.
 
 use std::sync::Arc;
 
@@ -10,7 +10,7 @@ use http::{HeaderValue, StatusCode, header};
 use oxbloom_core::{Clock, HttpMethod};
 use oxbloom_web::{Request, Response};
 
-use super::form::parse_login_form;
+use super::form::{LoginForm, parse_login_form};
 use super::origin::same_origin;
 use super::page::login_page;
 use super::redirect::path_of;
@@ -20,6 +20,12 @@ use super::repository::{
 use super::revalidate::{Revalidated, Revalidation, revalidate};
 use super::settings::FormLogin;
 use crate::csrf::{ensure_token, replace_token, request_passes};
+use crate::dao::authentication_of;
+use crate::remember_me::{
+    AutoLogin, Checked, RememberMeRuntime, check_token, clear_cookie, invalid_cookie, issue_cookie,
+    no_session_error as no_remember_me_session, remember_me_token, sets_cookie,
+};
+use crate::session::CookieScope;
 use crate::{
     Authentication, AuthenticationEntryPoint, AuthenticationError, AuthenticationRequest,
     CsrfConfig, PrincipalSessions, ProviderManager, RequestSessionExt, Session,
@@ -156,18 +162,21 @@ pub(crate) struct FormLoginHandlers {
     csrf: Option<CsrfConfig>,
     limit: Option<(Arc<dyn PrincipalSessions>, usize)>,
     revalidation: Option<Revalidation>,
+    remember_me: Option<Arc<RememberMeRuntime>>,
     clock: Arc<dyn Clock>,
 }
 
 impl FormLoginHandlers {
     /// `csrf` is `Some` only when the CSRF check is on. `limit` is the per-user index and the
     /// positive maximum of sessions per user, when a limit is configured. `revalidation` is
-    /// `Some` when revalidation is on. `clock` gives the login time and the revalidation time.
+    /// `Some` when revalidation is on. `remember_me` is `Some` when remember-me is on. `clock`
+    /// gives the login time and the revalidation time.
     pub(crate) fn new(
         settings: Arc<FormLogin>,
         csrf: Option<CsrfConfig>,
         limit: Option<(Arc<dyn PrincipalSessions>, usize)>,
         revalidation: Option<Revalidation>,
+        remember_me: Option<Arc<RememberMeRuntime>>,
         clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
@@ -175,6 +184,7 @@ impl FormLoginHandlers {
             csrf,
             limit,
             revalidation,
+            remember_me,
             clock,
         }
     }
@@ -251,7 +261,11 @@ impl FormLoginHandlers {
                 }
             });
             let field = token.as_ref().map(|(name, token)| (*name, token.as_str()));
-            login_page(&self.settings, flags.0, flags.1, field)
+            let remember_me = self
+                .remember_me
+                .as_ref()
+                .map(|r| r.settings.field_name.as_str());
+            login_page(&self.settings, flags.0, flags.1, field, remember_me)
         } else {
             res
         }
@@ -341,9 +355,17 @@ impl FormLoginHandlers {
                 &req.body,
                 &self.settings.username_field,
                 &self.settings.password_field,
+                self.remember_me
+                    .as_ref()
+                    .map(|r| r.settings.field_name.as_str()),
             )
         };
-        let Some((username, password)) = form else {
+        let Some(LoginForm {
+            username,
+            password,
+            remember_me,
+        }) = form
+        else {
             return self.failure(&MalformedForm, 0);
         };
         let username_len = username.chars().count();
@@ -352,23 +374,87 @@ impl FormLoginHandlers {
             Some(manager) => manager.authenticate(&request).await,
             None => Err(AuthenticationError::ProviderUnavailable),
         };
+        // A password login is never remembered, whatever the provider put in the details.
         let authentication = match result {
-            Ok(authentication) => authentication,
+            Ok(authentication) => authentication.not_remembered(),
             Err(error) => return self.failure(&error, username_len),
         };
+        let principal = authentication.principal().to_string();
+        if self.establish(&session, &authentication).await.is_err() {
+            return redirect(&self.settings.failure_url, "/");
+        }
+        let cookie = match (&self.remember_me, remember_me) {
+            (Some(runtime), true) => self.remember_cookie(runtime, req, &principal).await,
+            // A login without the box ends the remember-me of the browser: a cookie left from an
+            // earlier user would otherwise log that user in again when this session idles out.
+            (Some(runtime), false) if remember_me_token(runtime, req).is_some() => {
+                Some(clear_cookie(&runtime.settings, &CookieScope::of(req)))
+            }
+            _ => None,
+        };
+        let target = take_saved_request(&session);
+        let target = target
+            .as_deref()
+            .unwrap_or(&self.settings.default_success_url);
+        let mut res = redirect(target, &self.settings.default_success_url);
+        if let Some(cookie) = cookie {
+            res.headers_mut().append(header::SET_COOKIE, cookie);
+        }
+        res
+    }
+
+    /// The remember-me cookie for `principal`, who just logged in with a password. The user is
+    /// loaded once more, through the remember-me user service, for the stored password hash the
+    /// token is bound to. A failed or empty load, or a token that would be too long, logs one
+    /// fixed text and gives `None`: the login goes on without a cookie.
+    async fn remember_cookie(
+        &self,
+        runtime: &RememberMeRuntime,
+        req: &Request,
+        principal: &str,
+    ) -> Option<HeaderValue> {
+        let settings = &runtime.settings;
+        let users = settings.user_details.as_ref()?;
+        let Ok(Some(user)) = users.load_user_by_username(principal).await else {
+            tracing::warn!(
+                target: "oxbloom::security",
+                "the remember-me cookie was not issued: the user could not be loaded"
+            );
+            return None;
+        };
+        let now = settings.clock.now();
+        let cookie = issue_cookie(settings, &runtime.codec, &user, now, &CookieScope::of(req));
+        if cookie.is_none() {
+            tracing::warn!(
+                target: "oxbloom::security",
+                "the remember-me cookie was not issued: the token would be too long"
+            );
+        }
+        cookie
+    }
+
+    /// Logs `authentication` in to `session`, for a password login and an auto login alike: a
+    /// new session id, a new CSRF token when the check is on, the authentication, the principal
+    /// key and the revalidation time from one read of the clock, then the session limit. A
+    /// failed write logs one fixed text, invalidates the session and gives `Err`.
+    async fn establish(
+        &self,
+        session: &Session,
+        authentication: &Authentication,
+    ) -> Result<(), ()> {
         // The id of the session the login replaces, read before the rotation removes it.
         let replaced_id = session.id();
         // A new id first, so a planted or stolen anonymous id never carries the login.
         session.rotate_id();
         // A new token too, so a token known before the login is dead after it.
         if self.csrf.is_some() {
-            replace_token(&session);
+            replace_token(session);
         }
         // One read of the clock, so the login time and the revalidation time are the same.
         let now = self.clock.now();
         let principal = authentication.principal().to_string();
-        if store_authentication(&session, &authentication, now).is_err()
-            || store_principal(&session, &principal, now).is_err()
+        if store_authentication(session, authentication, now).is_err()
+            || store_principal(session, &principal, now).is_err()
         {
             tracing::error!(
                 target: "oxbloom::security",
@@ -377,14 +463,60 @@ impl FormLoginHandlers {
             // A half-written login must not stay: without the principal key the session would
             // escape the limit and the registry.
             session.invalidate();
-            return redirect(&self.settings.failure_url, "/");
+            return Err(());
         }
         self.apply_limit(&principal, &replaced_id).await;
-        let target = take_saved_request(&session);
-        let target = target
-            .as_deref()
-            .unwrap_or(&self.settings.default_success_url);
-        redirect(target, &self.settings.default_success_url)
+        Ok(())
+    }
+
+    /// Logs the request in from its remember-me cookie, when remember-me is on. The chain calls
+    /// this only for a request without a header credential whose session gave no
+    /// authentication. A valid cookie logs in like a password login, through
+    /// [`establish`](Self::establish), with the authentication marked remembered; the cookie is
+    /// not issued again, so its lifetime stays fixed.
+    pub(crate) async fn auto_login(&self, req: &Request) -> AutoLogin {
+        let Some(runtime) = &self.remember_me else {
+            return AutoLogin::Absent;
+        };
+        let Some(token) = remember_me_token(runtime, req) else {
+            return AutoLogin::Absent;
+        };
+        let Some(session) = req.session() else {
+            no_remember_me_session();
+            return AutoLogin::Absent;
+        };
+        let user = match check_token(runtime, &token).await {
+            Checked::Valid(user) => user,
+            Checked::Invalid => {
+                invalid_cookie();
+                return AutoLogin::Invalid;
+            }
+            Checked::Unavailable => return AutoLogin::Unavailable,
+        };
+        // The same authentication a password login of this user builds, then the marker.
+        let authentication = authentication_of(&user).remembered();
+        match self.establish(&session, &authentication).await {
+            Ok(()) => AutoLogin::LoggedIn(authentication),
+            Err(()) => AutoLogin::Unavailable,
+        }
+    }
+
+    /// The `Set-Cookie` that clears the remember-me cookie in the answer to `req`, when
+    /// remember-me is on. Built before the request goes on, because the cookie scope is read
+    /// from the request.
+    pub(crate) fn clearing_cookie(&self, req: &Request) -> Option<HeaderValue> {
+        let runtime = self.remember_me.as_ref()?;
+        Some(clear_cookie(&runtime.settings, &CookieScope::of(req)))
+    }
+
+    /// Appends `cookie`, from [`clearing_cookie`](Self::clearing_cookie), to `res`, unless the
+    /// response already sets the remember-me cookie itself.
+    pub(crate) fn add_clearing_cookie(&self, res: &mut Response, cookie: HeaderValue) {
+        if let Some(runtime) = &self.remember_me
+            && !sets_cookie(res, &runtime.settings.cookie_name)
+        {
+            res.headers_mut().append(header::SET_COOKIE, cookie);
+        }
     }
 
     /// Evicts the oldest sessions of `principal` until `max - 1` others remain. The session being
@@ -419,7 +551,12 @@ impl FormLoginHandlers {
         if let Some(session) = req.session() {
             session.invalidate();
         }
-        redirect(&self.settings.logout_success_url, "/")
+        let mut res = redirect(&self.settings.logout_success_url, "/");
+        if let Some(runtime) = &self.remember_me {
+            let cookie = clear_cookie(&runtime.settings, &CookieScope::of(req));
+            res.headers_mut().append(header::SET_COOKIE, cookie);
+        }
+        res
     }
 }
 

@@ -60,25 +60,50 @@ pub(crate) fn urlencoded_pairs(body: &[u8]) -> Option<Vec<(String, String)>> {
         .collect()
 }
 
-/// Reads the username and the password from a login body. The first occurrence of a duplicated
-/// field wins. A body over 4096 bytes, invalid UTF-8, a missing field or an empty username gives
-/// `None`.
+/// A login body read by [`parse_login_form`].
+pub(crate) struct LoginForm {
+    pub(crate) username: String,
+    pub(crate) password: Secret<String>,
+    /// Whether the body asks for a remember-me cookie.
+    pub(crate) remember_me: bool,
+}
+
+/// Whether a value of the remember-me field asks for the cookie: `on`, `true`, `yes` or `1`,
+/// without regard to ASCII case. Any other value, the empty one included, does not.
+fn asks_to_remember(value: &str) -> bool {
+    ["on", "true", "yes", "1"]
+        .iter()
+        .any(|yes| value.eq_ignore_ascii_case(yes))
+}
+
+/// Reads the username, the password and, when `remember_me_field` is given, whether that field
+/// asks for a remember-me cookie, from a login body. The first occurrence of a duplicated field
+/// wins. The remember-me field is optional. A body over 4096 bytes, invalid UTF-8, a missing
+/// username or password field or an empty username gives `None`.
 pub(crate) fn parse_login_form(
     body: &[u8],
     username_field: &str,
     password_field: &str,
-) -> Option<(String, Secret<String>)> {
+    remember_me_field: Option<&str>,
+) -> Option<LoginForm> {
     let mut username: Option<String> = None;
     let mut password: Option<String> = None;
+    let mut remember_me: Option<bool> = None;
     for (key, value) in urlencoded_pairs(body)? {
         if key == username_field {
             username.get_or_insert(value);
         } else if key == password_field {
             password.get_or_insert(value);
+        } else if Some(key.as_str()) == remember_me_field {
+            remember_me.get_or_insert_with(|| asks_to_remember(&value));
         }
     }
     let username = username.filter(|u| !u.is_empty())?;
-    Some((username, Secret::new(password?)))
+    Some(LoginForm {
+        username,
+        password: Secret::new(password?),
+        remember_me: remember_me.unwrap_or(false),
+    })
 }
 
 #[cfg(test)]
@@ -86,7 +111,12 @@ mod tests {
     use super::*;
 
     fn parse(body: &[u8]) -> Option<(String, String)> {
-        parse_login_form(body, "username", "password").map(|(u, p)| (u, p.expose().clone()))
+        parse_login_form(body, "username", "password", None)
+            .map(|f| (f.username, f.password.expose().clone()))
+    }
+
+    fn remember(body: &[u8]) -> Option<bool> {
+        parse_login_form(body, "username", "password", Some("remember-me")).map(|f| f.remember_me)
     }
 
     #[test]
@@ -154,7 +184,55 @@ mod tests {
 
     #[test]
     fn configured_field_names_are_used() {
-        let got = parse_login_form(b"u=a&p=b&username=no", "u", "p").unwrap();
-        assert_eq!((got.0.as_str(), got.1.expose().as_str()), ("a", "b"));
+        let got = parse_login_form(b"u=a&p=b&username=no", "u", "p", None).unwrap();
+        assert_eq!(
+            (got.username.as_str(), got.password.expose().as_str()),
+            ("a", "b")
+        );
+    }
+
+    #[test]
+    fn the_remember_me_field_accepts_four_values_in_any_ascii_case() {
+        for yes in ["on", "true", "yes", "1", "ON", "True", "yEs"] {
+            let body = format!("username=a&password=b&remember-me={yes}");
+            assert_eq!(remember(body.as_bytes()), Some(true), "{yes}");
+        }
+        for no in ["", "0", "off", "no", "false", "onn", " on", "y"] {
+            let body = format!("username=a&password=b&remember-me={no}");
+            assert_eq!(remember(body.as_bytes()), Some(false), "{no:?}");
+        }
+        assert_eq!(remember(b"username=a&password=b&remember-me"), Some(false));
+    }
+
+    #[test]
+    fn the_remember_me_field_is_optional_and_its_first_value_wins() {
+        assert_eq!(remember(b"username=a&password=b"), Some(false));
+        assert_eq!(
+            remember(b"remember-me=on&username=a&remember-me=off&password=b"),
+            Some(true)
+        );
+        assert_eq!(
+            remember(b"username=a&password=b&remember-me=off&remember-me=on"),
+            Some(false)
+        );
+        // Without a field name nothing asks for the cookie, and the field never replaces a
+        // missing username or password.
+        let got = parse_login_form(
+            b"username=a&password=b&remember-me=on",
+            "username",
+            "password",
+            None,
+        );
+        assert!(!got.unwrap().remember_me);
+        assert_eq!(remember(b"username=a&remember-me=on"), None);
+    }
+
+    #[test]
+    fn the_remember_me_field_counts_toward_the_size_cap() {
+        let mut body = b"username=a&password=b&remember-me=on&pad=".to_vec();
+        body.resize(4096, b'x');
+        assert_eq!(remember(&body), Some(true));
+        body.push(b'x');
+        assert_eq!(remember(&body), None);
     }
 }

@@ -62,7 +62,10 @@ fn app(backend: SessionBackend) -> App {
             HttpMethod::Get,
             "/corrupt",
             |req: Request| async move {
-                req.session().unwrap().set(KEY, "not-a-token").unwrap();
+                req.session()
+                    .unwrap()
+                    .set_reserved(KEY, "not-a-token")
+                    .unwrap();
                 "ok"
             },
         ))

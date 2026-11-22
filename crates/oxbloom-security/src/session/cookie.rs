@@ -1,10 +1,47 @@
 //! Reading the session cookie from a request and writing `Set-Cookie`.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use http::HeaderValue;
+use oxbloom_web::{Request, Scheme};
 
-use super::settings::{SameSite, SessionSettings};
+use super::settings::{SameSite, SecureMode, SessionSettings};
+
+/// The `Path` and the `Secure` decision of the session cookie for one request. The session
+/// filter puts it into the request extensions, so the other cookies of the crate, such as the
+/// remember-me cookie, carry the same `Path` and `Secure` as the session cookie.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CookieScope {
+    /// The `Path` of the session cookie.
+    pub(crate) path: Arc<str>,
+    /// Whether the session cookie of this request is `Secure`.
+    pub(crate) secure: bool,
+}
+
+impl CookieScope {
+    /// The scope of `req`: the one the session filter stored, or without a session filter the
+    /// defaults of [`SessionSettings`] (`Path=/`, `Secure` when the request came over HTTPS).
+    pub(crate) fn of(req: &Request) -> Self {
+        req.extensions().get::<Self>().cloned().unwrap_or_else(|| {
+            let defaults = SessionSettings::default();
+            Self {
+                path: Arc::from(defaults.path),
+                secure: is_secure(defaults.secure, req),
+            }
+        })
+    }
+}
+
+/// Whether a cookie set in the answer to `req` is `Secure` under `mode`: `Auto` follows
+/// [`Request::scheme`], `Always` and `Never` override.
+pub(crate) fn is_secure(mode: SecureMode, req: &Request) -> bool {
+    match mode {
+        SecureMode::Always => true,
+        SecureMode::Never => false,
+        SecureMode::Auto => req.scheme() == Scheme::Https,
+    }
+}
 
 /// A `Cookie` header longer than this counts as no cookie.
 const MAX_COOKIE_HEADER_BYTES: usize = 8 * 1024;

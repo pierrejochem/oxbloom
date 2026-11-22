@@ -117,6 +117,35 @@ tests `tests/session_management.rs` show the headers, the third login and the ro
 cookie jars. A copy of the stateless cookie cannot be ended on the server, so none of this works with
 `store = "cookie"`.
 
+## Remember-me
+
+`application.toml` enables `[security.remember-me]` with a development secret of at least 32 bytes.
+The secret is public, because it is in this repository, so anyone could forge a cookie with it: it is
+only for running the example, and a real application sets its own random secret from a private source.
+Oxbloom never reads the secret from the command line. The default login page now has a "Remember me"
+checkbox. A login with the box ticked also sets the cookie `OXBLOOM_REMEMBER_ME` (`HttpOnly`,
+`SameSite=Lax`, valid for 14 days from the login, never refreshed). A browser that has lost its session
+cookie and sends only this cookie is logged in again, as a remembered user: `/me` works, and a rule with
+`fully_authenticated()` would refuse it. Logout clears the cookie. The cookie holds the user name in the
+clear (base64url, not encrypted), and it works until it expires or the password changes. There is no
+per-device revocation, and `POST /me/logout-everywhere` ends sessions only: an ended session logs back in
+from the cookie. A `POST` that auto logs in is answered 403 until a `GET` has gone through. The users of
+the example come from the configuration, so the test cannot change a password: a changed signature
+stands for a cookie that does not verify, and the crate tests in
+`crates/oxbloom-security/tests/remember_me_autologin.rs` cover a changed password, a disabled user and a
+locked user.
+
+```text
+curl -s -c jar.txt -H 'accept: text/html' http://127.0.0.1:8081/me -o /dev/null          # 302, a session cookie
+TOKEN=$(curl -s -b jar.txt -c jar.txt http://127.0.0.1:8081/login | sed -n 's/.*name="_csrf" value="\([^"]*\)".*/\1/p')
+curl -i -b jar.txt -c jar.txt -d "_csrf=$TOKEN&username=admin&password=changeit&remember-me=on" http://127.0.0.1:8081/login
+# 302 with two Set-Cookie headers: OXBLOOM_SESSION and OXBLOOM_REMEMBER_ME
+```
+
+The tests `tests/remember_me.rs` use `TestClient` cookie jars: a login with the checkbox, a request
+with only the remember-me cookie, a login without the checkbox, a changed signature, a forged user name, an
+`Authorization` header of any scheme and logout. The guide chapter is "Remember-me".
+
 ## Actuator
 
 The health probes are open, because the security rules of the example permit

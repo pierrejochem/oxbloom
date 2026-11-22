@@ -7,8 +7,8 @@ use oxbloom_core::{Clock, SystemClock};
 use oxbloom_di::{Configuration, ContainerBuilder, DiError, component};
 use oxbloom_security::{
     AuthenticationProvider, CsrfProperties, FormLoginConfig, HeadersProperties, HttpBasicSettings,
-    HttpSecurity, JwtDecoder, SecurityFilterChain, SessionFilter, SessionManagementProperties,
-    SessionRegistry, UserDetailsService,
+    HttpSecurity, JwtDecoder, RememberMeProperties, RememberMeSettings, SecurityFilterChain,
+    SessionConfig, SessionFilter, SessionManagementProperties, SessionRegistry, UserDetailsService,
 };
 
 use super::jwt::JwtDecoderAutoConfiguration;
@@ -119,10 +119,11 @@ pub trait SecurityCustomizer: Send + Sync {
 /// that names `security.session`.
 ///
 /// A `SecurityBuildError` fails the build as `DiError::Creation` with that error as source; a
-/// bad `security.http-basic`, `security.form-login`, `security.csrf`, `security.headers` or
-/// session management key fails it the same way with the `ConfigError` naming the key. The
-/// metadata of this auto-configuration lists the `security.form-login`, `security.csrf` and
-/// `security.headers` keys, so excluding it hides them.
+/// bad `security.http-basic`, `security.form-login`, `security.csrf`, `security.headers`,
+/// `security.remember-me` or session management key fails it the same way with the
+/// `ConfigError` naming the key. The metadata of this auto-configuration lists the
+/// `security.form-login`, `security.csrf`, `security.headers` and `security.remember-me` keys,
+/// so excluding it hides them.
 ///
 /// CSRF protection follows form login (read with `oxbloom_security::CsrfProperties::from_config`).
 /// With form login on, the chain calls `csrf` with the `security.csrf` settings: the check is on
@@ -151,10 +152,24 @@ pub trait SecurityCustomizer: Send + Sync {
 ///   error that names `security.session.revalidate-interval`; a set interval without form login
 ///   fails the build with `SecurityBuildError::RevalidateWithoutFormLogin`.
 ///
+/// Remember-me follows `security.remember-me` (read with
+/// `oxbloom_security::RememberMeProperties::from_config`). It is off unless `enabled` is `true`,
+/// but its keys are checked either way: an unknown key or a bad value fails the startup even
+/// while it is off. When on, the chain calls `remember_me` with the configured secret, old
+/// secrets, lifetime, field name and cookie name, the `dyn UserDetailsService` bean (the same
+/// bean revalidation uses) and the clock below. Enabled remember-me needs form login, a secret
+/// and that bean: without form login the startup fails with an error that names
+/// `security.form-login.enabled`, without a secret one that names
+/// `security.remember-me.secret`, and without the bean one that names
+/// `security.remember-me.enabled`. A cookie name equal to the session cookie name
+/// fails the startup with an error that names `security.remember-me.cookie-name`, since the
+/// two cookies would overwrite each other. No error or report shows a secret.
+///
 /// These settings and the optional `dyn Clock` bean (`HttpSecurity::clock`, default the system
-/// clock) are applied before the customizers, so a `SecurityCustomizer` can still change them;
-/// a customizer that calls `headers` receives the configured headers and changes only what it
-/// touches.
+/// clock; remember-me gets the same clock, so the login time, the revalidation and the cookie
+/// expiry follow one clock) are applied before the customizers, so a `SecurityCustomizer` can
+/// still change them; a customizer that calls `headers` receives the configured headers and
+/// changes only what it touches.
 ///
 /// A `SessionRegistry` bean is registered, unless the application has one, when there is a
 /// `SessionFilter` bean and `security.session.store` is `memory` (or missing). It is lazy: it is
@@ -245,8 +260,9 @@ impl AutoConfiguration for SecurityAutoConfiguration {
 
 /// The chain from the customizers, or the closed default, plus the decoder when there is one
 /// and HTTP Basic over the provider beans when `security.http-basic.enabled` is `true`. The
-/// headers, the session limit, the revalidation and the clock are set before the customizers,
-/// so a customizer can still change them.
+/// headers, the session limit, the revalidation, remember-me and the clock are set before the
+/// customizers, so a customizer can still change them; form login and CSRF are set after them,
+/// so there the configuration wins.
 fn security_filter_chain(
     config: Arc<Config>,
     customizers: Vec<Arc<dyn SecurityCustomizer>>,
@@ -280,6 +296,16 @@ fn security_filter_chain(
             }
         },
     };
+    let remember_me = RememberMeProperties::from_config(&config).map_err(creation)?;
+    let remember_me = match remember_me {
+        Some(settings) => Some(remember_me_parts(
+            &config,
+            settings,
+            form_enabled,
+            users.clone(),
+        )?),
+        None => None,
+    };
     // The default interval applies only with form login and a user service; an explicit one
     // is passed on, so the build reports it when form login is off.
     let revalidate = match (management.revalidate_interval, users) {
@@ -293,14 +319,19 @@ fn security_filter_chain(
         }
         _ => None,
     };
+    // One clock for the form login handlers, the revalidation and remember-me.
+    let clock = clock.unwrap_or_else(|| Arc::new(SystemClock));
     let mut http = HttpSecurity::new()
-        .clock(clock.unwrap_or_else(|| Arc::new(SystemClock)))
+        .clock(clock.clone())
         .headers(move |_| headers);
     if let Some((index, max)) = limit {
         http = http.session_limit(index, max);
     }
     if let Some((interval, users)) = revalidate {
         http = http.revalidate(interval, users);
+    }
+    if let Some((settings, users)) = remember_me {
+        http = http.remember_me(move |r| settings.apply(r).user_details(users).clock(clock));
     }
     if customizers.is_empty() {
         // Closed by default: nothing is reachable without authentication.
@@ -330,6 +361,33 @@ fn security_filter_chain(
     }
     http.build()
         .map_err(DiError::creation_from::<SecurityFilterChain>)
+}
+
+/// The checked remember-me settings and the user service, or the startup failure that names
+/// the missing piece (form login, the secret, the user service) or a cookie name equal to the
+/// session cookie name.
+fn remember_me_parts(
+    config: &Config,
+    settings: RememberMeSettings,
+    form_enabled: bool,
+    users: Option<Arc<dyn UserDetailsService>>,
+) -> Result<(RememberMeSettings, Arc<dyn UserDetailsService>), DiError> {
+    let fail = |e: RememberMeError| Err(DiError::creation_from::<SecurityFilterChain>(e));
+    if !form_enabled {
+        return fail(RememberMeError::WithoutFormLogin);
+    }
+    if settings.secret.is_none() {
+        return fail(RememberMeError::WithoutSecret);
+    }
+    let Some(users) = users else {
+        return fail(RememberMeError::WithoutUserService);
+    };
+    let session = SessionConfig::from_config(config)
+        .map_err(DiError::creation_from::<SecurityFilterChain>)?;
+    if session.settings.cookie_name == settings.cookie_name {
+        return fail(RememberMeError::CookieNameClash);
+    }
+    Ok((settings, users))
 }
 
 /// The registry over the per-user index of the session filter. The bean is lazy: a server
@@ -376,6 +434,45 @@ impl std::fmt::Display for SessionManagementError {
 
 impl std::error::Error for SessionManagementError {}
 
+/// The startup failures of `security.remember-me.enabled = true`. The texts are fixed and name
+/// the key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RememberMeError {
+    /// Remember-me without form login.
+    WithoutFormLogin,
+    /// Remember-me without `security.remember-me.secret`.
+    WithoutSecret,
+    /// Remember-me without a `UserDetailsService` bean.
+    WithoutUserService,
+    /// `security.remember-me.cookie-name` equal to the session cookie name.
+    CookieNameClash,
+}
+
+impl std::fmt::Display for RememberMeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::WithoutFormLogin => {
+                "security.remember-me.enabled needs form login: set security.form-login.enabled \
+                 to true"
+            }
+            Self::WithoutSecret => {
+                "security.remember-me.enabled needs security.remember-me.secret, a secret of at \
+                 least 32 bytes set in a file or an environment variable"
+            }
+            Self::WithoutUserService => {
+                "security.remember-me.enabled needs a `UserDetailsService` bean to load the user \
+                 named in the cookie, such as the one of the `security.users` section"
+            }
+            Self::CookieNameClash => {
+                "security.remember-me.cookie-name must differ from the session cookie name \
+                 (security.session.cookie-name); the two cookies would overwrite each other"
+            }
+        })
+    }
+}
+
+impl std::error::Error for RememberMeError {}
+
 /// The startup failure of form login without the `security.session` table.
 #[derive(Debug)]
 struct FormLoginWithoutSession;
@@ -392,9 +489,10 @@ impl std::fmt::Display for FormLoginWithoutSession {
 
 impl std::error::Error for FormLoginWithoutSession {}
 
-/// Exactly the keys `FormLoginConfig::from_config`, `CsrfProperties::from_config` and
-/// `HeadersProperties::from_config` read (pinned by tests), sorted by key.
-static SECURITY: [PropertyMetadata; 23] = [
+/// Exactly the keys `FormLoginConfig::from_config`, `CsrfProperties::from_config`,
+/// `HeadersProperties::from_config` and `RememberMeProperties::from_config` read (pinned by
+/// tests), sorted by key.
+static SECURITY: [PropertyMetadata; 29] = [
     PropertyMetadata::new(
         "security.csrf.enabled",
         "bool",
@@ -543,5 +641,50 @@ static SECURITY: [PropertyMetadata; 23] = [
         "String",
         Some("no-referrer"),
         "The `Referrer-Policy` value added to every response that has none; `off` removes it.",
+    ),
+    PropertyMetadata::new(
+        "security.remember-me.cookie-name",
+        "String",
+        Some("OXBLOOM_REMEMBER_ME"),
+        "The name of the remember-me cookie; an HTTP token that differs from the session \
+         cookie name.",
+    ),
+    PropertyMetadata::new(
+        "security.remember-me.enabled",
+        "bool",
+        Some("false"),
+        "Whether a login with the remember-me checkbox gets a signed cookie that logs the user \
+         in again after the session is gone. Needs form login, `secret` and a \
+         `UserDetailsService` bean; without them the startup fails.",
+    ),
+    PropertyMetadata::new(
+        "security.remember-me.field-name",
+        "String",
+        Some("remember-me"),
+        "The name of the login form field that asks for the cookie; letters, digits, `_` and \
+         `-`. The values `on`, `true`, `yes` and `1` ask for it.",
+    ),
+    PropertyMetadata::new(
+        "security.remember-me.lifetime",
+        "Duration",
+        Some("14d"),
+        "How long a cookie stays valid from the time it is issued; using it does not extend \
+         it. Between 1 minute and 365 days.",
+    ),
+    PropertyMetadata::new(
+        "security.remember-me.old-secrets",
+        "array of String",
+        None,
+        "Earlier remember-me secrets whose cookies stay valid after a rotation; each at least \
+         32 bytes. Secrets: their values are never printed, and they are refused on the \
+         command line; set them in a file or an environment variable.",
+    ),
+    PropertyMetadata::new(
+        "security.remember-me.secret",
+        "String",
+        None,
+        "The key that signs new remember-me cookies, at least 32 bytes; required when \
+         remember-me is enabled. A secret: its value is never printed, and it is refused on \
+         the command line; set it in a file or an environment variable.",
     ),
 ];
