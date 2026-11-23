@@ -158,9 +158,11 @@ impl fmt::Debug for InterceptedClient {
 #[async_trait]
 impl HttpClient for InterceptedClient {
     async fn execute(&self, mut request: Request) -> Result<Response, HttpClientError> {
+        request.validate()?;
         for interceptor in &self.interceptors {
             interceptor.before(&mut request).await?;
         }
+        request.validate()?;
         self.inner.execute(request).await
     }
 }
@@ -214,6 +216,55 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(*log.lock().unwrap(), vec!["sent ab".to_owned()]);
+    }
+
+    struct Counting(Arc<Mutex<u32>>);
+
+    #[async_trait::async_trait]
+    impl HttpClient for Counting {
+        async fn execute(&self, _request: Request) -> Result<Response, HttpClientError> {
+            *self.0.lock().unwrap() += 1;
+            Ok(Response::new(
+                http::StatusCode::OK,
+                http::HeaderMap::new(),
+                Vec::new(),
+            ))
+        }
+    }
+
+    struct CountingInterceptor(Arc<Mutex<u32>>);
+
+    #[async_trait::async_trait]
+    impl Interceptor for CountingInterceptor {
+        async fn before(&self, _request: &mut Request) -> Result<(), HttpClientError> {
+            *self.0.lock().unwrap() += 1;
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn an_invalid_request_is_rejected_by_the_intercepted_client_and_never_reaches_the_inner_client()
+     {
+        let calls = Arc::new(Mutex::new(0));
+        let client = InterceptedClient::new(Arc::new(Counting(calls.clone())));
+        let error = client
+            .execute(Request::get("https://x.test").header("bad name", "v"))
+            .await
+            .unwrap_err();
+        assert_eq!(error, HttpClientError::InvalidRequest);
+        assert_eq!(*calls.lock().unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn an_invalid_request_does_not_run_the_interceptors() {
+        let calls = Arc::new(Mutex::new(0));
+        let client = InterceptedClient::new(Arc::new(Counting(Arc::new(Mutex::new(0)))))
+            .with(Arc::new(CountingInterceptor(calls.clone())));
+        let result = client
+            .execute(Request::get("https://x.test").header("bad name", "v"))
+            .await;
+        assert!(result.is_err());
+        assert_eq!(*calls.lock().unwrap(), 0);
     }
 
     #[tokio::test]

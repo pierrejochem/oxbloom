@@ -105,7 +105,9 @@ impl Response {
     /// # Ok::<(), oxbloom_http_client::HttpClientError>(())
     /// ```
     pub fn text(&self) -> Result<String, HttpClientError> {
-        String::from_utf8(self.body.clone()).map_err(|_| HttpClientError::Decode)
+        std::str::from_utf8(&self.body)
+            .map(str::to_owned)
+            .map_err(|_| HttpClientError::Decode)
     }
 
     /// Decodes the body as JSON.
