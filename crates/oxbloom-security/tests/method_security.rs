@@ -931,3 +931,75 @@ async fn a_denied_pre_authorize_does_not_run_post_checks() {
     assert_eq!(as_caller(admin(), Guarded.run()).await, Ok(vec![1]));
     assert_eq!(GUARDED_POST_RUNS.load(Ordering::SeqCst), 2);
 }
+
+/// Async methods with post checks whose bodies rely on the declared return type: an early
+/// `return` that needs a coercion, and tails that diverge. The file denies warnings, so a
+/// diverging tail must not cause `unreachable_code`.
+struct Shelf {
+    name: String,
+}
+
+#[method_security]
+impl Shelf {
+    #[post_authorize(authenticated)]
+    async fn label(&self, early: bool) -> Result<&str, AccessDenied> {
+        tokio::task::yield_now().await;
+        if early {
+            return Ok(&self.name);
+        }
+        Ok("default")
+    }
+
+    #[post_authorize(authenticated)]
+    async fn boxed(&self, early: bool) -> Result<Box<dyn std::fmt::Debug>, AccessDenied> {
+        if early {
+            return Ok(Box::new(1));
+        }
+        Ok(Box::new("late"))
+    }
+
+    /// A `return` inside a closure belongs to the closure and stays as written.
+    #[allow(clippy::needless_return)]
+    #[post_filter(custom = even_for_callers)]
+    async fn trailing(&self) -> Result<Vec<u32>, AccessDenied> {
+        tokio::task::yield_now().await;
+        let double = |n: u32| -> u32 {
+            return n * 2;
+        };
+        return Ok(vec![double(1), 3]);
+    }
+
+    #[post_authorize(authenticated)]
+    async fn unfinished(&self) -> Result<u32, AccessDenied> {
+        todo!()
+    }
+}
+
+#[tokio::test]
+async fn async_post_checks_keep_the_declared_return_type_for_early_returns() {
+    let shelf = Shelf {
+        name: "poetry".into(),
+    };
+    let bob = || caller("bob", &[]);
+    assert_eq!(as_caller(bob(), shelf.label(true)).await, Ok("poetry"));
+    assert_eq!(as_caller(bob(), shelf.label(false)).await, Ok("default"));
+    assert_eq!(
+        as_caller(None, shelf.label(true)).await,
+        Err(AccessDenied::Unauthenticated)
+    );
+    let early = as_caller(bob(), shelf.boxed(true)).await.unwrap();
+    assert_eq!(format!("{early:?}"), "1");
+    let late = as_caller(bob(), shelf.boxed(false)).await.unwrap();
+    assert_eq!(format!("{late:?}"), "\"late\"");
+    assert!(as_caller(None, shelf.boxed(true)).await.is_err());
+    assert_eq!(as_caller(bob(), shelf.trailing()).await, Ok(vec![2]));
+}
+
+#[tokio::test]
+#[should_panic(expected = "not yet implemented")]
+async fn an_async_body_with_a_diverging_tail_compiles_and_runs() {
+    let shelf = Shelf {
+        name: String::new(),
+    };
+    let _ = as_caller(caller("bob", &[]), shelf.unfinished()).await;
+}

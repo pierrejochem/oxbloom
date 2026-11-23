@@ -1075,8 +1075,9 @@ pub fn retryable(args: TokenStream, input: TokenStream) -> TokenStream {
 ///   through;
 /// - `#[pre_filter(arg = ids, custom = keep)]` keeps only the elements of the `Vec<T>`
 ///   parameter `ids` (taken by value) for which `keep(auth, &element)` returns true;
-/// - `#[post_filter(custom = keep)]` does the same for the `Vec<T>` in an `Ok` result; an `Err`
-///   passes through.
+/// - `#[post_filter(custom = keep)]` does the same for the collection in an `Ok` result (a
+///   `Vec<T>`, or any other type with a `retain` method that takes `FnMut(&T) -> bool`, such as
+///   `HashSet<T>`); an `Err` passes through.
 ///
 /// Only `method_security` needs an import: inside its `impl` block it handles the four method
 /// attributes itself, so `pre_authorize` and the others need no `use`. Use it through
@@ -1103,7 +1104,9 @@ pub fn retryable(args: TokenStream, input: TokenStream) -> TokenStream {
 ///   parameter of the method that is bound to a plain name (not a pattern such as
 ///   `(a, b): (u32, u32)`). In `#[post_authorize]` the reserved name `returned` stands for
 ///   `&T`, a reference to the `Ok` value; there a parameter can be named only when the body did
-///   not move it.
+///   not move it. The name `returned` is reserved even when the method has a parameter of that
+///   name: in `#[pre_authorize]` naming it is a compile error, and in `#[post_authorize]` it
+///   means the returned value, not the parameter.
 ///
 /// The order of execution is fixed: `pre_filter`, `pre_authorize`, the body, `post_authorize`
 /// and `post_filter`, whatever the order of the attributes. Filters never deny; they only
@@ -1112,7 +1115,8 @@ pub fn retryable(args: TokenStream, input: TokenStream) -> TokenStream {
 /// A method with `#[pre_authorize]`, `#[post_authorize]` or `#[post_filter]`, `async` or not,
 /// must return `Result<T, E>` with `E: From<oxbloom_security::AccessDenied>`, for example
 /// `AccessDenied` itself or `oxbloom_web::HttpError` (401 for an anonymous caller, 403
-/// otherwise); `#[post_filter]` also needs `T = Vec<_>`. A method with only `#[pre_filter]` may
+/// otherwise); for `#[post_filter]`, `T` must have a `retain` method as described above. A
+/// method with only `#[pre_filter]` may
 /// return anything. When a rule fails, the method returns
 /// `Err(AccessDenied::Unauthenticated.into())` for an anonymous caller and
 /// `Err(AccessDenied::Forbidden.into())` for any other caller, and logs the method
@@ -1121,7 +1125,11 @@ pub fn retryable(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// With a post attribute the body is wrapped (in a closure for a synchronous method and in an
 /// `async` block for an `async` one, both of the declared return type), so `return` and `?` in
-/// the body leave only the body and the post checks still run. The return type of such a
+/// the body leave only the body and the post checks still run. In an `async` method the macro
+/// turns the body's own `return`s into `break`s out of a block of the declared return type, so
+/// they keep its coercions (`return Ok(&self.name)` for `Result<&str, E>`). A `return` written
+/// inside a macro call cannot be rewritten; it still leaves only the body, but without those
+/// coercions. The return type of such a
 /// method must therefore be written out; `impl Trait` is a compile error there.
 ///
 /// It combines with `#[controller]` on the same block, in either order, so a handler can carry
@@ -1396,9 +1404,10 @@ method_security_attr! {
     /// # Ok::<(), std::io::Error>(())
     /// ```
     pre_filter;
-    /// Keeps only the elements of the `Vec<T>` in an `Ok` result for which
+    /// Keeps only the elements of the collection in an `Ok` result for which
     /// `custom(auth, &element)` returns true; only valid on a method of a `#[method_security]`
-    /// impl. It never denies, and an `Err` passes through.
+    /// impl. The collection is a `Vec<T>` or any other type with a `retain` method that takes
+    /// `FnMut(&T) -> bool`, such as `HashSet<T>`. It never denies, and an `Err` passes through.
     ///
     /// # Examples
     ///

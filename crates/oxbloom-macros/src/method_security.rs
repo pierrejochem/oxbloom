@@ -7,6 +7,7 @@ use quote::{quote, quote_spanned};
 use syn::meta::ParseNestedMeta;
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
+use syn::visit_mut::{self, VisitMut};
 use syn::{
     Attribute, Error, Expr, FnArg, Ident, ImplItem, ImplItemFn, ItemImpl, LitStr, Pat, ReturnType,
     Token, Type, token,
@@ -285,7 +286,9 @@ impl Rule {
             Rule::Custom(func, args) => {
                 let args = args.iter().map(|arg| match returned {
                     Some(value) if arg == "returned" => value.clone(),
-                    _ => quote!(&#arg),
+                    // The parameter's span, so an error such as "borrow of moved value" for
+                    // a parameter the body moved points at its name in the attribute.
+                    _ => quote_spanned!(arg.span()=> &#arg),
                 });
                 quote!(#func(#auth #(, #args)*))
             }
@@ -474,6 +477,36 @@ fn check_returns_result(f: &ImplItemFn, attribute: &str) -> syn::Result<()> {
         ReturnType::Default => Error::new_spanned(&f.sig, message),
         ReturnType::Type(_, ty) => Error::new_spanned(ty, message),
     })
+}
+
+/// Rewrites each `return` of a method body that leaves the body itself into a `break` out of
+/// the labeled block `label`. A `return` inside a closure, an `async` block, a `const` block or
+/// a nested item belongs to that and stays. A `return` inside a macro call cannot be seen; it
+/// still leaves only the wrapped body, just without the coercions of the declared type.
+struct ReturnsToBreaks<'a> {
+    label: &'a syn::Lifetime,
+}
+
+impl VisitMut for ReturnsToBreaks<'_> {
+    fn visit_expr_mut(&mut self, expr: &mut Expr) {
+        match expr {
+            Expr::Closure(_) | Expr::Async(_) | Expr::Const(_) => {}
+            Expr::Return(ret) => {
+                if let Some(value) = &mut ret.expr {
+                    self.visit_expr_mut(value);
+                }
+                *expr = Expr::Break(syn::ExprBreak {
+                    attrs: std::mem::take(&mut ret.attrs),
+                    break_token: Token![break](ret.return_token.span),
+                    label: Some(self.label.clone()),
+                    expr: ret.expr.take(),
+                });
+            }
+            _ => visit_mut::visit_expr_mut(self, expr),
+        }
+    }
+
+    fn visit_item_mut(&mut self, _item: &mut syn::Item) {}
 }
 
 /// The function of a filter attribute and, for `#[pre_filter]`, the filtered parameter.
@@ -713,9 +746,23 @@ fn secure_method(type_name: &str, f: &mut ImplItemFn) -> syn::Result<()> {
     let result = local("__result");
     let value = local("__value");
     let wrapped = if f.sig.asyncness.is_some() {
+        // A `return` in an `async` block is typed against the block's inferred output, so it
+        // would lose the coercions of the declared return type (`Ok(&self.name)` for
+        // `Result<&str, E>`). The body's own `return`s therefore become `break`s out of a
+        // labeled block that has the declared type. `?` still returns from the `async` block,
+        // whose output is that same type. The final `return` is not reachable when the body
+        // diverges (`todo!()`), so that generated statement allows `unreachable_code`.
+        let label = syn::Lifetime::new("'__oxbloom_body", Span::mixed_site());
+        let mut body = f.block.clone();
+        ReturnsToBreaks { label: &label }.visit_block_mut(&mut body);
+        let stmts = &body.stmts;
+        // Clippy's `diverging_sub_expression` would report a diverging tail such as `todo!()`,
+        // because the labeled block is the initializer of this `let`.
         quote!(async {
-            let #value: #ret = { #(#stmts)* };
-            #value
+            #[allow(clippy::diverging_sub_expression)]
+            let #value: #ret = #label: { #(#stmts)* };
+            #[allow(unreachable_code)]
+            return #value;
         }
         .await)
     } else {
@@ -844,6 +891,32 @@ mod tests {
             r.tokens(&auth, Some(&value)).to_string(),
             "mine (auth , & __value)"
         );
+    }
+
+    #[test]
+    fn only_the_returns_of_the_body_itself_become_breaks() {
+        let label = syn::Lifetime::new("'body", Span::call_site());
+        let mut body: syn::Block = syn::parse_quote!({
+            if early {
+                return Ok(1);
+            }
+            let f = || {
+                return 2;
+            };
+            let g = async {
+                return 3;
+            };
+            fn helper() -> u8 {
+                return 4;
+            }
+            loop {
+                return Ok(f());
+            }
+        });
+        ReturnsToBreaks { label: &label }.visit_block_mut(&mut body);
+        let code = quote!(#body).to_string();
+        assert_eq!(code.matches("break 'body").count(), 2, "{code}");
+        assert_eq!(code.matches("return").count(), 3, "{code}");
     }
 
     #[test]
