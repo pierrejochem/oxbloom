@@ -7,6 +7,8 @@ rust-version.workspace = true
 
 [features]
 di = ["dep:oxbloom-di"]
+# Implies `jwks`: id-token validation reads keys through `JwksSource` and `ReqwestJwksFetcher::with_client`.
+oauth2 = ["jwks", "dep:oxbloom-http-client"]
 jwks = ["dep:oxbloom-http-client", "dep:rustls"]
 
 [dependencies]

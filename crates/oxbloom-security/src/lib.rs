@@ -102,6 +102,8 @@ mod jwks;
 mod jwt;
 mod matcher;
 mod method_security;
+#[cfg(feature = "oauth2")]
+mod oauth2;
 mod password;
 mod password_config;
 mod provider;
@@ -140,6 +142,8 @@ pub use jwt::{
 };
 pub use matcher::RequestMatcher;
 pub use method_security::{__private, AccessDenied, spawn};
+#[cfg(feature = "oauth2")]
+pub use oauth2::{ClientAuthentication, ClientRegistration, OAuth2Settings, ProviderConfig};
 pub use oxbloom_macros::{method_security, post_authorize, post_filter, pre_authorize, pre_filter};
 pub use password::{
     ARGON2_ID, Argon2PasswordEncoder, DelegatingPasswordEncoder, PasswordEncoder,

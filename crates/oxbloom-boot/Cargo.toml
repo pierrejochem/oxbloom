@@ -22,6 +22,8 @@ tasks = ["dep:oxbloom-tasks"]
 # `HttpClientAutoConfiguration`: the `dyn HttpClient` bean of the `http.client` keys. The client
 # crate's `config` feature brings `reqwest` and `retry`, so `http.client.retry.*` works.
 http-client = ["dep:oxbloom-http-client", "oxbloom-http-client/config"]
+# `security.oauth2.client.*` metadata, and the OAuth2 client of `oxbloom-security`.
+oauth2 = ["security", "http-client", "oxbloom-security/oauth2"]
 
 [dependencies]
 oxbloom-actuator = { version = "0.1.0", path = "../oxbloom-actuator", optional = true }

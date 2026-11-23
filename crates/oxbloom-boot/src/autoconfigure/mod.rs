@@ -106,10 +106,12 @@ use crate::autoconfig::AutoConfigurations;
 ///     // 4 `security.users` keys, 12 `security.session` keys, 10 `security.form-login` keys,
 ///     // 4 `security.csrf` keys, 9 `security.headers` keys and 6 `security.remember-me` keys
 ///     // (the last four listed by `SecurityAutoConfiguration`, so excluding it hides them).
-///     assert_eq!(keys(all(), "security."), 59);
-///     assert_eq!(keys(all().exclude::<PasswordEncoderAutoConfiguration>(), "security."), 49);
+///     // The `oauth2` feature adds 12 `security.oauth2.client` keys to the same list.
+///     let oauth2 = if cfg!(feature = "oauth2") { 12 } else { 0 };
+///     assert_eq!(keys(all(), "security."), 59 + oauth2);
+///     assert_eq!(keys(all().exclude::<PasswordEncoderAutoConfiguration>(), "security."), 49 + oauth2);
 ///     assert_eq!(keys(all(), "security.session."), 12);
-///     assert_eq!(keys(all().exclude::<SessionAutoConfiguration>(), "security."), 47);
+///     assert_eq!(keys(all().exclude::<SessionAutoConfiguration>(), "security."), 47 + oauth2);
 ///     assert_eq!(keys(all(), "security.form-login."), 10);
 ///     assert_eq!(keys(all().exclude::<SecurityAutoConfiguration>(), "security.form-login."), 0);
 ///     assert_eq!(keys(all(), "security.csrf."), 4);

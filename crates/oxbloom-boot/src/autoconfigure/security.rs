@@ -254,7 +254,14 @@ impl AutoConfiguration for SecurityAutoConfiguration {
     }
 
     fn properties() -> &'static [PropertyMetadata] {
-        &SECURITY
+        #[cfg(feature = "oauth2")]
+        {
+            &MERGED
+        }
+        #[cfg(not(feature = "oauth2"))]
+        {
+            &SECURITY
+        }
     }
 }
 
@@ -488,6 +495,97 @@ impl std::fmt::Display for FormLoginWithoutSession {
 }
 
 impl std::error::Error for FormLoginWithoutSession {}
+
+/// [`SECURITY`] and [`OAUTH2`] together, sorted by key.
+#[cfg(feature = "oauth2")]
+static MERGED: std::sync::LazyLock<Vec<PropertyMetadata>> = std::sync::LazyLock::new(|| {
+    let mut all: Vec<PropertyMetadata> = SECURITY.iter().chain(OAUTH2.iter()).cloned().collect();
+    all.sort_by_key(|p| p.key);
+    all
+});
+
+/// Exactly the keys `OAuth2Settings::from_config` reads (pinned by tests), sorted by key.
+#[cfg(feature = "oauth2")]
+static OAUTH2: [PropertyMetadata; 12] = [
+    PropertyMetadata::new(
+        "security.oauth2.client.provider.<id>.authorization-uri",
+        "String",
+        None,
+        "The authorization endpoint (absolute `https` URL; `http` only for a loopback host). \
+         Required together with `token-uri` unless `issuer-uri` is set.",
+    ),
+    PropertyMetadata::new(
+        "security.oauth2.client.provider.<id>.issuer-uri",
+        "String",
+        None,
+        "The issuer of an OpenID Connect provider (absolute `https` URL; `http` only for a \
+         loopback host). Replaces `authorization-uri` and `token-uri`.",
+    ),
+    PropertyMetadata::new(
+        "security.oauth2.client.provider.<id>.jwk-set-uri",
+        "String",
+        None,
+        "The JWK set endpoint (absolute `https` URL; `http` only for a loopback host).",
+    ),
+    PropertyMetadata::new(
+        "security.oauth2.client.provider.<id>.token-uri",
+        "String",
+        None,
+        "The token endpoint (absolute `https` URL; `http` only for a loopback host). Required \
+         together with `authorization-uri` unless `issuer-uri` is set.",
+    ),
+    PropertyMetadata::new(
+        "security.oauth2.client.provider.<id>.user-info-uri",
+        "String",
+        None,
+        "The user info endpoint (absolute `https` URL; `http` only for a loopback host). A \
+         plain OAuth2 provider needs this or `user-name-attribute`.",
+    ),
+    PropertyMetadata::new(
+        "security.oauth2.client.provider.<id>.user-name-attribute",
+        "String",
+        None,
+        "The attribute that names the user. A plain OAuth2 provider needs this or \
+         `user-info-uri`.",
+    ),
+    PropertyMetadata::new(
+        "security.oauth2.client.registration.<id>.client-authentication",
+        "String",
+        Some("basic"),
+        "How the client authenticates at the token endpoint: `basic`, `post` or `none`.",
+    ),
+    PropertyMetadata::new(
+        "security.oauth2.client.registration.<id>.client-id",
+        "String",
+        None,
+        "The client id. Required.",
+    ),
+    PropertyMetadata::new(
+        "security.oauth2.client.registration.<id>.client-secret",
+        "Secret<String>",
+        None,
+        "The client secret; never printed. Required unless `client-authentication` is `none`.",
+    ),
+    PropertyMetadata::new(
+        "security.oauth2.client.registration.<id>.provider",
+        "String",
+        None,
+        "The provider id under `security.oauth2.client.provider`. Defaults to the \
+         registration id.",
+    ),
+    PropertyMetadata::new(
+        "security.oauth2.client.registration.<id>.redirect-uri",
+        "String",
+        Some("{base-url}/login/oauth2/code/{id}"),
+        "The redirect URI template; `{base-url}` and `{id}` are resolved.",
+    ),
+    PropertyMetadata::new(
+        "security.oauth2.client.registration.<id>.scope",
+        "Vec<String>",
+        None,
+        "The scopes to request.",
+    ),
+];
 
 /// Exactly the keys `FormLoginConfig::from_config`, `CsrfProperties::from_config`,
 /// `HeadersProperties::from_config` and `RememberMeProperties::from_config` read (pinned by
