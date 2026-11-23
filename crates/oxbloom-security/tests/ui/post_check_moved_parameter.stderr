@@ -1,0 +1,17 @@
+error[E0382]: borrow of moved value: `name`
+  --> tests/ui/post_check_moved_parameter.rs:12:46
+   |
+ 9 | #[method_security]
+   | ------------------ value moved into closure here
+...
+12 |     #[post_authorize(custom = same(returned, name))]
+   |                                              ^^^^ value borrowed here after move
+13 |     fn rename(&self, name: String) -> Result<String, AccessDenied> {
+   |                      ---- move occurs because `name` has type `String`, which does not implement the `Copy` trait
+14 |         Ok(name)
+   |            ---- variable moved due to use in closure
+   |
+help: consider cloning the value if the performance cost is acceptable
+   |
+14 |         Ok(name.clone())
+   |                ++++++++

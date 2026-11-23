@@ -28,6 +28,7 @@ use oxbloom_security::{HttpSecurity, RequestSecurityExt, RequestSessionExt, Sess
 use oxbloom_web::{HttpError, IntoResponse, Json, Request, Response, controller};
 use serde::{Deserialize, Serialize};
 
+use crate::admin::TodoAdmin;
 use crate::todo::TodoStore;
 
 /// The body of `POST`.
@@ -55,6 +56,12 @@ struct TodoChanges {
 struct Stats {
     total: usize,
     done: usize,
+}
+
+/// The body of `DELETE /api/admin/done`.
+#[derive(Debug, Serialize)]
+struct Removed {
+    removed: usize,
 }
 
 /// The body of `GET /api/visits`.
@@ -102,7 +109,8 @@ fn id_param(req: &Request) -> Result<u64, HttpError> {
 /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let store = Arc::new(TodoStore::default());
 /// store.create("one".into());
-/// let controller = Arc::new(AdminController { store });
+/// let admin = Arc::new(todos::admin::TodoAdmin { store: store.clone() });
+/// let controller = Arc::new(AdminController { store, admin });
 /// let app = App::new().routes(controller.routes())?;
 /// let res = app.handle(Request::new(HttpMethod::Get, "/api/admin/stats")).await;
 /// assert_eq!(res.status(), 200);
@@ -113,6 +121,8 @@ fn id_param(req: &Request) -> Result<u64, HttpError> {
 pub struct AdminController {
     /// The store the statistics are counted on.
     pub store: Arc<TodoStore>,
+    /// The secured service behind `DELETE /api/admin/done`.
+    pub admin: Arc<TodoAdmin>,
 }
 
 #[controller("/api/admin")]
@@ -128,6 +138,16 @@ impl AdminController {
             done,
         })
         .into_response()
+    }
+
+    /// `DELETE /api/admin/done`: removes the done todos and answers `{"removed":..}`. The path
+    /// rule only asks for a login; the role check is the `#[pre_authorize]` of
+    /// [`TodoAdmin::purge_done`], whose denial becomes a 401 or a 403 through `?`.
+    #[delete("/done")]
+    #[allow(clippy::result_large_err)]
+    async fn purge_done(&self, _req: Request) -> Result<Response, HttpError> {
+        let removed = self.admin.purge_done()?;
+        Ok(Json(&Removed { removed }).into_response())
     }
 }
 

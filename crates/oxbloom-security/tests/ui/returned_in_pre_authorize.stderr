@@ -1,0 +1,5 @@
+error: `returned` stands for the returned value and is only available in #[post_authorize], not in #[pre_authorize]
+  --> tests/ui/returned_in_pre_authorize.rs:11:35
+   |
+11 |     #[pre_authorize(custom = mine(returned))]
+   |                                   ^^^^^^^^

@@ -409,7 +409,7 @@ impl SecurityFilterChain {
             if let Some(flags) = form.login_page_request(&req) {
                 req.extensions_mut().insert(SecurityContext::anonymous());
                 let session = req.session();
-                let res = next.run(req).await;
+                let res = SecurityContext::scope(SecurityContext::anonymous(), next.run(req)).await;
                 return (form.page_fallback(res, flags, session), false, None);
             }
         }
@@ -478,10 +478,10 @@ impl SecurityFilterChain {
                 context = SecurityContext::authenticated(authentication);
             }
         }
-        req.extensions_mut().insert(context);
+        req.extensions_mut().insert(context.clone());
         let authenticated = req.authentication().is_some();
         let res = if self.authorized(&req) {
-            next.run(req).await
+            SecurityContext::scope(context, next.run(req)).await
         } else if authenticated {
             self.access_denied.handle(&req)
         } else {

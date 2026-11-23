@@ -1,0 +1,11 @@
+error: the method `ids` has #[post_authorize], so its return type must be written out: the body is wrapped in a closure or an `async` block of the declared return type, and that cannot be `impl Trait`
+ --> tests/ui/post_on_impl_trait.rs:8:22
+  |
+8 |     fn ids(&self) -> impl Iterator<Item = u64> {
+  |                      ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: the method `result` has #[post_filter], so its return type must be written out: the body is wrapped in a closure or an `async` block of the declared return type, and that cannot be `impl Trait`
+  --> tests/ui/post_on_impl_trait.rs:13:25
+   |
+13 |     fn result(&self) -> impl Into<Result<Vec<u64>, AccessDenied>> {
+   |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

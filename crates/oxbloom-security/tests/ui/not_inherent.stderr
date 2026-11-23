@@ -1,0 +1,5 @@
+error: #[method_security] requires an inherent impl such as `impl Accounts { .. }`, not a trait impl
+  --> tests/ui/not_inherent.rs:10:6
+   |
+10 | impl Close for Accounts {
+   |      ^^^^^

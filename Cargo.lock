@@ -1755,6 +1755,7 @@ dependencies = [
  "oxbloom-boot",
  "oxbloom-core",
  "oxbloom-di",
+ "oxbloom-security",
  "oxbloom-tasks",
  "oxbloom-web",
  "proc-macro2",
@@ -1776,6 +1777,7 @@ dependencies = [
  "oxbloom-config",
  "oxbloom-core",
  "oxbloom-di",
+ "oxbloom-macros",
  "oxbloom-web",
  "rcgen",
  "reqwest",
@@ -1787,6 +1789,7 @@ dependencies = [
  "tokio-rustls",
  "tracing",
  "tracing-subscriber",
+ "trybuild",
 ]
 
 [[package]]

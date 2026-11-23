@@ -30,6 +30,23 @@ curl http://127.0.0.1:8081/api/admin/stats                        # 401 with a B
 
 Basic sends the password with every request, so use it over TLS only.
 
+## Method security
+
+`DELETE /api/admin/done` removes the done todos and answers `{"removed":n}`. The path rules only
+ask for a login. The role check is on the service method `TodoAdmin::purge_done` in `src/admin.rs`,
+which carries `#[pre_authorize(role = "ADMIN")]` under `#[method_security]`, so every caller of
+the method is checked, not only this route. A denial becomes 401 for an anonymous caller and 403
+for another user.
+
+```text
+curl -X DELETE -u admin:changeit http://127.0.0.1:8081/api/admin/done    # 200
+curl -X DELETE -u viewer:viewonly http://127.0.0.1:8081/api/admin/done   # 403
+curl -X DELETE http://127.0.0.1:8081/api/admin/done                      # 401
+```
+
+`tests/method_security.rs` calls the service directly with `oxbloom_test::with_authentication`
+and drives the route with the demo users.
+
 ## Sessions
 
 `GET /api/visits` counts the requests of one browser in a session and answers

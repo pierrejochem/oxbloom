@@ -1,0 +1,5 @@
+error: `accounts` is not a parameter of the method
+  --> tests/ui/filter_arg_unknown.rs:11:24
+   |
+11 |     #[pre_filter(arg = accounts, custom = keep)]
+   |                        ^^^^^^^^

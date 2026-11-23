@@ -1,0 +1,11 @@
+error: #[pre_filter] can only filter a `Vec<T>` parameter taken by value, and `ids` is not one
+  --> tests/ui/filter_arg_not_a_vec.rs:14:27
+   |
+14 |     fn by_set(&self, ids: HashSet<u64>) -> Result<usize, AccessDenied> {
+   |                           ^^^^^^^^^^^^
+
+error: #[pre_filter] can only filter a `Vec<T>` parameter taken by value, and `ids` is not one
+  --> tests/ui/filter_arg_not_a_vec.rs:19:33
+   |
+19 |     fn by_reference(&self, ids: &mut Vec<u64>) -> Result<usize, AccessDenied> {
+   |                                 ^^^^^^^^^^^^^

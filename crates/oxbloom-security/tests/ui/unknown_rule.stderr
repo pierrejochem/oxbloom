@@ -1,0 +1,11 @@
+error: unknown rule `admin`; the rules are `role`, `any_role`, `authority`, `any_authority`, `authenticated`, `fully_authenticated`, `permit_all`, `deny_all`, `all`, `any`, `not` and `custom`
+ --> tests/ui/unknown_rule.rs:7:21
+  |
+7 |     #[pre_authorize(admin)]
+  |                     ^^^^^
+
+error: unknown rule `superuser`; the rules are `role`, `any_role`, `authority`, `any_authority`, `authenticated`, `fully_authenticated`, `permit_all`, `deny_all`, `all`, `any`, `not` and `custom`
+  --> tests/ui/unknown_rule.rs:12:41
+   |
+12 |     #[pre_authorize(all(role = "ADMIN", superuser = "yes"))]
+   |                                         ^^^^^^^^^

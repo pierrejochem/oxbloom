@@ -22,7 +22,7 @@ json = ["web", "oxbloom-web/json", "dep:serde", "dep:serde_json"]
 # HTTPS for `TestClient::connect_tls` and `RunningApp::client_tls`; `oxbloom-boot/ssl` lets a
 # `TestApp` serve `server.ssl.bundle`.
 tls = ["web", "oxbloom-boot/ssl", "dep:rustls", "dep:tokio-rustls"]
-security = ["oxbloom-boot/security"]
+security = ["oxbloom-boot/security", "dep:oxbloom-security"]
 logging = ["oxbloom-boot/logging"]
 
 [dependencies]
@@ -35,6 +35,7 @@ oxbloom-boot = { version = "0.1.0", path = "../oxbloom-boot" }
 oxbloom-config = { version = "0.1.0", path = "../oxbloom-config" }
 oxbloom-core = { version = "0.1.0", path = "../oxbloom-core" }
 oxbloom-di = { version = "0.1.0", path = "../oxbloom-di" }
+oxbloom-security = { version = "0.1.0", path = "../oxbloom-security", optional = true }
 # `default-features = false` has no effect while boot's `web` feature, which `web` forwards,
 # turns the defaults of `oxbloom-web` on.
 oxbloom-web = { version = "0.1.0", path = "../oxbloom-web", default-features = false, optional = true }

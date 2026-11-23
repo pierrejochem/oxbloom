@@ -1,0 +1,35 @@
+error: #[pre_filter] needs `arg`, e.g. `#[pre_filter(arg = ids, custom = keep)]`
+  --> tests/ui/filter_options.rs:11:5
+   |
+11 |     #[pre_filter(custom = keep)]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: `custom` is given twice in #[pre_filter]
+  --> tests/ui/filter_options.rs:16:44
+   |
+16 |     #[pre_filter(arg = ids, custom = keep, custom = keep)]
+   |                                            ^^^^^^
+
+error: #[post_filter] filters the returned `Vec` and takes no `arg`; e.g. `#[post_filter(custom = keep)]`
+  --> tests/ui/filter_options.rs:21:19
+   |
+21 |     #[post_filter(arg = ids, custom = keep)]
+   |                   ^^^
+
+error: `custom` takes the path of a function `fn(Option<&Authentication>, &T) -> bool`, e.g. `custom = keep`; the filter passes each element to it
+  --> tests/ui/filter_options.rs:26:28
+   |
+26 |     #[post_filter(custom = keep(ids))]
+   |                            ^^^^^^^^^
+
+error: unknown option of #[post_filter]; it takes `custom`, e.g. `#[post_filter(custom = keep)]`
+  --> tests/ui/filter_options.rs:31:19
+   |
+31 |     #[post_filter(keep = keep)]
+   |                   ^^^^
+
+error: the method `repeated_attribute` has two #[post_filter] attributes; combine the checks in one function
+  --> tests/ui/filter_options.rs:37:5
+   |
+37 |     #[post_filter(custom = keep)]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
