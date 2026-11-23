@@ -75,3 +75,34 @@ async fn anonymous_handler_sees_an_anonymous_context() {
     assert_eq!(res.status(), 200);
     assert_eq!(res.body(), "anonymous");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn the_form_login_page_sees_an_anonymous_context_inside_an_authenticated_outer_scope() {
+    let chain = HttpSecurity::new()
+        .password_provider(std::sync::Arc::new(FakeBearer))
+        .form_login(|f| f)
+        .authorize(|a| a.any_request().permit_all())
+        .build()
+        .unwrap();
+    let app = App::new()
+        .filter(chain)
+        .route(Route::new(
+            HttpMethod::Get,
+            "/login",
+            |_req: Request| async move {
+                SecurityContext::current()
+                    .authentication()
+                    .map(|a| a.principal().to_string())
+                    .unwrap_or_else(|| "anonymous".to_string())
+            },
+        ))
+        .unwrap();
+    let outer = SecurityContext::authenticated(Authentication::new(
+        "outer",
+        [GrantedAuthority::new("ROLE_USER")],
+    ));
+    let res =
+        SecurityContext::scope(outer, app.handle(Request::new(HttpMethod::Get, "/login"))).await;
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.body(), "anonymous");
+}

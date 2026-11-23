@@ -194,9 +194,11 @@ A method with only `#[pre_filter]` may return any type, including `impl Trait`. 
 
 ## Denial and the answer of a handler
 
-A failed rule returns `Err(AccessDenied::Unauthenticated.into())` for an anonymous caller and `Err(AccessDenied::Forbidden.into())` for any other caller, and the body does not run. `HttpError` converts them to 401 and 403, the same answers that the chain gives for a path rule. So a handler that returns `Result<T, HttpError>` needs no mapping, and `?` on a secured service call is enough.
+A failed rule returns `Err(AccessDenied::Unauthenticated.into())` for an anonymous caller and `Err(AccessDenied::Forbidden.into())` for any other caller, and the body does not run. `HttpError` converts them to 401 and 403, the same status codes that the chain gives for a path rule. Only the status codes match: a method denial goes through the error filter and not through the entry point or the `AccessDeniedHandler` of the chain (see Limits). So a handler that returns `Result<T, HttpError>` needs no mapping, and `?` on a secured service call is enough.
 
-`#[method_security]` combines with `#[controller]` on the same block, in either order, so one handler can carry a route and a rule:
+`#[method_security]` combines with `#[controller]` or `#[configuration]` on the same block, in either order, and both orders are tested, so one handler can carry a route and a rule. Write `#[method_security]` as the outermost attribute: it then always sees its method attributes before any other macro handles the block.
+
+The controller form:
 
 ```rust
 use std::sync::Arc;
@@ -240,4 +242,7 @@ A denial writes one debug event at the target `oxbloom::security` that names the
 - **`custom` checks are synchronous.** A check that needs an asynchronous lookup is not possible yet.
 - **There is no expression language and no caching** of decisions; every call is checked again.
 - **Only inherent impls.** A trait impl is a compile error.
+- **Method denials do not use the entry point or the access-denied handler of the chain.** A method denial goes through the error filter and only its status codes (401 and 403) match the chain. A 401 from a method carries no `WWW-Authenticate` challenge, a form-login application does not redirect an anonymous browser to the login page, and a custom 403 handler is skipped.
+- **`custom = f(self)` cannot name the receiver.** The compiler reports that `self` is not a parameter of the method.
+- **`AccessDenied` must reach `HttpError` to map to 401 and 403.** Only the `From<AccessDenied> for HttpError` conversion maps. Converting `AccessDenied` into an error type such as `anyhow::Error` or `Box<dyn Error>` loses the mapping, and the handler then answers 500.
 - **There are no configuration keys.**

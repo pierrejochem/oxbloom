@@ -1132,8 +1132,9 @@ pub fn retryable(args: TokenStream, input: TokenStream) -> TokenStream {
 /// coercions. The return type of such a
 /// method must therefore be written out; `impl Trait` is a compile error there.
 ///
-/// It combines with `#[controller]` on the same block, in either order, so a handler can carry
-/// both a route and a rule. A trait impl, a repeated attribute, an unknown rule or option, a
+/// It combines with `#[controller]` or `#[configuration]` on the same block, in either order,
+/// and both orders are tested, so a handler can carry both a route and a rule. Write
+/// `#[method_security]` as the outermost attribute: it then always sees its method attributes. A trait impl, a repeated attribute, an unknown rule or option, a
 /// `custom` argument that is not a parameter of the method, `returned` outside
 /// `#[post_authorize]`, an `arg` that is not a by-value `Vec<T>` parameter, and a method whose
 /// return type is visibly not a `Result` are compile errors.

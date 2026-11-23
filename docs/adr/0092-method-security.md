@@ -22,7 +22,7 @@ The chain is [ADR 0011](0011-one-deny-by-default-security-chain.md), and its ses
 
 **The order is fixed.** The steps run as `pre_filter`, `pre_authorize`, the body, `post_authorize` and `post_filter`, whatever the order of the attributes in the source. A reader can therefore not be surprised by a refactoring that moves an attribute, and a denied `pre_authorize` never runs the body or the post checks. Filters never deny. `post_authorize` sees `returned`, a reference to the `Ok` value, and an `Err` from the body passes through without a check.
 
-**The 401 and 403 rule matches the chain.** A denial is `AccessDenied::Unauthenticated` for an anonymous caller and `AccessDenied::Forbidden` for an authenticated one. `HttpError` converts them to 401 and 403, the same answers as the filter chain gives for the path rules, so a client sees one behavior whether the path rule or the method rule refused. A denial logs the method (`Type::method`) and the principal at debug level on the target `oxbloom::security`, and never an argument or a returned value.
+**The 401 and 403 status codes match the chain.** A denial is `AccessDenied::Unauthenticated` for an anonymous caller and `AccessDenied::Forbidden` for an authenticated one. `HttpError` converts them to 401 and 403, the same status codes as the filter chain gives for the path rules. Only the status codes match: a method denial goes through the error filter, not through the entry point or the `AccessDeniedHandler`, so a 401 from a method carries no `WWW-Authenticate` challenge, a form-login application does not redirect an anonymous browser to the login page, and a custom 403 handler is skipped. A denial logs the method (`Type::method`) and the principal at debug level on the target `oxbloom::security`, and never an argument or a returned value.
 
 **Early returns in async methods with post checks are rewritten with a labeled break.** A post check must run after every exit of the body, so the body is wrapped: in a closure for a synchronous method and in an `async` block for an `async` one. A closure turns `return` into leaving the closure, which is what is wanted. In an `async` block a `return` written by the user would leave the block with the type of the block, and a coercion in `return Ok(&self.name)` for `Result<&str, E>` would fail with E0308. So for an `async` method the macro rewrites each `return x` of the body into `break 'label x` out of a block that has the declared return type, which keeps the coercions of the declared type. A `return` inside a macro call cannot be rewritten because the macro sees only tokens; it still leaves only the body, but a coercion there fails with E0308 at the attribute. That is a documented limitation. Methods that have no post attribute are not wrapped and have none of this.
 
@@ -33,7 +33,7 @@ The chain is [ADR 0011](0011-one-deny-by-default-security-chain.md), and its ses
 Good:
 
 - A rule on a service method holds for every caller, whether the call comes from a route, a scheduled task, another bean or a test.
-- The same role and authority code decides paths and methods, and a denial gives the same 401 or 403.
+- The same role and authority code decides paths and methods, and a denial gives the same 401 or 403 status code.
 - Everything is checked by the compiler: a typo in a rule or a name that is not a parameter does not reach production.
 - There is no run-time parsing, no proxy and no reflection, and an unsecured method costs nothing.
 - Losing the context by a plain `tokio::spawn` denies instead of granting.

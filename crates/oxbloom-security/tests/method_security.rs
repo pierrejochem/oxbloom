@@ -471,6 +471,77 @@ mod di {
     }
 }
 
+/// `#[method_security]` must keep securing its methods when `#[configuration]` is on the same
+/// impl, in either order. A `#[configuration]` that stripped the method attributes would make
+/// the secured method fail open, so both orders are pinned here.
+#[cfg(feature = "di")]
+mod configuration {
+    use oxbloom_di::configuration;
+    use oxbloom_security::{AccessDenied, SecurityContext, method_security};
+
+    use super::{admin, as_caller};
+
+    struct Pool;
+
+    struct Outer;
+
+    #[method_security]
+    #[configuration]
+    impl Outer {
+        #[bean]
+        fn pool(&self) -> Pool {
+            Pool
+        }
+
+        #[pre_authorize(role = "ADMIN")]
+        fn secured(&self) -> Result<&'static str, AccessDenied> {
+            Ok("outer")
+        }
+    }
+
+    struct Inner;
+
+    #[configuration]
+    #[method_security]
+    impl Inner {
+        #[bean]
+        fn pool(&self) -> Pool {
+            Pool
+        }
+
+        #[pre_authorize(role = "ADMIN")]
+        fn secured(&self) -> Result<&'static str, AccessDenied> {
+            Ok("inner")
+        }
+    }
+
+    #[tokio::test]
+    async fn method_security_before_configuration_still_secures_the_method() {
+        assert_eq!(Outer.secured(), Err(AccessDenied::Unauthenticated));
+        assert_eq!(
+            SecurityContext::scope(SecurityContext::anonymous(), async { Outer.secured() }).await,
+            Err(AccessDenied::Unauthenticated)
+        );
+        assert_eq!(
+            as_caller(admin(), async { Outer.secured() }).await,
+            Ok("outer")
+        );
+    }
+
+    #[tokio::test]
+    async fn method_security_after_configuration_still_secures_the_method() {
+        assert_eq!(Inner.secured(), Err(AccessDenied::Unauthenticated));
+        assert_eq!(
+            SecurityContext::scope(SecurityContext::anonymous(), async { Inner.secured() }).await,
+            Err(AccessDenied::Unauthenticated)
+        );
+        assert_eq!(
+            as_caller(admin(), async { Inner.secured() }).await,
+            Ok("inner")
+        );
+    }
+}
+
 /// Captures the log output written while the subscriber guard lives.
 #[derive(Clone, Default)]
 struct LogBuffer(Arc<Mutex<Vec<u8>>>);

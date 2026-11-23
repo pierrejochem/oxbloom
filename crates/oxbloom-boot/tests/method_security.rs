@@ -57,8 +57,36 @@ impl Ledger {
     }
 }
 
+/// True when the caller is the owner named in the returned `owner:text` entry.
+// The filter passes `&String`, the element type, so the signature cannot be `&str`.
+#[allow(clippy::ptr_arg)]
+fn owns_entry(auth: Option<&Authentication>, entry: &String) -> bool {
+    auth.is_some_and(|a| entry.split(':').next() == Some(a.principal()))
+}
+
+/// A bean whose results are checked after the call.
+struct Notes;
+
+#[method_security]
+impl Notes {
+    #[post_authorize(custom = owns_entry(returned))]
+    async fn note_of(&self, owner: &str) -> Result<String, AccessDenied> {
+        Ok(format!("{owner}:private"))
+    }
+
+    #[post_filter(custom = owns_entry)]
+    async fn all(&self) -> Result<Vec<String>, AccessDenied> {
+        Ok(vec![
+            "alice:one".to_owned(),
+            "root:two".to_owned(),
+            "alice:three".to_owned(),
+        ])
+    }
+}
+
 struct Api {
     ledger: Arc<Ledger>,
+    notes: Arc<Notes>,
 }
 
 #[controller("/api")]
@@ -73,6 +101,17 @@ impl Api {
     #[get("/whoami")]
     async fn whoami(&self, _req: Request) -> Result<String, HttpError> {
         Ok(self.ledger.whoami().await?)
+    }
+
+    #[get("/note/{owner}")]
+    async fn note(&self, req: Request) -> Result<String, HttpError> {
+        let owner = req.param("owner").unwrap_or_default().to_owned();
+        Ok(self.notes.note_of(&owner).await?)
+    }
+
+    #[get("/notes")]
+    async fn notes(&self, _req: Request) -> Result<String, HttpError> {
+        Ok(self.notes.all().await?.join(","))
     }
 
     #[get("/close")]
@@ -112,7 +151,8 @@ impl SecurityCustomizer for Rules {
 
 fn wiring(b: ContainerBuilder) -> ContainerBuilder {
     let ledger = Arc::new(Ledger);
-    b.instance(Api { ledger })
+    let notes = Arc::new(Notes);
+    b.instance(Api { ledger, notes })
         .provides(|c: Arc<Api>| -> Arc<dyn Controller> { c })
         .instance(Spawner)
         .provides(|c: Arc<Spawner>| -> Arc<dyn Controller> { c })
@@ -190,10 +230,55 @@ async fn a_secured_bean_method_called_from_a_handler_uses_the_request_principal(
         .header("authorization", ROOT)
         .send()
         .await;
+    assert_eq!(allowed.status(), 200);
     assert_eq!(allowed.text(), "closed");
 
     let anonymous = client.get("/api/close").send().await;
     assert_eq!(anonymous.status(), 401);
+    app.stop().await;
+}
+
+#[tokio::test]
+async fn post_authorize_checks_the_returned_value_against_the_caller() {
+    let app = start().await;
+    let client = app.client();
+
+    let wrong = client
+        .get("/api/note/root")
+        .header("authorization", ALICE)
+        .send()
+        .await;
+    assert_eq!(wrong.status(), 403);
+
+    let right = client
+        .get("/api/note/alice")
+        .header("authorization", ALICE)
+        .send()
+        .await;
+    assert_eq!(right.status(), 200);
+    assert_eq!(right.text(), "alice:private");
+    app.stop().await;
+}
+
+#[tokio::test]
+async fn post_filter_lists_only_the_elements_the_caller_may_see() {
+    let app = start().await;
+    let client = app.client();
+
+    let alice = client
+        .get("/api/notes")
+        .header("authorization", ALICE)
+        .send()
+        .await;
+    assert_eq!(alice.status(), 200);
+    assert_eq!(alice.text(), "alice:one,alice:three");
+
+    let root = client
+        .get("/api/notes")
+        .header("authorization", ROOT)
+        .send()
+        .await;
+    assert_eq!(root.text(), "root:two");
     app.stop().await;
 }
 
