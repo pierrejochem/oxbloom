@@ -867,7 +867,7 @@ Rulings made during Slice 7a:
 - A revalidate interval above zero and under one second is refused.
 
 ### Security Slice 7b: Remember-me (`oxbloom-security`) — done
-Done on 2026-11-22; the design is the Slice 7b spec `2026-11-22-remember-me-design.md` and the plan is `2026-11-22-remember-me.md` (both local files under `docs/superpowers`, named here without a link), usage is in the guide chapter `docs/guide/24-remember-me.md` and `docs/API.md` (section 4.7, the slice 7b subsection, and `SecurityAutoConfiguration` in section 4.8), the decisions are in ADR 0091. Method security is Slice 8 and is next.
+Done on 2026-11-22; the design is the Slice 7b spec `2026-11-22-remember-me-design.md` and the plan is `2026-11-22-remember-me.md` (both local files under `docs/superpowers`, named here without a link), usage is in the guide chapter `docs/guide/24-remember-me.md` and `docs/API.md` (section 4.7, the slice 7b subsection, and `SecurityAutoConfiguration` in section 4.8), the decisions are in ADR 0091. Method security was Slice 8 (done on 2026-11-23, see below) and OAuth2 login and client is Slice 9, the next one.
 
 Delivered:
 - Reserved prefix: `Session::set` returns the new `SessionError::ReservedKey` for a key that starts with `oxbloom.security.` and writes nothing, `Session::remove` ignores such a key (it stays infallible), and `get` is unchanged. The `#[doc(hidden)]` methods `set_reserved` and `remove_reserved` serve Oxbloom's own writers and this repository's integration tests.
@@ -916,6 +916,49 @@ Rulings made during Slice 7b:
 - Any `Authorization` header, even of an unknown scheme, blocks auto login (fail-closed; header credentials win).
 - The missing-session check runs after a cookie is found and before the token check.
 - `AuthorizationRule` gets the variant `FullyAuthenticated`, a source-compatible change only for code that does not match the enum exhaustively.
+
+### Security Slice 8: Method security (`oxbloom-security`, `oxbloom-macros`) — done
+Done on 2026-11-23; the design is the Slice 8 spec `2026-11-23-method-security-design.md` and the plan is `2026-11-23-method-security.md` (both local files under `docs/superpowers`, named here without a link), usage is in the guide chapter `docs/guide/25-method-security.md` and `docs/API.md` (section 4.7, the slice 8 subsection, and `with_authentication` in section 4.10), the decisions are in ADR 0092. The next slice is Slice 9 (OAuth2 login and client).
+
+Delivered:
+- Attributes: `#[method_security]` on an inherent `impl` block, with `#[pre_authorize]`, `#[post_authorize]`, `#[pre_filter]` and `#[post_filter]` on its methods (crate `oxbloom-macros`, re-exported by `oxbloom-security`). The rules are typed and checked at compile time: `role`, `any_role`, `authority`, `any_authority`, `authenticated`, `fully_authenticated`, `permit_all`, `deny_all`, `all`, `any`, `not` and `custom = check(arg, ..)` with a synchronous function. The order is fixed: `pre_filter`, `pre_authorize`, the body, `post_authorize`, `post_filter`. It combines with `#[controller]` and with DI beans.
+- Runtime in `oxbloom-security`: `AccessDenied` (`Unauthenticated` gives 401 and `Forbidden` gives 403 through `From<AccessDenied> for HttpError`, the same answers as the chain), `SecurityContext::current` and `SecurityContext::scope` over a Tokio task-local, `oxbloom_security::spawn` that carries the context, and the shared role and authority functions that the path rules and the method rules both use. A bare `tokio::spawn` loses the context and fails closed.
+- The chain runs the rest of every request inside `SecurityContext::scope`.
+- Weaving: an async method with a post attribute has its own `return`s rewritten into labeled `break`s so the declared return type keeps its coercions; a `return` inside a macro call that needs a coercion fails with E0308 (documented). Compile errors for a trait impl, a repeated attribute, an unknown rule, a name that is not a parameter, `returned` outside `post_authorize`, a non-`Vec` filter argument and a non-`Result` return type, with `trybuild` cases.
+- The check runs at the first poll of an async method. A denial logs the method and the principal at debug level on the target `oxbloom::security` and never an argument or a returned value. There are no configuration keys.
+- In `oxbloom-test` (feature `security`, which now also enables the optional `oxbloom-security` dependency): `with_authentication`.
+- `examples/todos`: `TodoAdmin::purge_done`, a service method secured with `#[pre_authorize(role = "ADMIN")]`, behind `DELETE /api/admin/done`, and `tests/method_security.rs` (a service test with `with_authentication` and a test of 401, 403 and 200 with the demo users).
+- ADR 0092, the guide chapter 25 (the roadmap chapter is now 26, renamed with `git mv`) and the API section.
+
+Gate numbers at the end of Slice 8: to be filled by the controller.
+
+Limits that users must know (also in the guide):
+- The caller is a task-local context: a bare `tokio::spawn` loses it and is denied; use `oxbloom_security::spawn`.
+- The check of an async method runs at the first poll of its future, not at the call.
+- A post check cannot name a parameter that the body moved, a pattern parameter cannot be named in `custom`, and `returned` is reserved in `post_authorize`.
+- In an async method with a post attribute, a `return` inside a macro call that needs a coercion fails with E0308; a trailing `return Ok(x);` becomes a `break`, so `clippy::needless_return` no longer reports it.
+- A method with `pre_authorize`, `post_authorize` or `post_filter` must return `Result<T, E>` with `E: From<AccessDenied>`; `pre_filter` alone allows any return type.
+- `custom` checks are synchronous.
+
+Parked, not yet scheduled:
+- Asynchronous `custom` checks (for example a lookup in a service).
+- An expression language.
+- Caching of decisions.
+- The per-call clone of the `Authentication` (through the `SecurityContext` clone).
+- The `Vec<&str>` that the chain allocates in `AuthorizationRule::grants` for `HasAnyRole` and `HasAnyAuthority` on each request (fix: an iterator-generic core).
+
+Known minors after the Slice 8 reviews (none changes behavior):
+- Task 1: the `deny` log has no capture test of its own (a later test covers it).
+- Task 2: the login page branch in `chain.rs` runs `next.run` unscoped, which equals anonymous (a one-line comment would help), and there is no test that a session or remember-me restored context reaches the scope (same code path).
+- Task 3: the context and the `__auth` borrow are held across every `.await` of the body, although for a method with only pre checks the check could sit in an inner block; a pattern parameter gives the message "not a parameter"; type errors from the generated `Err(..)` have weak spans (use the span of the return type); the composition with `#[configuration]` has no test in this repository.
+- Task 4: `#[allow(clippy::diverging_sub_expression)]` on the generated `let` also covers the user's async body, so it hides only `f(return x)` style code.
+- Task 5: the boot test of 401 and 403 asserts only the status and the content type prefix, not the problem+json body or `WWW-Authenticate`; the allowed case of `/api/close` has no status assertion; the doc example in `security_context.rs` has a doubled `Ok::<..>`; the boot test uses the full path of `GrantedAuthority`.
+
+Rulings made during Slice 8:
+- The branch is `s8-method-security`, started from `main`; nothing is pushed.
+- `pre_filter` alone leaves the body unwrapped and allows any return type, `impl Trait` included, because only post steps need the wrapper.
+- `oxbloom-test` feature `security` enables an optional `oxbloom-security` dependency, because `with_authentication` names its types.
+- The `.stderr` files of the UI cases were generated and read by hand.
 
 ### C10: Test support (`oxbloom-test`)
 
@@ -970,13 +1013,13 @@ Deferred minors from the C10b reviews:
 
 1. **C2 Configuration v2.** Smallest dependencies, fixes open defects, and every other slice reads config.
 2. **C1 DI v2** (done). Required by C3, C4, C8 and C10.
-3. **Security Slice 6** (`PasswordEncoder`, `UserDetailsService`, Basic, form login and sessions): 6a (password encoding, user details, HTTP Basic), 6b (sessions), 6c (form login and logout) and 6d (CSRF tokens) are done, and so are Slices 7a (security headers, session management) and 7b (remember-me). It needs beans with lifecycle and typed config, so it comes after C1 and C2.
+3. **Security Slice 6** (`PasswordEncoder`, `UserDetailsService`, Basic, form login and sessions): 6a (password encoding, user details, HTTP Basic), 6b (sessions), 6c (form login and logout) and 6d (CSRF tokens) are done, and so are Slices 7a (security headers, session management), 7b (remember-me) and 8 (method security). It needs beans with lifecycle and typed config, so it comes after C1 and C2.
 4. **C3 Application lifecycle** with `FailureAnalyzer` (done: C3a and C3b).
 5. **C5 Logging** (C5a and C5b done), then **C6 Web server properties, errors and JSON** (C6a, C6b-1 and C6b-2 done).
 6. **C4 Conditions and auto-configuration** (C4a, the mechanism, and C4b, auto-configuring the existing wiring with property metadata, done).
 7. **C10 Test support** (C10a, the context runner and clock, and C10b, `TestApp`, `TestClient` and slicing, done).
 8. **C7 SSL bundles** (done) and **C8 Availability, info and health** (done), **C9a Tasks and scheduling** (done) and **C9b Retry** (done).
-9. Security Slice 8 (method security) and 9 (OAuth2 login and client), then `oxbloom-ai`, database, jobs and the rest of `IDEA.md`.
+9. Security Slice 8 (method security, done) and 9 (OAuth2 login and client), then `oxbloom-ai`, database, jobs and the rest of `IDEA.md`.
 10. **C11 Service connections** after the database and queue crates exist.
 
 ## Open questions for the design steps

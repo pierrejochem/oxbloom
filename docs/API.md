@@ -13,7 +13,7 @@ Only what is implemented and tested is documented as available. Anything else is
 | `oxbloom-web` | Router, request/response, Hyper server, filters | `App`, `Router`, `RouterConfig`, `Route`, `Request`, `Response`, `IntoResponse`, `Controller`, `RouteError`, `Filter`, `Next`, `Ordered`, `order` (with `order::CORS`, `order::NEGOTIATION` and `order::COMPRESSION`), `RequestLogFilter`, `CorsConfig`, `CorsFilter`, `CorsError`, `CompressionConfig`, `CompressionLevel`, `CompressionFilter`, `codecs`, `StaticResources`, `ResourceSource`, `DiskResources`, `EmbeddedResources`, `Resource`, `ResourceError`, `Json` and `JsonBody` (feature `json`), `HttpError`, `ErrorValue`, `ErrorAttributes`, `RequestInfo`, `ErrorRenderer`, `ProblemRenderer`, `ClientInfo`, `Scheme`, `ForwardedConfig`, `ForwardStrategy`, `TrustedProxies`, `ProxyParseError`, `App::serve_tls` (feature `tls`) |
 | `oxbloom-di` | Singleton dependency injection: traits, collections, lifecycle, lazy beans, bean factories, profiles, conditions and groups | `ContainerBuilder`, `Container`, `Resolver`, `Component`, `Configuration`, `Lifecycle`, `ShutdownReport`, `DestroyFailure`, `Inject`, `BeanFn`, `TryBeanFn`, `DiError`, `ErrorSource`, `Environment`, `ConditionContext`, `ConditionOutcome`, `Conditions`, `ConditionReport`, `ConditionRecord` |
 | `oxbloom-config` | Typed config: TOML + imports, profiles, env and CLI sources, placeholders, origins | `Config`, `ConfigBuilder`, `Secret`, `ConfigError`, `Origin`, `DataSize`, `ConfigWarning` |
-| `oxbloom-security` | Filter-chain security, JWT resource server, password login with HTTP Basic, sessions, form login, remember-me | `HttpSecurity`, `PasswordEncoder`, `Argon2PasswordEncoder`, `DelegatingPasswordEncoder`, `UserDetails`, `UserDetailsService`, `InMemoryUserDetailsService`, `DaoAuthenticationProvider`, `SecurityFilterChain`, `JwtDecoderBuilder`, `JwksSource`, `Authentication`, `jwt_decoder_from_config`, `jwks_ssl_bundle`, `Session`, `SessionFilter`, `SessionStore`, `CookieSessionBackend`, `FormLogin`, `FormLoginConfig`, `is_safe_redirect_target`, `ReqwestJwksFetcher` with `with_tls` (feature `jwks`) |
+| `oxbloom-security` | Filter-chain security, JWT resource server, password login with HTTP Basic, sessions, form login, remember-me, method security | `HttpSecurity`, `PasswordEncoder`, `Argon2PasswordEncoder`, `DelegatingPasswordEncoder`, `UserDetails`, `UserDetailsService`, `InMemoryUserDetailsService`, `DaoAuthenticationProvider`, `SecurityFilterChain`, `JwtDecoderBuilder`, `JwksSource`, `Authentication`, `jwt_decoder_from_config`, `jwks_ssl_bundle`, `Session`, `SessionFilter`, `SessionStore`, `CookieSessionBackend`, `FormLogin`, `FormLoginConfig`, `is_safe_redirect_target`, `ReqwestJwksFetcher` with `with_tls` (feature `jwks`) |
 | `oxbloom-boot` | Application entry point: lifecycle events, runners, services, signals, exit codes, banner, failure analysis, auto-configuration and the conditions report | `OxbloomApplication`, `OxbloomApplicationBuilder`, `ApplicationArguments`, `RunListener`, `ApplicationRunner`, `CommandLineRunner`, `Service`, `ExitCodeGenerator`, `ShutdownHandle`, `StartupError`, `StartupPhase`, `ServiceError`, `RunnerError`, `ExitStatus`, `Banner`, `FailureAnalysis`, `FailureAnalyzer`, `AutoConfiguration`, `AutoConfigurations`, `ConfigRef`, `auto_configuration`, `Conditions`, `Configuration`, `PropertyMetadata`, `boot_properties`, `WebServer`, `BindError`, `WebServerAutoConfiguration` and `RequestLogAutoConfiguration` (feature `web`), `auto_configurations` (feature `security` or `web`), `JwtDecoderAutoConfiguration`, `PasswordEncoderAutoConfiguration`, `SecurityAutoConfiguration` and `SecurityCustomizer` (feature `security`), `WebServer::with_ssl` and `SslAutoConfiguration` (feature `ssl`), `ActuatorAutoConfiguration` (feature `actuator`), `TasksAutoConfiguration`, `RetryAutoConfiguration` and `SchedulerService` (feature `tasks`), `OxbloomApplicationBuilder::logging` (feature `logging`), `async_trait` |
 | `oxbloom-logging` | `tracing` subscriber from the `logging.*` keys: levels, groups, console format and color, rotating file output, JSON lines, runtime change | `Level`, `ParseLevelError`, `ConsoleFormat`, `ConsoleColor`, `FileRotation`, `FileFormat`, `JsonField`, `LoggingError`, `LoggingSystem`, `PROPERTIES` |
 | `oxbloom-test` | Test support (dev-dependency): run an application context through the real boot lifecycle, captured output, temporary config directories, controllable clocks, a test client and whole applications on port 0 | `ContextRunner`, `ContextView`, `FailureView`, `Captured`, `Log`, `TempConfigDir`, `FixedClock`, `ManualClock`, `TestClient`, `TestResponse`, `TestApp` and `RunningApp` (feature `web`), `TestClient::connect_tls` and `RunningApp::client_tls` (feature `tls`) |
@@ -3298,8 +3298,47 @@ assert!(chain.is_ok());
 - Limits: no per-device revocation and no theft detection; a stolen cookie works until it expires or the password changes; the lifetime is fixed; an auto login on an unsafe request is a 403 until a `GET` (also a logout `POST` after the session expired with CSRF on, which keeps the cookie); the cookie holds the user name in the clear; the `UserDetailsService` must know every form-login user; any `Authorization` header blocks auto login; log out everywhere (`SessionRegistry`) and the session limit do not revoke remember-me, so an evicted or ended session logs straight back in, and a burst of parallel requests after the session expired can each auto log in and count against the limit; a JWT claim `oxbloom.remembered: true` counts as remembered (deny-only); a customizer's `http.clock(..)` does not change the clock of remember-me; the keys are applied only by `SecurityAutoConfiguration`.
 - Boot: see `SecurityAutoConfiguration` in section 4.8. The usage is in the guide chapter [Remember-me](guide/24-remember-me.md).
 
-Roadmap: slices 7a (security headers, session management) and 7b (remember-me) are done, then 8 (method security) and 9 (OAuth2 login and client). Not implemented:
-method security, OAuth2 login, opaque-token introspection, several chains per app, login rate limiting, database user stores.
+#### Method security (slice 8)
+
+Guide: [Method security](guide/25-method-security.md). Decisions: [ADR 0092](adr/0092-method-security.md). There are no configuration keys.
+
+```rust
+use oxbloom_security::{
+    AccessDenied, Authentication, GrantedAuthority, SecurityContext, method_security,
+};
+
+struct Accounts;
+
+#[method_security]
+impl Accounts {
+    #[pre_authorize(role = "ADMIN")]
+    fn close(&self, id: u64) -> Result<u64, AccessDenied> {
+        Ok(id)
+    }
+}
+
+# tokio::runtime::Builder::new_current_thread().build()?.block_on(async {
+let admin = Authentication::new("ada", [GrantedAuthority::new("ROLE_ADMIN")]);
+let ctx = SecurityContext::authenticated(admin);
+assert_eq!(SecurityContext::scope(ctx, async { Accounts.close(7) }).await, Ok(7));
+assert_eq!(Accounts.close(7), Err(AccessDenied::Unauthenticated));
+# });
+# Ok::<(), std::io::Error>(())
+```
+
+- `#[method_security]` (crate `oxbloom-macros`, re-exported as `oxbloom_security::method_security`) goes on an inherent `impl` block and rewrites its methods in place; there is no proxy. The method attributes `#[pre_authorize(rule)]`, `#[post_authorize(rule)]`, `#[pre_filter(arg = ids, custom = keep)]` and `#[post_filter(custom = keep)]` are re-exported too, but only work inside such a block (elsewhere each is a compile error), and need no import there. The generated code names the crate `oxbloom_security`, so the dependency must not be renamed. A trait impl, a repeated attribute, an unknown rule or option and a visibly non-`Result` return type are compile errors.
+- Rules: `role = ".."`, `any_role(..)`, `authority = ".."`, `any_authority(..)`, `authenticated`, `fully_authenticated`, `permit_all`, `deny_all`, `all(..)`, `any(..)`, `not(..)` and `custom = check(arg, ..)`. `check` is a synchronous `fn(Option<&Authentication>, &A, ..) -> bool` and each argument is a plain parameter name of the method (a pattern parameter cannot be named). In `post_authorize` the reserved name `returned` is `&T` of the `Ok` value, and a parameter can be named there only when the body did not move it. Roles and authorities use the same functions as the path rules of the chain.
+- Execution order, whatever the order of the attributes: `pre_filter`, `pre_authorize`, the body, `post_authorize`, `post_filter`. A denied `pre_authorize` skips the body and the post steps. A denied `post_authorize` drops the value. An `Err` from the body skips the post steps. Filters never deny. `pre_filter` takes a by-value `Vec<T>` parameter; `post_filter` takes a `Vec<T>` or any type with `retain(FnMut(&T) -> bool)` in the `Ok` value.
+- Return types: with `pre_authorize`, `post_authorize` or `post_filter` the method returns `Result<T, E>` with `E: From<AccessDenied>`; with a post attribute the type must be written out (no `impl Trait`). A method with only `pre_filter` may return anything.
+- A post attribute wraps the body (a closure for a synchronous method, an `async` block for an `async` one) so that `return` and `?` leave only the body. In an `async` method the macro rewrites the body's `return`s into `break`s out of a block of the declared return type, which keeps their coercions. A `return` inside a macro call is not rewritten and, when it needs a coercion, fails with E0308 at the attribute line (a documented limitation). A trailing `return Ok(x);` there becomes a `break`, so `clippy::needless_return` no longer reports it.
+- `AccessDenied` (`Debug`, `Clone`, `Copy`, `PartialEq`, `Eq`, `Display`, `Error`) has the variants `Unauthenticated` (an anonymous caller) and `Forbidden` (any authenticated caller). `AccessDenied::for_caller(Option<&Authentication>) -> AccessDenied` picks one. `From<AccessDenied> for HttpError` gives 401 and 403, the same as the chain.
+- `SecurityContext::current() -> SecurityContext` returns a clone of the context of the running request, or the anonymous context outside any scope. `async SecurityContext::scope(context, future) -> F::Output` runs the future with that context. The context is a Tokio task-local: the chain wraps the rest of every request in `scope`, and a task started with a bare `tokio::spawn` does not inherit it, so its secured calls are denied (fail closed). `oxbloom_security::spawn(future) -> JoinHandle<F::Output>` starts a task that carries the current context.
+- The check of an `async` method runs at the first poll of its future, not when the method is called. A denial logs the method (`Type::method`) and the principal at debug level on the target `oxbloom::security`; argument values and returned values are never logged.
+- `oxbloom_test::with_authentication(authentication, future)` (feature `security` of `oxbloom-test`) runs a future with that caller, for service tests without HTTP. See section 4.10.
+- Limits: `custom` checks are synchronous; there is no expression language, no caching of decisions, and only inherent impls are supported; the check of an `async` method sees the context of its first poll; the role rules of `HasAnyRole` and `HasAnyAuthority` allocate a small `Vec<&str>` per call.
+
+Roadmap: slices 7a (security headers, session management), 7b (remember-me) and 8 (method security) are done, then 9 (OAuth2 login and client). Not implemented:
+OAuth2 login, opaque-token introspection, several chains per app, login rate limiting, database user stores.
 
 ### 4.8 `oxbloom-boot`
 
@@ -5526,6 +5565,25 @@ them to 447 for `--no-default-features`, `--features web`, `--features security`
 467 for `--features logging` and `--all-features`
 ([ADR 0075](adr/0075-boot-tests-enable-oxbloom-test-tls.md)).
 
+#### `with_authentication` (feature `security`)
+
+`with_authentication(authentication: Authentication, future) -> F::Output` is an `async fn` that runs `future` with `authentication` as the current caller. It is a thin wrapper over `SecurityContext::scope(SecurityContext::authenticated(..), ..)` and exists so a secured service can be tested without HTTP (see [Method security](guide/25-method-security.md)). Code that runs outside the future, or in a task started with a bare `tokio::spawn`, does not see the caller; use `oxbloom_security::spawn` for that. The feature `security` also enables the optional dependency on `oxbloom-security`.
+
+```rust
+use oxbloom_security::{Authentication, GrantedAuthority, SecurityContext};
+use oxbloom_test::with_authentication;
+
+# tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(async {
+let admin = Authentication::new("ada", [GrantedAuthority::new("ROLE_ADMIN")]);
+let name = with_authentication(admin, async {
+    SecurityContext::current().authentication().map(|a| a.principal().to_owned())
+})
+.await;
+assert_eq!(name.as_deref(), Some("ada"));
+# });
+# Ok::<(), std::io::Error>(())
+```
+
 ### 4.11 `oxbloom-ssl`
 
 Named SSL bundles loaded from the `ssl.*` keys. A bundle has an identity (a certificate chain and its
@@ -6484,7 +6542,7 @@ Compile-fail tests use `trybuild` (`tests/ui/*.rs` with `.stderr` snapshots). Re
 
 ## Not implemented
 
-Method security, OAuth2 login, login rate limiting, Redis and SQL session stores, database user stores, database, jobs and queue, metrics and
+OAuth2 login, login rate limiting, Redis and SQL session stores, database user stores, database, jobs and queue, metrics and
 other observability beyond the actuator, React integration, `oxbloom-ai`, `oxbloom add`, MVC web style. In
 boot: analysis of failures after startup, a report format other than text. In DI: transient and request scopes,
 injection of single configuration properties, qualifiers by name, async lifecycle hooks and

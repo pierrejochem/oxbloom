@@ -4,6 +4,7 @@
 //! |---|---|
 //! | `todo.rs` | a thread-safe in-memory store: `Mutex<BTreeMap>` plus an atomic id counter, ids from 1, never reused |
 //! | `api.rs` | `#[controller("/api/todos")]` with `#[post("")]`, `#[get]`, `#[put]`, `#[patch]`, `#[delete]`, path parameters, a query filter, `Json<T>` answers, `Request::json` bodies, status codes, a `SecurityCustomizer`, `GET /api/visits`, a counter kept in the session, and `MeController`, the HTML page `GET /me` behind form login, with forms that post the CSRF token and `POST /me/reset-visits` that needs it |
+//! | `admin.rs` | `TodoAdmin::purge_done`, a service method secured with `#[method_security]` and `#[pre_authorize(role = "ADMIN")]`, used by `DELETE /api/admin/done` |
 //! | `cleanup.rs` | `#[scheduling]` with one `#[scheduled(fixed_delay = "1m")]` method that removes done todos older than `todos.cleanup.max-age` through a `#[retryable]` store call, run by boot's `tasks` feature |
 //! | `build.rs` | `oxbloom_actuator::build::emit()`, which feeds the build facts of `/actuator/info` |
 //! | `application.toml` | `server.port`, `todos.cleanup.max-age`, the `logging.level` table (`root`, and `todos` for the handlers' events), the demo users, HTTP Basic, the `security.session` section, `security.form-login.enabled`, `security.remember-me` with a public development secret and the commented `security.csrf` keys |
@@ -18,6 +19,7 @@
 //! curl -X POST -H 'content-type: application/json' -d '{"title":"try it"}' http://127.0.0.1:<port>/api/todos
 //! ```
 
+pub mod admin;
 pub mod api;
 pub mod cleanup;
 pub mod todo;
@@ -33,6 +35,7 @@ use oxbloom_security::SECRET_KEY;
 use oxbloom_tasks::Scheduling;
 use oxbloom_web::Controller;
 
+use crate::admin::TodoAdmin;
 use crate::api::{
     AdminController, LogoutEverywhereController, MeController, PublicPaths, TodoController,
     VisitController,
@@ -94,6 +97,7 @@ pub fn application(config_dir: impl Into<PathBuf>) -> OxbloomApplicationBuilder 
         .configure(|b| {
             b.bean(build_info)
                 .bean(TodoStore::default)
+                .component::<TodoAdmin>()
                 .try_bean(cleanup_bean)
                 .provides(|c: Arc<TodoCleanup>| -> Arc<dyn Scheduling> { c })
                 .component::<TodoController>()
