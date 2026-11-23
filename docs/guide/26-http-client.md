@@ -53,13 +53,18 @@ For TLS with your own trust, pass a `rustls::ClientConfig` built on the `aws-lc-
 
 ### Redirects
 
-With `follow_redirects(n)`, up to `n` redirects are followed. A chain that needs more returns the last 3xx response instead of an error, so a caller that treats every non-2xx status as a failure rejects it. On a redirect to another scheme, host or port, the `Authorization`, `Cookie`, `Cookie2`, `Proxy-Authorization` and `WWW-Authenticate` headers are dropped; other headers, such as a custom `X-Api-Key`, are kept. A redirect from `https` to `http` is followed, so leave redirects off for calls that carry credentials unless you need them.
+With `follow_redirects(n)`, up to `n` redirects are followed. A chain that needs more returns the last 3xx response instead of an error, so a caller that treats every non-2xx status as a failure rejects it. Some redirects are never followed, whatever the budget, and the 3xx response is returned instead:
+
+- a redirect from `https` to `http`, whatever its status;
+- a 307 or 308 to another origin (another scheme, host or port). These two statuses make the client send the method and the body again, and a form body can hold a `client_secret`, a `refresh_token`, a `code` or a `code_verifier`.
+
+A 301, 302 or 303 to another origin is followed as a `GET` without a body, and a redirect within the same origin is followed with any of these statuses, a 307 or 308 with its body. On a followed redirect to another origin, the `Authorization`, `Cookie`, `Cookie2`, `Proxy-Authorization` and `WWW-Authenticate` headers are dropped; other headers, such as a custom `X-Api-Key`, are kept. So credentials in a custom header do travel to another origin: leave redirects off for calls that carry credentials unless you need them.
 
 ## Errors
 
 `HttpClientError` is `Timeout`, `Network`, `TooLarge`, `BadStatus(StatusCode)`, `Build`, `Decode` and `InvalidRequest`. The text of each is fixed and never holds a URL, a header, a body or a status code, and the `Debug` output of the request, response and client types never shows them either, so a log line cannot leak a token that sat in a query string.
 
-A request that `reqwest` cannot build, such as one with an unparsable URL, is `InvalidRequest` and not `Network`: fix the request, do not retry. A bad header name or value does not fail `Request::header`, which returns the request; it marks the request invalid, and `Request::validate()` (called by every client before sending) returns `InvalidRequest`. `Request::set_header` returns the error at once.
+A request that `reqwest` cannot build, such as one with an unparsable URL or a scheme other than `http` or `https` (`file:///etc/passwd`, `ftp://...`), is `InvalidRequest` and not `Network`: fix the request, do not retry. With redirects on, a server-controlled redirect whose `Location` is malformed or names a scheme other than `http` or `https` also surfaces as `InvalidRequest`, so the variant does not always mean that your request is wrong. Credentials in the URL (`https://user:password@host/`) are turned into an `Authorization: Basic` header; prefer setting the header yourself. A bad header name or value does not fail `Request::header`, which returns the request; it marks the request invalid, and `Request::validate()` (called by every client before sending) returns `InvalidRequest`. `Request::set_header` returns the error at once.
 
 ## Interceptors
 
@@ -132,6 +137,7 @@ The rules of the mock:
 - `on_fn(|request| ..)` answers from the request, or returns `None` to let a later rule answer. The rules, `on` and `on_fn` together, are tried in the order they were added and the first one with an answer wins.
 - A request that no rule answers is `HttpClientError::Network`.
 - Every valid request is recorded, answered or not; read them with `requests()` and `request_count()`. An invalid request is an error and is not recorded.
+- `unmatched_requests()` returns the requests that no rule answered (they also got `Network`). A test of a failure path should assert that it is empty, so a mistyped URL cannot make the negative test pass for the wrong reason.
 - The mock cannot answer with an error. A test that needs `Timeout` or `TooLarge` writes a small stub client.
 
 ## Configuration and the bean
@@ -156,7 +162,7 @@ max-delay    = "30s"
 jitter       = "full"           # or "none", "equal"
 ```
 
-The `retry` keys are those of `tasks.retry` (see [Retry](18-tasks.md#retry)), with the same defaults, but the two do not share values. The client is wrapped in a `RetryingClient` only when `retry.max-attempts` is above 1; the other `retry` keys are checked and then ignored when `max-attempts` is not set. An unknown key, a bad value, a zero timeout or a zero body limit fails the start with an error that names the full key and never the value. An unknown `ssl-bundle` name lists the bundles that exist.
+The `retry` keys are those of `tasks.retry` (see [Retry](18-tasks.md#retry)), with the same defaults, but the two do not share values. The client is wrapped in a `RetryingClient` only when `retry.max-attempts` is above 1; the other `retry` keys are checked and then ignored when `max-attempts` is not set. An unknown key, a bad value, a zero timeout or a zero body limit fails the start with an error that names the full key and never the value. A `user-agent` that is not a valid header value (for example one with a line break) fails the start on `http.client.user-agent`. An unknown `ssl-bundle` name fails the start, and the startup failure report lists the bundles that exist (for example "available bundles: api, idp"). Any other failure to build the client is reported on the section `http.client`.
 
 A bean that needs the client injects `Arc<dyn HttpClient>`. The JWKS fetcher can use the same client with `ReqwestJwksFetcher::with_client(client)`. `TestApp::full` and `ContextRunner` with the feature `http-client` of `oxbloom-test` include the auto-configuration.
 
@@ -166,9 +172,13 @@ A bean that needs the client injects `Arc<dyn HttpClient>`. The JWKS fetcher can
 - **No proxy setter and no per-host clients.** Proxies come from the environment variables. A different policy per host needs a client per policy.
 - **The retry settings apply only with `retry.max-attempts`.** Setting `retry.initial` alone does nothing. There is no per-request retry override.
 - **Retries multiply the worst-case time**, because every attempt gets the full timeout.
-- **Redirects are off by default and credential headers are dropped on a cross-origin redirect**, but other headers are kept and `https` to `http` is followed when redirects are on.
+- **Redirects are off by default.** When they are on, a 307 or 308 to another origin and any redirect from `https` to `http` are not followed; on a followed cross-origin redirect the credential headers are dropped, but other headers are kept.
 - **Buffered bodies only.** A request body and a response body are held in memory; the response limit bounds the second. There is no streaming.
 - **The JWKS fetcher built with `with_client` is bounded by the client you give it.** It checks 1 MiB only after the body is buffered, so the real memory bound is the limit of that client.
 - **`MockHttpClient` matches exact URLs and cannot script an error.** Its `on_fn` closure runs while the mock's state lock is held, so the closure must not call the same mock.
 - **No metrics and no request logging yet.**
 - **Build `tls` configurations on `aws-lc-rs`.** The client does not reject a `ring` provider.
+
+## Testing behind a proxy
+
+The loopback tests of `oxbloom-http-client` and `oxbloom-boot` build real clients, and those honor `HTTP_PROXY`. On a machine that sets it, also set `NO_PROXY=127.0.0.1,localhost`, or the tests send their loopback requests to the proxy and fail.

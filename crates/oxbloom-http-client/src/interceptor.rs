@@ -267,6 +267,30 @@ mod tests {
         assert_eq!(*calls.lock().unwrap(), 0);
     }
 
+    /// Replaces the request with one that carries a bad header name, and reports success.
+    struct Corrupting;
+
+    #[async_trait::async_trait]
+    impl Interceptor for Corrupting {
+        async fn before(&self, request: &mut Request) -> Result<(), HttpClientError> {
+            *request = Request::new(http::Method::GET, "https://x.test").header("bad name", "x");
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_request_made_invalid_by_an_interceptor_never_reaches_the_inner_client() {
+        let calls = Arc::new(Mutex::new(0));
+        let client =
+            InterceptedClient::new(Arc::new(Counting(calls.clone()))).with(Arc::new(Corrupting));
+        let error = client
+            .execute(Request::get("https://x.test"))
+            .await
+            .unwrap_err();
+        assert_eq!(error, HttpClientError::InvalidRequest);
+        assert_eq!(*calls.lock().unwrap(), 0);
+    }
+
     #[tokio::test]
     async fn an_interceptor_error_stops_the_request() {
         let log = Arc::new(Mutex::new(Vec::new()));

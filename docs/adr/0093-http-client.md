@@ -18,7 +18,7 @@ The JWKS client already takes a rustls `ClientConfig` from an SSL bundle ([ADR 0
 
 **A request that cannot be built is `InvalidRequest`, not `Network`.** An unparsable URL is a mistake of the caller and not a transport failure, so it is `HttpClientError::InvalidRequest`. A caller can tell "fix the request" from "try again later".
 
-**Redirects fail closed.** With `follow_redirects(n)`, a chain that needs more than `n` redirects returns the last 3xx response and not an error, the same as the default of `n = 0`, so a caller that treats every non-2xx status as a failure rejects it. On a redirect to another scheme, host or port, `reqwest` drops `Authorization`, `Cookie`, `Cookie2`, `Proxy-Authorization` and `WWW-Authenticate`; a test with two loopback servers pins that. Other headers, such as a custom `X-Api-Key`, are kept, and a redirect from `https` to `http` is followed.
+**Redirects fail closed.** With `follow_redirects(n)`, a chain that needs more than `n` redirects returns the last 3xx response and not an error, the same as the default of `n = 0`, so a caller that treats every non-2xx status as a failure rejects it. Two kinds of redirect are never followed, and the 3xx response is returned as when the budget runs out: a 307 or 308 to another origin (scheme, host or port), because `reqwest` sends the method and the body again on those statuses and a form body can carry a client secret, a refresh token, an authorization code or a PKCE verifier; and any redirect from `https` to `http`, whatever its status. The custom redirect policy decides this with a small pure function, and loopback tests pin both cases. A 301, 302 or 303 to another origin is followed, and `reqwest` turns it into a `GET` without a body. On a followed redirect to another scheme, host or port, `reqwest` drops `Authorization`, `Cookie`, `Cookie2`, `Proxy-Authorization` and `WWW-Authenticate`; a test with two loopback servers pins that. Other headers, such as a custom `X-Api-Key`, are kept.
 
 **Retry is idempotent-only and reuses `oxbloom-tasks`.** `RetryingClient` (feature `retry`, which pulls in `oxbloom-tasks`) wraps another client. Only `GET`, `HEAD`, `PUT`, `DELETE` and `OPTIONS` are retried; a `POST` or `PATCH` is sent once, because repeating it could repeat a side effect. `Network`, `Timeout` and the statuses 502, 503 and 504 are retried. `RetryPolicy::run` retries only on `Err`, so a retryable status is mapped inside `run` to a private error that carries the response; when the attempts run out, the last response is returned and not an error. Each attempt gets the inner client's full timeout, so the worst case is about `max_attempts` times the timeout plus the waits.
 
@@ -46,7 +46,7 @@ Good:
 - A secret in a URL, a header or a body cannot reach a log through an error or a `Debug` print.
 - Code that takes `Arc<dyn HttpClient>` is tested with `MockHttpClient` without a socket.
 - A retry never repeats a `POST`, and the retry policy and its configuration are the ones of `oxbloom-tasks`.
-- A redirect to another origin does not carry the credentials, and a redirect chain that is too long is a failure for any caller that checks the status.
+- A redirect to another origin never resends a request body (a 307 or 308 there is not followed, a 301, 302 or 303 becomes a body-less `GET`) and drops the standard credential headers, a downgrade from `https` to `http` is never followed, and a redirect chain that is too long is a failure for any caller that checks the status.
 - The JWKS fetcher stays source compatible and gets the same limits and proxy behavior as every other client.
 
 Bad:
@@ -58,7 +58,9 @@ Bad:
 - A client built with `with_client` for the JWKS fetcher is only as bounded as the client the caller gives; the fetcher checks the size after the body is in memory.
 - The mock matches exact URLs only and cannot script an error, so tests with query-string variations or injected errors need `on_fn` or a stub.
 - `RetryingClient` and the mock reach `oxbloom-tasks` and `oxbloom-test` features that applications must enable.
-- A redirect from `https` to `http` is followed when redirects are on.
+- Custom headers, such as an `X-Api-Key`, still travel on a followed cross-origin 301, 302 or 303.
+- A legitimate 307 or 308 to another origin (for example a token endpoint that moved hosts) is not followed; the caller sees the 3xx and must update the URL.
+- The loopback tests honor `HTTP_PROXY`, so on a machine that sets it, also set `NO_PROXY=127.0.0.1,localhost` when running them (testing behind a proxy).
 
 ## Alternatives considered
 

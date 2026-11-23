@@ -182,6 +182,7 @@ enum Rule {
 struct State {
     rules: Vec<Rule>,
     requests: Vec<Request>,
+    unmatched: Vec<Request>,
 }
 
 /// An [`HttpClient`] with scripted answers, for tests of code that calls an HTTP API.
@@ -191,7 +192,8 @@ struct State {
 /// [`on_fn`](Self::on_fn) answers from the request. The rules are tried in the order they
 /// were added and the first that has an answer wins. A request that no rule answers gets
 /// [`HttpClientError::Network`]. Every valid request is recorded, answered or not, and
-/// [`requests`](Self::requests) returns them. Like every client, `execute` first calls
+/// [`requests`](Self::requests) returns them; [`unmatched_requests`](Self::unmatched_requests)
+/// returns the ones no rule answered. Like every client, `execute` first calls
 /// `Request::validate`, so an invalid request is an error and is not recorded.
 ///
 /// The mock holds its state behind a mutex, so it can be shared as an `Arc<dyn HttpClient>`
@@ -342,6 +344,38 @@ impl MockHttpClient {
         self.state().requests.clone()
     }
 
+    /// The requests that no rule answered, in order. They were also answered with
+    /// `HttpClientError::Network`, and they are in [`requests`](Self::requests) too.
+    ///
+    /// A test of a failure path should assert that this is empty: otherwise a mistyped URL
+    /// in the rule also ends in an error, and the negative test passes for the wrong reason.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use http::Method;
+    /// use oxbloom_http_client::{HttpClient, Request};
+    /// use oxbloom_test::{MockHttpClient, MockResponse};
+    ///
+    /// # tokio::runtime::Builder::new_current_thread().build()?.block_on(async {
+    /// let mock = MockHttpClient::new();
+    /// mock.on(Method::POST, "https://idp.example.test/token", MockResponse::status(401));
+    ///
+    /// // The code under test must fail on the 401, not on an unanswered request.
+    /// let response = mock.execute(Request::post("https://idp.example.test/token")).await?;
+    /// assert!(response.error_for_status().is_err());
+    /// assert!(mock.unmatched_requests().is_empty());
+    ///
+    /// let _ = mock.execute(Request::post("https://idp.example.test/tokn")).await;
+    /// assert_eq!(mock.unmatched_requests()[0].url(), "https://idp.example.test/tokn");
+    /// # Ok::<(), oxbloom_http_client::HttpClientError>(())
+    /// # })?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn unmatched_requests(&self) -> Vec<Request> {
+        self.state().unmatched.clone()
+    }
+
     /// How many requests were received so far.
     ///
     /// # Examples
@@ -374,8 +408,10 @@ impl HttpClient for MockHttpClient {
         request.validate()?;
         let mut state = self.state();
         state.requests.push(request.clone());
-        let State { rules, .. } = &mut *state;
-        for rule in rules {
+        let State {
+            rules, unmatched, ..
+        } = &mut *state;
+        for rule in rules.iter_mut() {
             match rule {
                 Rule::Exact {
                     method,
@@ -395,6 +431,7 @@ impl HttpClient for MockHttpClient {
                 Rule::Exact { .. } => {}
             }
         }
+        unmatched.push(request);
         Err(HttpClientError::Network)
     }
 }

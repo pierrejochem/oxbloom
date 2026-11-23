@@ -222,8 +222,12 @@ async fn the_built_client_uses_the_configured_user_agent_and_limit() {
 }
 
 #[test]
-fn a_bad_user_agent_fails_the_build_without_the_value() {
-    let s = settings("[http.client]\nuser-agent = \"bad\\nvalue\"").unwrap();
-    let err = s.build(None).err().unwrap();
-    assert_eq!(err, oxbloom_http_client::HttpClientError::Build);
+fn a_user_agent_that_is_not_a_header_value_names_the_key_without_the_value() {
+    let err = settings("[http.client]\nuser-agent = \"MARKER-9\\nvalue\"").unwrap_err();
+    assert!(
+        matches!(&err, ConfigError::Invalid { key, .. } if key == "http.client.user-agent"),
+        "{err:?}"
+    );
+    let text = format!("{err} {err:?}");
+    assert!(!text.contains("MARKER-9"), "{text}");
 }

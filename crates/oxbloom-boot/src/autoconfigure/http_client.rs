@@ -114,10 +114,11 @@ fn http_client(
     let creation = DiError::creation_from::<ConfiguredClient>;
     let settings = HttpClientSettings::from_config(&config).map_err(creation)?;
     let build_failed = || {
-        // A build failure has a fixed text and no key of its own: the user agent is the one
-        // setting that can make it fail, so name that key.
+        // A build failure has a fixed text and no key of its own (a bad user agent is already
+        // refused by `from_config`; what is left is, for example, no usable TLS roots), so
+        // name the section.
         creation(ConfigError::invalid(
-            "http.client.user-agent",
+            "http.client",
             "the HTTP client cannot be built with these settings",
         ))
     };

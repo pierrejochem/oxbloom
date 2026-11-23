@@ -127,7 +127,8 @@ impl HttpClientSettings {
     ///
     /// Fails with a [`ConfigError`] naming the full key for an unknown key under
     /// `http.client` or `http.client.retry`, a value of the wrong type, a bad duration, a
-    /// zero `timeout`, `max-body-bytes`, a zero or empty `user-agent` or `ssl-bundle`, a
+    /// zero `timeout`, `max-body-bytes`, an empty `ssl-bundle`, an empty `user-agent` or one
+    /// that is not a valid header value, a
     /// `max-attempts` of zero, a `multiplier` below 1.0 or not finite, an `initial` above
     /// `max-delay`, and an unknown `backoff` or `jitter`. The error never shows the value.
     ///
@@ -170,6 +171,16 @@ impl HttpClientSettings {
         };
         if raw.user_agent.as_deref().is_some_and(str::is_empty) {
             return Err(ConfigError::invalid(USER_AGENT, "must not be empty"));
+        }
+        if raw
+            .user_agent
+            .as_deref()
+            .is_some_and(|agent| http::HeaderValue::from_str(agent).is_err())
+        {
+            return Err(ConfigError::invalid(
+                USER_AGENT,
+                "must be a valid header value (visible ASCII, no line breaks)",
+            ));
         }
         if raw.ssl_bundle.as_deref().is_some_and(str::is_empty) {
             return Err(ConfigError::invalid(SSL_BUNDLE, "must not be empty"));

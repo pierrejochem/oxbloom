@@ -120,6 +120,30 @@ async fn a_broken_section_fails_the_build_with_the_key() {
         .await;
 }
 
+#[tokio::test]
+async fn a_user_agent_that_is_not_a_header_value_is_blamed_on_its_key() {
+    ContextRunner::new()
+        .config_str("[http.client]\nuser-agent = \"MARKER-8\\nvalue\"")
+        .auto_configuration::<HttpClientAutoConfiguration>()
+        .run_failing(|view| {
+            let error = view.error();
+            let config = error.find_cause::<ConfigError>().expect("a config error");
+            assert!(
+                matches!(config, ConfigError::Invalid { key, .. } if key == "http.client.user-agent"),
+                "{config:?}"
+            );
+            let report = error.analysis().expect("a failure report").to_string();
+            assert!(
+                report.contains("`http.client.user-agent` is not valid"),
+                "{report}"
+            );
+            for text in [report, error.to_string(), view.output().contents()] {
+                assert!(!text.contains("MARKER-8"), "{text}");
+            }
+        })
+        .await;
+}
+
 #[test]
 fn the_metadata_lists_the_twelve_keys() {
     let keys: Vec<_> = HttpClientAutoConfiguration::properties()
@@ -252,6 +276,16 @@ mod ssl {
                 assert!(config.to_string().contains("api, idp"), "{config}");
                 let report = error.analysis().expect("a failure report").to_string();
                 assert!(report.contains("http.client.ssl-bundle"), "{report}");
+                // The startup report itself lists the bundles, not only the error.
+                assert!(
+                    report.contains("available bundles: api, idp"),
+                    "{report}"
+                );
+                assert!(
+                    view.output().contents().contains("available bundles: api, idp"),
+                    "{}",
+                    view.output().contents()
+                );
                 for text in [report, error.to_string(), view.output().contents()] {
                     assert!(!text.contains("BEGIN"), "{text}");
                 }
@@ -268,6 +302,12 @@ mod ssl {
                     config.to_string().contains("available bundles: none"),
                     "{config}"
                 );
+                let report = view
+                    .error()
+                    .analysis()
+                    .expect("a failure report")
+                    .to_string();
+                assert!(report.contains("available bundles: none"), "{report}");
             })
             .await;
     }

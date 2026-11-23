@@ -101,6 +101,41 @@ async fn mock_unmatched_request_is_a_network_error() {
 }
 
 #[tokio::test]
+async fn unmatched_requests_lists_only_the_requests_no_rule_answered() {
+    let mock = MockHttpClient::new();
+    mock.on(
+        Method::POST,
+        "https://idp.example.test/token",
+        MockResponse::status(400),
+    )
+    .on_fn(|request| {
+        request
+            .url()
+            .ends_with("/ping")
+            .then(|| Response::new(StatusCode::OK, http::HeaderMap::new(), Vec::new()))
+    });
+    assert!(mock.unmatched_requests().is_empty());
+
+    mock.execute(Request::post("https://idp.example.test/token"))
+        .await
+        .unwrap();
+    mock.execute(Request::get("https://idp.example.test/ping"))
+        .await
+        .unwrap();
+    // A mistyped URL: still answered with the network error, and listed.
+    assert_eq!(
+        mock.execute(Request::post("https://idp.example.test/tokn"))
+            .await
+            .unwrap_err(),
+        HttpClientError::Network
+    );
+    let unmatched = mock.unmatched_requests();
+    assert_eq!(unmatched.len(), 1);
+    assert_eq!(unmatched[0].url(), "https://idp.example.test/tokn");
+    assert_eq!(mock.request_count(), 3);
+}
+
+#[tokio::test]
 async fn mock_rejects_an_invalid_request_like_every_client() {
     let mock = MockHttpClient::new();
     mock.on(
