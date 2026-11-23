@@ -5462,7 +5462,7 @@ let claims = serde_json::json!({ "sub": "alice", "exp": 1_900_000_060_u64 });
 let token = encode(
     &Header::new(Algorithm::HS256),
     &claims,
-    &EncodingKey::from_secret(SECRET.as_bytes()),
+    &EncodingKey::from_secret(SECRET.as_bytes())?,
 )?;
 let bearer = format!("Bearer {token}");
 

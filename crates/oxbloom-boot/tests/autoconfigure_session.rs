@@ -611,7 +611,7 @@ async fn filter_order_is_before_security() {
     let token = encode(
         &Header::new(Algorithm::HS256),
         &serde_json::json!({ "sub": "jwt-user", "exp": exp }),
-        &EncodingKey::from_secret(SECRET.as_bytes()),
+        &EncodingKey::from_secret(SECRET.as_bytes()).expect("a valid test secret"),
     )
     .unwrap();
     let res = app
