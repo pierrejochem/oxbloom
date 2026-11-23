@@ -930,7 +930,7 @@ Delivered:
 - `examples/todos`: `TodoAdmin::purge_done`, a service method secured with `#[pre_authorize(role = "ADMIN")]`, behind `DELETE /api/admin/done`, and `tests/method_security.rs` (a service test with `with_authentication` and a test of 401, 403 and 200 with the demo users).
 - ADR 0092, the guide chapter 25 (the roadmap chapter is now 26, renamed with `git mv`) and the API section.
 
-Gate numbers at the end of Slice 8: to be filled by the controller.
+Gate numbers at the end of Slice 8: `cargo test --workspace --all-features --no-fail-fast` 3562 passed, 0 failed, 8 ignored (3471 before Slice 8; counted by summing the `test result` lines, doctests included); `make check-examples` 79 passed (76 before), 0 failed; clippy `-D warnings` and `cargo fmt --check` clean; the boot stack probes are unchanged at 238 KB passing and 237 KB overflowing (exit 101) with no features, and 239 KB passing and 238 KB overflowing (exit 101) with all features; the fourteen `cargo build -p oxbloom-boot --no-default-features` builds of CI (none, `logging`, `web`, `security`, `ssl`, `actuator`, `actuator,logging`, `actuator,ssl`, `actuator,security`, `tasks`, `tasks,logging`, `tasks,ssl`, `tasks,security` and `tasks,actuator`) and the four `oxbloom-security` builds with `--no-default-features` (no features, `di`, `jwks`, `di,jwks`) pass; `cargo tree -i ring --workspace --all-features` finds no `ring` (cargo prints "nothing to print").
 
 Limits that users must know (also in the guide):
 - The caller is a task-local context: a bare `tokio::spawn` loses it and is denied; use `oxbloom_security::spawn`.
