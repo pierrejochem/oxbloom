@@ -112,17 +112,36 @@ fn is_loopback_host(host: &str) -> bool {
         .is_some_and(|ip| ip.is_ipv6() && ip.is_loopback())
 }
 
-/// An absolute `https` URL with a host and no credentials, or `http` for a loopback host.
-fn is_acceptable_endpoint(value: &str) -> bool {
+/// An absolute `https` URL with a host and no credentials, or `http` for a loopback host,
+/// without a fragment and with a valid port. `allow_query` is `false` for an issuer.
+fn is_acceptable_endpoint(value: &str, allow_query: bool) -> bool {
+    if value.contains('#') {
+        return false;
+    }
     let Ok(uri) = value.parse::<http::Uri>() else {
         return false;
     };
+    if !allow_query && (uri.query().is_some() || value.contains('?')) {
+        return false;
+    }
     let (Some(scheme), Some(authority)) = (uri.scheme_str(), uri.authority()) else {
         return false;
     };
     let host = authority.host();
     if host.is_empty() || authority.as_str().contains('@') {
         return false;
+    }
+    if let Some(rest) = authority
+        .as_str()
+        .strip_prefix(host)
+        .filter(|r| !r.is_empty())
+    {
+        let valid_port = rest
+            .strip_prefix(':')
+            .is_some_and(|p| !p.is_empty() && p.parse::<u16>().is_ok());
+        if !valid_port {
+            return false;
+        }
     }
     match scheme.to_ascii_lowercase().as_str() {
         "https" => true,
@@ -131,18 +150,54 @@ fn is_acceptable_endpoint(value: &str) -> bool {
     }
 }
 
-fn check_endpoint(key: &str, value: &Option<String>) -> Result<(), ConfigError> {
+fn check_endpoint(key: &str, value: &Option<String>, allow_query: bool) -> Result<(), ConfigError> {
     match value {
-        Some(v) if !is_acceptable_endpoint(v) => Err(ConfigError::invalid(
+        Some(v) if !is_acceptable_endpoint(v, allow_query) => Err(ConfigError::invalid(
             key,
-            "must be an absolute https URL without credentials (http only for localhost, a 127.0.0.0/8 address or ::1)",
+            "must be an absolute https URL without credentials or fragment, and for an issuer \
+             without a query (http only for localhost, a 127.0.0.0/8 address or ::1)",
         )),
         _ => Ok(()),
     }
 }
 
+/// Only `{base-url}` and `{id}` may appear in a redirect template.
+fn redirect_template_is_valid(template: &str, id: &str) -> bool {
+    let mut rest = template;
+    let mut out = String::new();
+    while let Some(i) = rest.find(['{', '}']) {
+        out.push_str(&rest[..i]);
+        let tail = &rest[i..];
+        if let Some(t) = tail.strip_prefix("{base-url}") {
+            out.push_str("https://app.example");
+            rest = t;
+        } else if let Some(t) = tail.strip_prefix("{id}") {
+            out.push_str(id);
+            rest = t;
+        } else {
+            return false;
+        }
+    }
+    out.push_str(rest);
+    is_acceptable_endpoint(&out, true)
+}
+
+/// RFC 6749 section 3.3: `%x21 / %x23-5B / %x5D-7E`.
+fn is_scope_token(token: &str) -> bool {
+    !token.is_empty()
+        && token
+            .bytes()
+            .all(|b| b == 0x21 || (0x23..=0x5B).contains(&b) || (0x5D..=0x7E).contains(&b))
+}
+
 fn read_provider(id: &str, raw: RawProvider) -> Result<ProviderConfig, ConfigError> {
     let key = |name: &str| format!("{PROVIDERS}.{id}.{name}");
+    if !is_valid_id(id) {
+        return Err(ConfigError::invalid(
+            format!("{PROVIDERS}.{id}"),
+            "a provider id may only hold a to z, 0 to 9 and -",
+        ));
+    }
     let provider = ProviderConfig {
         issuer_uri: raw.issuer_uri,
         authorization_uri: raw.authorization_uri,
@@ -151,11 +206,11 @@ fn read_provider(id: &str, raw: RawProvider) -> Result<ProviderConfig, ConfigErr
         jwk_set_uri: raw.jwk_set_uri,
         user_name_attribute: raw.user_name_attribute,
     };
-    check_endpoint(&key("issuer-uri"), &provider.issuer_uri)?;
-    check_endpoint(&key("authorization-uri"), &provider.authorization_uri)?;
-    check_endpoint(&key("token-uri"), &provider.token_uri)?;
-    check_endpoint(&key("user-info-uri"), &provider.user_info_uri)?;
-    check_endpoint(&key("jwk-set-uri"), &provider.jwk_set_uri)?;
+    check_endpoint(&key("issuer-uri"), &provider.issuer_uri, false)?;
+    check_endpoint(&key("authorization-uri"), &provider.authorization_uri, true)?;
+    check_endpoint(&key("token-uri"), &provider.token_uri, true)?;
+    check_endpoint(&key("user-info-uri"), &provider.user_info_uri, true)?;
+    check_endpoint(&key("jwk-set-uri"), &provider.jwk_set_uri, true)?;
     if provider.issuer_uri.is_none() {
         if provider.authorization_uri.is_none() && provider.token_uri.is_none() {
             return Err(ConfigError::invalid(
@@ -215,6 +270,24 @@ fn read_registration(
             ));
         }
     };
+    let scopes = raw.scope.unwrap_or_default();
+    if !scopes.iter().all(|t| is_scope_token(t)) {
+        return Err(ConfigError::invalid(
+            key("scope"),
+            "a scope may only hold printable ASCII without space, double quote and backslash, \
+             and may not be empty",
+        ));
+    }
+    let redirect_uri = raw
+        .redirect_uri
+        .unwrap_or_else(|| DEFAULT_REDIRECT_URI.to_owned());
+    if !redirect_template_is_valid(&redirect_uri, id) {
+        return Err(ConfigError::invalid(
+            key("redirect-uri"),
+            "must be an absolute https URL (http only for a loopback host) without credentials \
+             or fragment; only {base-url} and {id} may appear in braces",
+        ));
+    }
     let client_secret = raw.client_secret.filter(|s| !s.expose().is_empty());
     if client_secret.is_none() && client_authentication != ClientAuthentication::None {
         return Err(ConfigError::invalid(
@@ -233,10 +306,8 @@ fn read_registration(
         id: id.to_owned(),
         client_id,
         client_secret,
-        scopes: raw.scope.unwrap_or_default(),
-        redirect_uri: raw
-            .redirect_uri
-            .unwrap_or_else(|| DEFAULT_REDIRECT_URI.to_owned()),
+        scopes,
+        redirect_uri,
         client_authentication,
         provider,
     })
@@ -257,7 +328,9 @@ impl OAuth2Settings {
     /// `authorization-uri` and a `token-uri`; a plain OAuth2 provider (no `issuer-uri`, no
     /// `jwk-set-uri`) with neither `user-info-uri` nor `user-name-attribute`; an endpoint
     /// that is not an absolute `https` URL unless its host is loopback; a registration id
-    /// outside `[a-z0-9-]+`; an unknown key.
+    /// or provider id outside `[a-z0-9-]+`; an invalid redirect URI or scope; a fragment, a bad
+    /// port or (on `issuer-uri`) a query in an endpoint; an unknown key. Relaxed binding
+    /// applies: `client_id` and `clientid` normalize to `client-id` and are accepted.
     ///
     /// # Examples
     ///

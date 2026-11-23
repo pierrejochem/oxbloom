@@ -256,3 +256,128 @@ fn the_secret_never_appears_in_the_error_or_debug_output() {
     let err = read(&GOOGLE.replace("\"s3cr3t-value\"", "[\"s3cr3t-value\"]")).unwrap_err();
     assert!(!format!("{err:?}{err}").contains("s3cr3t-value"));
 }
+
+fn reg_with(field: &str) -> String {
+    format!(
+        "[security.oauth2.client.registration.idp]\nclient-id = \"app\"\nclient-secret = \"hunter2-hunter2\"\n{field}\n\n[security.oauth2.client.provider.idp]\nissuer-uri = \"https://idp.example\"\n"
+    )
+}
+
+#[test]
+fn the_redirect_uri_is_validated() {
+    let key = format!("{REG}.idp.redirect-uri");
+    for bad in [
+        "javascript:x",
+        "http://evil.example/cb",
+        "https://app.example/cb#frag",
+        "{base-url}/cb/{host}",
+        "{base-url}/cb/{id",
+        "{base-url}/cb/id}",
+        "https://user:pw@app.example/cb",
+    ] {
+        match read(&reg_with(&format!("redirect-uri = \"{bad}\""))) {
+            Err(ConfigError::Invalid {
+                key: k, message, ..
+            }) => {
+                assert_eq!(k, key, "{bad}");
+                assert!(!message.contains(bad), "{bad} leaked");
+            }
+            other => panic!("{bad}: {other:?}"),
+        }
+    }
+    for good in [
+        "https://app.example/cb/{id}",
+        "http://localhost:8080/cb",
+        "{base-url}/login/oauth2/code/{id}",
+    ] {
+        read(&reg_with(&format!("redirect-uri = \"{good}\"")))
+            .unwrap_or_else(|e| panic!("{good}: {e}"));
+    }
+    read(&reg_with("")).unwrap();
+}
+
+#[test]
+fn scope_tokens_are_validated() {
+    let key = format!("{REG}.idp.scope");
+    for bad in [
+        r#"["a b"]"#,
+        r#"["\n"]"#,
+        r#"[""]"#,
+        r#"["a\"b"]"#,
+        r#"["a\\b"]"#,
+        r#"["openid", "\t"]"#,
+    ] {
+        assert_eq!(
+            invalid_key(&reg_with(&format!("scope = {bad}"))),
+            key,
+            "{bad}"
+        );
+    }
+    let ok = read(&reg_with(
+        r#"scope = ["openid", "profile", "https://example.com/auth/read"]"#,
+    ))
+    .unwrap();
+    assert_eq!(ok.registrations[0].scopes.len(), 3);
+}
+
+fn provider_with(line: &str) -> String {
+    format!(
+        "[security.oauth2.client.registration.idp]\nclient-id = \"app\"\nclient-secret = \"hunter2-hunter2\"\n\n[security.oauth2.client.provider.idp]\n{line}\n"
+    )
+}
+
+#[test]
+fn endpoints_refuse_fragments_issuer_queries_and_bad_ports() {
+    let issuer = format!("{PROV}.idp.issuer-uri");
+    assert_eq!(
+        invalid_key(&provider_with(r#"issuer-uri = "https://i.example/#f""#)),
+        issuer
+    );
+    assert_eq!(
+        invalid_key(&provider_with(r#"issuer-uri = "https://i.example/?a=b""#)),
+        issuer
+    );
+    assert_eq!(
+        invalid_key(&provider_with(
+            r#"issuer-uri = "https://good.example:99999/""#
+        )),
+        issuer
+    );
+    assert_eq!(
+        invalid_key(&provider_with(
+            "authorization-uri = \"https://i.example/a\"\ntoken-uri = \"https://i.example/t#f\"\nuser-name-attribute = \"sub\""
+        )),
+        format!("{PROV}.idp.token-uri")
+    );
+    read(&provider_with(
+        "authorization-uri = \"https://i.example/a?prompt=consent\"\ntoken-uri = \"https://i.example:8443/t\"\nuser-name-attribute = \"sub\"",
+    ))
+    .unwrap();
+}
+
+#[test]
+fn a_provider_id_must_be_lowercase_alphanumeric_or_dash() {
+    let toml = "[security.oauth2.client.provider.Bad_Id]\nissuer-uri = \"https://i.example\"\n";
+    assert_eq!(invalid_key(toml), format!("{PROV}.Bad_Id"));
+}
+
+#[test]
+fn a_key_typo_in_a_registration_is_an_error_naming_it() {
+    let toml = reg_with("client-idd = \"x\"");
+    let err = read(&toml).unwrap_err().to_string();
+    assert!(err.contains("client-idd"), "{err}");
+}
+
+#[test]
+fn relaxed_binding_accepts_underscore_and_joined_keys() {
+    for name in ["client_id", "clientid"] {
+        let toml = format!(
+            "[security.oauth2.client.registration.idp]\n{name} = \"app\"\nclient-secret = \"hunter2-hunter2\"\n\n[security.oauth2.client.provider.idp]\nissuer-uri = \"https://i.example\"\n"
+        );
+        assert_eq!(
+            read(&toml).unwrap().registrations[0].client_id,
+            "app",
+            "{name}"
+        );
+    }
+}
