@@ -198,7 +198,7 @@ static HTTP_CLIENT: [PropertyMetadata; 12] = [
         "http.client.follow-redirects",
         "usize",
         Some("0"),
-        "How many redirects are followed. 0 follows none and returns the 3xx response.",
+        "How many redirects are followed. 0 follows none and returns the 3xx response. A cross-origin 307 or 308 and any https to http redirect are never followed, and the 3xx response is returned.",
     ),
     PropertyMetadata::new(
         "http.client.user-agent",

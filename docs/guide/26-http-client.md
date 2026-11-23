@@ -58,7 +58,7 @@ With `follow_redirects(n)`, up to `n` redirects are followed. A chain that needs
 - a redirect from `https` to `http`, whatever its status;
 - a 307 or 308 to another origin (another scheme, host or port). These two statuses make the client send the method and the body again, and a form body can hold a `client_secret`, a `refresh_token`, a `code` or a `code_verifier`.
 
-A 301, 302 or 303 to another origin is followed as a `GET` without a body, and a redirect within the same origin is followed with any of these statuses, a 307 or 308 with its body. On a followed redirect to another origin, the `Authorization`, `Cookie`, `Cookie2`, `Proxy-Authorization` and `WWW-Authenticate` headers are dropped; other headers, such as a custom `X-Api-Key`, are kept. So credentials in a custom header do travel to another origin: leave redirects off for calls that carry credentials unless you need them.
+A 307 or 308 upgrade from `http` to `https` is stopped as well, because the scheme differs. A `POST` answered by a cross-origin 301 or 302 becomes a `GET` without a body. A `PUT`, `PATCH` or `DELETE` keeps its method and its body on a 301 or 302, so leave redirects off, which is the default, for requests other than `POST` that carry a secret in the body. A redirect within the same origin is followed with any of these statuses, a 307 or 308 with its body. On a followed redirect to another origin, the `Authorization`, `Cookie`, `Cookie2`, `Proxy-Authorization` and `WWW-Authenticate` headers are dropped; other headers, such as a custom `X-Api-Key`, are kept. So credentials in a custom header do travel to another origin: leave redirects off for calls that carry credentials unless you need them.
 
 ## Errors
 

@@ -155,11 +155,14 @@ impl ClientBuilder {
     /// had run out: a redirect from `https` to `http`, whatever its status, and a 307 or 308
     /// to another origin (scheme, host or port), because those two statuses send the method
     /// and the body again and a form body can hold a client secret, a refresh token or an
-    /// authorization code. A 301, 302 or 303 to another origin is followed as a `GET`
-    /// without a body. On a followed redirect to another origin, the `Authorization`,
-    /// `Cookie`, `Cookie2`, `Proxy-Authorization` and `WWW-Authenticate` headers are
-    /// removed, while other headers (for example a custom `X-Api-Key`) are kept, so do not
-    /// put credentials in custom headers when redirects are on.
+    /// authorization code. A 307 or 308 upgrade from `http` to `https` is stopped too,
+    /// because the scheme differs. A `POST` answered by a cross-origin 301 or 302 becomes a
+    /// `GET` without a body. A `PUT`, `PATCH` or `DELETE` keeps its method and its body on a
+    /// 301 or 302, so leave redirects off (the default) for requests other than `POST` that
+    /// carry a secret in the body. On a followed redirect to another origin, the
+    /// `Authorization`, `Cookie`, `Cookie2`, `Proxy-Authorization` and `WWW-Authenticate`
+    /// headers are removed, while other headers (for example a custom `X-Api-Key`) are kept,
+    /// so do not put credentials in custom headers when redirects are on.
     ///
     /// # Examples
     ///
@@ -389,8 +392,10 @@ impl ReqwestClient {
 /// A hop from `https` to `http` is never followed, whatever the status. A 307 or 308 to
 /// another origin (scheme, host or port) is not followed either, because those statuses make
 /// the client send the method and the body again, and a form body can carry a client secret,
-/// a refresh token or an authorization code. A 301, 302 or 303 to another origin is followed
-/// as a `GET` without a body.
+/// a refresh token or an authorization code. A 301, 302 or 303 to another origin is
+/// followed. This function cannot see the method: the redirect machinery turns only a `POST`
+/// into a `GET` without a body on a 301 or 302, while `PUT`, `PATCH` and `DELETE` keep their
+/// method and body.
 fn must_stop(prev: &reqwest::Url, next: &reqwest::Url, status: http::StatusCode) -> bool {
     if prev.scheme() == "https" && next.scheme() == "http" {
         return true;
