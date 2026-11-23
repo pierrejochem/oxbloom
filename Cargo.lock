@@ -1570,6 +1570,7 @@ dependencies = [
  "oxbloom-config",
  "oxbloom-core",
  "oxbloom-di",
+ "oxbloom-http-client",
  "oxbloom-logging",
  "oxbloom-macros",
  "oxbloom-security",
@@ -1631,6 +1632,7 @@ dependencies = [
  "async-trait",
  "form_urlencoded",
  "http",
+ "oxbloom-config",
  "oxbloom-tasks",
  "rcgen",
  "reqwest",
@@ -1744,6 +1746,7 @@ dependencies = [
 name = "oxbloom-test"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "bytes",
  "http",
  "http-body-util",
@@ -1754,6 +1757,7 @@ dependencies = [
  "oxbloom-config",
  "oxbloom-core",
  "oxbloom-di",
+ "oxbloom-http-client",
  "oxbloom-security",
  "oxbloom-web",
  "rcgen",

@@ -8,6 +8,8 @@
 
 #[cfg(feature = "actuator")]
 mod actuator;
+#[cfg(feature = "http-client")]
+mod http_client;
 #[cfg(feature = "security")]
 mod jwt;
 #[cfg(feature = "security")]
@@ -27,6 +29,8 @@ mod tasks;
 
 #[cfg(feature = "actuator")]
 pub use actuator::ActuatorAutoConfiguration;
+#[cfg(feature = "http-client")]
+pub use http_client::HttpClientAutoConfiguration;
 #[cfg(feature = "security")]
 pub use jwt::JwtDecoderAutoConfiguration;
 #[cfg(feature = "security")]
@@ -54,7 +58,7 @@ use crate::autoconfig::AutoConfigurations;
 /// `SslAutoConfiguration`; with `actuator`, `ActuatorAutoConfiguration`; with `web`,
 /// `RequestLogAutoConfiguration` and then `WebServerAutoConfiguration` (after the others when
 /// several features are on); with `tasks`, `TasksAutoConfiguration` and then
-/// `RetryAutoConfiguration` last. Remove one with
+/// `RetryAutoConfiguration`; with `http-client`, `HttpClientAutoConfiguration` last. Remove one with
 /// [`exclude`](crate::OxbloomApplicationBuilder::exclude).
 ///
 /// # Examples
@@ -63,13 +67,14 @@ use crate::autoconfig::AutoConfigurations;
 /// use oxbloom_boot::{Banner, OxbloomApplication, OxbloomApplicationBuilder, auto_configurations};
 /// use oxbloom_config::Config;
 ///
-/// // `security` adds four auto-configurations, `ssl` one, `actuator` one, `web` two and
-/// // `tasks` two.
+/// // `security` adds four auto-configurations, `ssl` one, `actuator` one, `web` two, `tasks`
+/// // two and `http-client` one.
 /// let expected = 4 * usize::from(cfg!(feature = "security"))
 ///     + usize::from(cfg!(feature = "ssl"))
 ///     + usize::from(cfg!(feature = "actuator"))
 ///     + 2 * usize::from(cfg!(feature = "web"))
-///     + 2 * usize::from(cfg!(feature = "tasks"));
+///     + 2 * usize::from(cfg!(feature = "tasks"))
+///     + usize::from(cfg!(feature = "http-client"));
 /// assert_eq!(auto_configurations().len(), expected);
 ///
 /// # tokio::runtime::Builder::new_current_thread().build()?.block_on(async {
@@ -143,6 +148,12 @@ use crate::autoconfig::AutoConfigurations;
 ///     assert_eq!(keys(all().exclude::<TasksAutoConfiguration>(), "tasks."), 6);
 ///     assert_eq!(keys(all().exclude::<RetryAutoConfiguration>(), "tasks."), 5);
 /// }
+/// #[cfg(feature = "http-client")]
+/// {
+///     use oxbloom_boot::HttpClientAutoConfiguration;
+///     assert_eq!(keys(all(), "http.client."), 12);
+///     assert_eq!(keys(all().exclude::<HttpClientAutoConfiguration>(), "http.client."), 0);
+/// }
 /// # let _ = (keys, all);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// # })?;
@@ -168,5 +179,7 @@ pub fn auto_configurations() -> AutoConfigurations {
     let list = list
         .add::<TasksAutoConfiguration>()
         .add::<RetryAutoConfiguration>();
+    #[cfg(feature = "http-client")]
+    let list = list.add::<HttpClientAutoConfiguration>();
     list
 }

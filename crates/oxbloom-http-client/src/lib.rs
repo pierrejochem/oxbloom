@@ -11,7 +11,9 @@
 //! The cargo feature `reqwest` (on by default) adds `ReqwestClient` and its `ClientBuilder`:
 //! rustls with `aws-lc-rs`, a total timeout, a body size limit and no redirects by default.
 //! The cargo feature `retry` (off by default) adds `RetryingClient`, which retries
-//! idempotent requests with the retry policy of `oxbloom-tasks`.
+//! idempotent requests with the retry policy of `oxbloom-tasks`. The cargo feature `config`
+//! (off by default, implies `reqwest` and `retry`) adds `HttpClientSettings`, the `http.client`
+//! keys of `oxbloom-config`.
 //!
 //! # Examples
 //!
@@ -43,6 +45,8 @@ mod reqwest_client;
 mod response;
 #[cfg(feature = "retry")]
 mod retry;
+#[cfg(feature = "config")]
+mod settings;
 
 pub use client::HttpClient;
 pub use error::HttpClientError;
@@ -53,3 +57,5 @@ pub use reqwest_client::{ClientBuilder, ReqwestClient};
 pub use response::Response;
 #[cfg(feature = "retry")]
 pub use retry::RetryingClient;
+#[cfg(feature = "config")]
+pub use settings::HttpClientSettings;

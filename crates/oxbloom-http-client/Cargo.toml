@@ -13,12 +13,16 @@ reqwest = ["dep:reqwest", "dep:rustls", "dep:form_urlencoded"]
 # `RetryingClient` over the retry policy of `oxbloom-tasks`; off by default, so a build
 # without it does not depend on `oxbloom-tasks`.
 retry = ["dep:oxbloom-tasks"]
+# `HttpClientSettings`: the `http.client` keys of `oxbloom-config`, building a `ReqwestClient` with
+# an optional `RetryingClient`.
+config = ["reqwest", "retry", "dep:oxbloom-config", "serde/derive"]
 
 [dependencies]
 async-trait = "0.1.92"
 # Encodes `Body::Form` for `ReqwestClient`.
 form_urlencoded = { version = "1.2.2", optional = true }
 http = "1.5.0"
+oxbloom-config = { version = "0.1.0", path = "../oxbloom-config", optional = true }
 oxbloom-tasks = { version = "0.1.0", path = "../oxbloom-tasks", optional = true }
 # The `rustls` feature selects rustls with aws-lc-rs and the platform certificate verifier.
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls"], optional = true }

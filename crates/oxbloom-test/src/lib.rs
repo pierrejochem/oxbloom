@@ -12,8 +12,10 @@
 //! `TestApp::secured` needs `security`, which also adds `with_authentication` to run a secured
 //! service as a given caller without HTTP. The feature `tls` turns on `web` and boot's `ssl` and
 //! adds `TestClient::connect_tls` and `RunningApp::client_tls`, which send HTTPS to a server
-//! whose certificate a given CA signed. `web`, `security`, `logging` and `tls` are off by
-//! default.
+//! whose certificate a given CA signed. The feature `http-client` forwards to boot's feature of
+//! the same name and adds `MockHttpClient` and `MockResponse`, a scripted `HttpClient` that
+//! records the requests it gets. `web`, `security`, `logging`, `tls` and `http-client` are off
+//! by default.
 //!
 //! # Examples
 //!
@@ -33,6 +35,8 @@ mod clock;
 mod config_dir;
 mod lifecycle;
 mod log;
+#[cfg(feature = "http-client")]
+mod mock_http;
 mod runner;
 #[cfg(feature = "security")]
 mod security_context;
@@ -45,6 +49,8 @@ pub use client::{RequestBuilder, TestClient, TestResponse};
 pub use clock::{FixedClock, ManualClock};
 pub use config_dir::TempConfigDir;
 pub use log::Log;
+#[cfg(feature = "http-client")]
+pub use mock_http::{MockHttpClient, MockResponse};
 pub use runner::{ContextRunner, ContextView, FailureView};
 #[cfg(feature = "security")]
 pub use security_context::with_authentication;

@@ -5,6 +5,8 @@ use std::sync::Arc;
 mod autoconfig;
 mod beans;
 mod config;
+#[cfg(feature = "http-client")]
+mod http_client;
 #[cfg(feature = "logging")]
 mod logging;
 #[cfg(feature = "web")]
@@ -38,5 +40,7 @@ pub(crate) fn builtin() -> Vec<Arc<dyn FailureAnalyzer>> {
     analyzers.push(Arc::new(logging::LoggingConfigAnalyzer));
     #[cfg(feature = "ssl")]
     analyzers.push(Arc::new(ssl::SslAnalyzer));
+    #[cfg(feature = "http-client")]
+    analyzers.push(Arc::new(http_client::HttpClientConfigAnalyzer));
     analyzers
 }

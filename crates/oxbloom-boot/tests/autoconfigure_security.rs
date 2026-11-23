@@ -478,14 +478,16 @@ fn auto_configurations_lists_both_and_metadata_follows_exclusion() {
     // `SessionAutoConfiguration` and `SecurityAutoConfiguration`.
     // `web` adds `RequestLogAutoConfiguration` and `WebServerAutoConfiguration`, `ssl` adds
     // `SslAutoConfiguration`, `actuator` adds `ActuatorAutoConfiguration`, `tasks` adds
-    // `TasksAutoConfiguration` and `RetryAutoConfiguration`.
+    // `TasksAutoConfiguration` and `RetryAutoConfiguration`, `http-client` adds
+    // `HttpClientAutoConfiguration`.
     let web = 2 * usize::from(cfg!(feature = "web"));
     let ssl = usize::from(cfg!(feature = "ssl"));
     let actuator = usize::from(cfg!(feature = "actuator"));
     let tasks = 2 * usize::from(cfg!(feature = "tasks"));
+    let http_client = usize::from(cfg!(feature = "http-client"));
     assert_eq!(
         auto_configurations().len(),
-        4 + web + ssl + actuator + tasks
+        4 + web + ssl + actuator + tasks + http_client
     );
     let with = OxbloomApplication::builder()
         .auto_configurations(auto_configurations())

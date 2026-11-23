@@ -24,8 +24,12 @@ json = ["web", "oxbloom-web/json", "dep:serde", "dep:serde_json"]
 tls = ["web", "oxbloom-boot/ssl", "dep:rustls", "dep:tokio-rustls"]
 security = ["oxbloom-boot/security", "dep:oxbloom-security"]
 logging = ["oxbloom-boot/logging"]
+# `MockHttpClient` and `MockResponse`; `oxbloom-boot/http-client` lets `ContextRunner` and `TestApp::full`
+# run `HttpClientAutoConfiguration`.
+http-client = ["oxbloom-boot/http-client", "dep:oxbloom-http-client", "dep:async-trait", "dep:http", "dep:serde", "dep:serde_json"]
 
 [dependencies]
+async-trait = { version = "0.1.92", optional = true }
 bytes = { version = "1.12.1", optional = true }
 http = { version = "1.5.0", optional = true }
 http-body-util = { version = "0.1.5", optional = true }
@@ -35,6 +39,7 @@ oxbloom-boot = { version = "0.1.0", path = "../oxbloom-boot" }
 oxbloom-config = { version = "0.1.0", path = "../oxbloom-config" }
 oxbloom-core = { version = "0.1.0", path = "../oxbloom-core" }
 oxbloom-di = { version = "0.1.0", path = "../oxbloom-di" }
+oxbloom-http-client = { version = "0.1.0", path = "../oxbloom-http-client", default-features = false, features = ["json"], optional = true }
 oxbloom-security = { version = "0.1.0", path = "../oxbloom-security", optional = true }
 # `default-features = false` has no effect while boot's `web` feature, which `web` forwards,
 # turns the defaults of `oxbloom-web` on.

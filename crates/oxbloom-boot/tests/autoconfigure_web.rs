@@ -527,12 +527,16 @@ async fn metadata_keys_match_server() {
 async fn auto_configurations_order_by_feature() {
     // `ssl` adds `SslAutoConfiguration`, which the web server also runs after; `actuator` adds
     // `ActuatorAutoConfiguration`, which runs before it; `tasks` adds `TasksAutoConfiguration`
-    // and `RetryAutoConfiguration`.
+    // and `RetryAutoConfiguration`; `http-client` adds `HttpClientAutoConfiguration`.
     let ssl = usize::from(cfg!(feature = "ssl"));
     let actuator = usize::from(cfg!(feature = "actuator"));
     let tasks = 2 * usize::from(cfg!(feature = "tasks"));
+    let http_client = usize::from(cfg!(feature = "http-client"));
     // `security` has four auto-configurations and `web` two.
-    assert_eq!(auto_configurations().len(), 6 + ssl + actuator + tasks);
+    assert_eq!(
+        auto_configurations().len(),
+        6 + ssl + actuator + tasks + http_client
+    );
     #[allow(unused_mut)]
     let mut after = vec![ConfigRef::of::<SecurityAutoConfiguration>()];
     #[cfg(feature = "ssl")]
