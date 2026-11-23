@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use oxbloom_web::Request;
 
-use crate::Authentication;
+use crate::{__private, Authentication};
 
 /// Custom authorization decision, used by [`AuthorizationRule::Custom`].
 ///
@@ -118,13 +118,17 @@ impl AuthorizationRule {
         match self {
             Self::PermitAll => true,
             Self::DenyAll => false,
-            Self::Authenticated => auth.is_some(),
-            Self::FullyAuthenticated => auth.is_some_and(|a| !a.is_remembered()),
-            Self::HasRole(r) => auth.is_some_and(|a| a.has_role(r)),
-            Self::HasAnyRole(rs) => auth.is_some_and(|a| rs.iter().any(|r| a.has_role(r))),
-            Self::HasAuthority(x) => auth.is_some_and(|a| a.has_authority(x)),
+            Self::Authenticated => __private::authenticated(auth),
+            Self::FullyAuthenticated => __private::fully_authenticated(auth),
+            Self::HasRole(r) => __private::has_role(auth, r),
+            Self::HasAnyRole(rs) => {
+                let rs: Vec<&str> = rs.iter().map(String::as_str).collect();
+                __private::has_any_role(auth, &rs)
+            }
+            Self::HasAuthority(x) => __private::has_authority(auth, x),
             Self::HasAnyAuthority(xs) => {
-                auth.is_some_and(|a| xs.iter().any(|x| a.has_authority(x)))
+                let xs: Vec<&str> = xs.iter().map(String::as_str).collect();
+                __private::has_any_authority(auth, &xs)
             }
             Self::Custom(m) => m.check(auth, req),
         }
