@@ -151,10 +151,15 @@ impl ClientBuilder {
     /// response. When a request would need more than `max` redirects, the last 3xx answer
     /// is returned.
     ///
-    /// On a redirect to another scheme, host or port, the `Authorization`, `Cookie`,
-    /// `Cookie2`, `Proxy-Authorization` and `WWW-Authenticate` headers are removed, while
-    /// other headers (for example a custom `X-Api-Key`) are kept. A redirect from `https` to
-    /// `http` is followed.
+    /// Some redirects are never followed, and the 3xx answer is returned as if the budget
+    /// had run out: a redirect from `https` to `http`, whatever its status, and a 307 or 308
+    /// to another origin (scheme, host or port), because those two statuses send the method
+    /// and the body again and a form body can hold a client secret, a refresh token or an
+    /// authorization code. A 301, 302 or 303 to another origin is followed as a `GET`
+    /// without a body. On a followed redirect to another origin, the `Authorization`,
+    /// `Cookie`, `Cookie2`, `Proxy-Authorization` and `WWW-Authenticate` headers are
+    /// removed, while other headers (for example a custom `X-Api-Key`) are kept, so do not
+    /// put credentials in custom headers when redirects are on.
     ///
     /// # Examples
     ///
@@ -262,7 +267,11 @@ impl ClientBuilder {
             // `previous` holds the URLs requested so far, the first one included. Stopping
             // returns the 3xx answer instead of an error.
             reqwest::redirect::Policy::custom(move |attempt| {
-                if attempt.previous().len() > max {
+                let unsafe_hop = attempt
+                    .previous()
+                    .last()
+                    .is_some_and(|prev| must_stop(prev, attempt.url(), attempt.status()));
+                if unsafe_hop || attempt.previous().len() > max {
                     attempt.stop()
                 } else {
                     attempt.follow()
@@ -306,9 +315,12 @@ impl fmt::Debug for ClientBuilder {
 /// Behavior: the `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and `NO_PROXY` environment
 /// variables are honored (read when the client is built); there is no cookie store; no
 /// `Referer` header is sent; the body is read incrementally within the size limit; a
-/// timeout is [`HttpClientError::Timeout`]; a bad URL is
-/// [`HttpClientError::InvalidRequest`]; every other transport failure is
-/// [`HttpClientError::Network`]. Clones share one connection pool.
+/// timeout is [`HttpClientError::Timeout`]; a bad URL, or a URL whose scheme is not `http`
+/// or `https` (for example `file:` or `ftp:`), is [`HttpClientError::InvalidRequest`], and so
+/// is a followed redirect whose `Location` is malformed or not `http`/`https`; every other
+/// transport failure is [`HttpClientError::Network`]. Credentials in the URL
+/// (`https://user:password@host/`) are turned into a `Basic` authorization header; prefer
+/// headers. Clones share one connection pool.
 ///
 /// # Examples
 ///
@@ -371,6 +383,28 @@ impl ReqwestClient {
     }
 }
 
+/// Whether a redirect from `prev` to `next` with `status` must not be followed, so that the
+/// 3xx answer is returned instead.
+///
+/// A hop from `https` to `http` is never followed, whatever the status. A 307 or 308 to
+/// another origin (scheme, host or port) is not followed either, because those statuses make
+/// the client send the method and the body again, and a form body can carry a client secret,
+/// a refresh token or an authorization code. A 301, 302 or 303 to another origin is followed
+/// as a `GET` without a body.
+fn must_stop(prev: &reqwest::Url, next: &reqwest::Url, status: http::StatusCode) -> bool {
+    if prev.scheme() == "https" && next.scheme() == "http" {
+        return true;
+    }
+    let cross_origin = prev.scheme() != next.scheme()
+        || prev.host_str() != next.host_str()
+        || prev.port_or_known_default() != next.port_or_known_default();
+    cross_origin
+        && matches!(
+            status,
+            http::StatusCode::TEMPORARY_REDIRECT | http::StatusCode::PERMANENT_REDIRECT
+        )
+}
+
 /// The bytes of an encoded body and the content type that goes with them, if any.
 type Encoded = (Vec<u8>, Option<&'static str>);
 
@@ -427,5 +461,65 @@ impl fmt::Debug for ReqwestClient {
             .field("timeout", &self.timeout)
             .field("max_body_bytes", &self.max_body_bytes)
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::must_stop;
+    use http::StatusCode;
+
+    fn url(text: &str) -> reqwest::Url {
+        reqwest::Url::parse(text).unwrap()
+    }
+
+    #[test]
+    fn a_downgrade_to_http_is_stopped_whatever_the_status() {
+        for status in [
+            StatusCode::MOVED_PERMANENTLY,
+            StatusCode::FOUND,
+            StatusCode::SEE_OTHER,
+            StatusCode::TEMPORARY_REDIRECT,
+            StatusCode::PERMANENT_REDIRECT,
+        ] {
+            assert!(must_stop(
+                &url("https://auth.example.test/token"),
+                &url("http://auth.example.test/token"),
+                status
+            ));
+        }
+    }
+
+    #[test]
+    fn a_cross_origin_307_or_308_is_stopped() {
+        let prev = url("https://auth.example.test/token");
+        for next in [
+            "https://other.example.test/token",
+            "https://auth.example.test:8443/token",
+        ] {
+            assert!(must_stop(&prev, &url(next), StatusCode::TEMPORARY_REDIRECT));
+            assert!(must_stop(&prev, &url(next), StatusCode::PERMANENT_REDIRECT));
+        }
+    }
+
+    #[test]
+    fn a_cross_origin_301_302_303_and_any_same_origin_redirect_are_followed() {
+        let prev = url("https://auth.example.test/token");
+        let other = url("https://other.example.test/token");
+        for status in [
+            StatusCode::MOVED_PERMANENTLY,
+            StatusCode::FOUND,
+            StatusCode::SEE_OTHER,
+        ] {
+            assert!(!must_stop(&prev, &other, status));
+        }
+        // An explicit default port is the same origin.
+        let same = url("https://auth.example.test:443/v2/token");
+        assert!(!must_stop(&prev, &same, StatusCode::TEMPORARY_REDIRECT));
+        assert!(!must_stop(&prev, &same, StatusCode::PERMANENT_REDIRECT));
+        // An upgrade from http to https is another origin, so a 307 is stopped, a 302 is not.
+        let plain = url("http://auth.example.test/token");
+        assert!(must_stop(&plain, &prev, StatusCode::TEMPORARY_REDIRECT));
+        assert!(!must_stop(&plain, &prev, StatusCode::FOUND));
     }
 }

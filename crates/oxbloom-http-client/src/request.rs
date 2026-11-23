@@ -74,6 +74,11 @@ pub struct Request {
 impl Request {
     /// Creates a request with the given method and URL, no headers and no body.
     ///
+    /// The URL is checked when the request is sent: a malformed URL or a scheme other than
+    /// `http` or `https` gives [`HttpClientError::InvalidRequest`]. Credentials in the URL
+    /// (`https://user:password@host/`) are turned into a `Basic` authorization header by
+    /// `ReqwestClient`; prefer headers.
+    ///
     /// # Examples
     ///
     /// ```

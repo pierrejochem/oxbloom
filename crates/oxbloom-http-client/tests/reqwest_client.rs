@@ -453,6 +453,122 @@ async fn a_redirect_to_another_origin_drops_the_authorization_header() {
 }
 
 #[tokio::test]
+async fn a_cross_origin_307_is_not_followed_and_the_body_is_not_resent() {
+    let (target, received) = server(|_| answer("200 OK", "", "moved")).await;
+    let location = format!("Location: {target}/token\r\n");
+    let (origin, first) = server(move |_| answer("307 Temporary Redirect", &location, "")).await;
+    let client = ClientBuilder::new().follow_redirects(2).build().unwrap();
+    let response = client
+        .execute(
+            Request::post(format!("{origin}/token")).body(Body::Form(vec![
+                ("grant_type".into(), "client_credentials".into()),
+                ("client_secret".into(), "top-secret".into()),
+            ])),
+        )
+        .await
+        .unwrap();
+    // The 307 itself is returned, as when the redirect budget runs out.
+    assert_eq!(response.status(), http::StatusCode::TEMPORARY_REDIRECT);
+    assert_eq!(first.lock().unwrap().len(), 1);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    // The other origin never sees a request, so it never sees the secret.
+    assert!(received.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_same_origin_307_resends_the_body() {
+    let (base, seen) = server(|request| match path_of(request) {
+        "/a" => answer("307 Temporary Redirect", "Location: /b\r\n", ""),
+        _ => answer("200 OK", "", "done"),
+    })
+    .await;
+    let client = ClientBuilder::new().follow_redirects(2).build().unwrap();
+    let response = client
+        .execute(
+            Request::post(format!("{base}/a"))
+                .body(Body::Form(vec![("code".into(), "abc".into())])),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), http::StatusCode::OK);
+    assert_eq!(response.text().unwrap(), "done");
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 2);
+    assert_eq!(path_of(&seen[1]), "/b");
+    assert!(seen[1].starts_with("POST "), "{}", seen[1]);
+    assert_eq!(body_of(&seen[1]), "code=abc");
+}
+
+#[tokio::test]
+async fn a_cross_origin_302_on_a_post_becomes_a_get_without_body_or_credentials() {
+    let (target, received) = server(|_| answer("200 OK", "", "moved")).await;
+    let location = format!("Location: {target}/landing\r\n");
+    let (origin, _) = server(move |_| answer("302 Found", &location, "")).await;
+    let client = ClientBuilder::new().follow_redirects(2).build().unwrap();
+    let response = client
+        .execute(
+            Request::post(format!("{origin}/token"))
+                .header("authorization", "Basic c2VjcmV0")
+                .body(Body::Form(vec![(
+                    "client_secret".into(),
+                    "top-secret".into(),
+                )])),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.text().unwrap(), "moved");
+    let received = received.lock().unwrap();
+    assert_eq!(received.len(), 1);
+    assert!(received[0].starts_with("GET /landing "), "{}", received[0]);
+    assert!(
+        !has_header(&received[0], "authorization"),
+        "{}",
+        received[0]
+    );
+    assert_eq!(body_of(&received[0]), "");
+    assert!(!received[0].contains("top-secret"));
+}
+
+#[tokio::test]
+async fn a_file_or_ftp_url_is_an_invalid_request() {
+    let client = ClientBuilder::new().build().unwrap();
+    for url in ["file:///etc/passwd", "ftp://example.com/x"] {
+        assert_eq!(
+            client.execute(Request::get(url)).await.unwrap_err(),
+            HttpClientError::InvalidRequest,
+            "{url}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_followed_redirect_to_a_non_http_scheme_is_an_invalid_request() {
+    let (base, _) = server(|_| answer("302 Found", "Location: ftp://example.com/x\r\n", "")).await;
+    let client = ClientBuilder::new().follow_redirects(2).build().unwrap();
+    assert_eq!(
+        client.execute(Request::get(base)).await.unwrap_err(),
+        HttpClientError::InvalidRequest
+    );
+}
+
+#[tokio::test]
+async fn credentials_in_the_url_become_a_basic_authorization_header() {
+    let (base, seen) = server(|_| answer("200 OK", "", "")).await;
+    let url = base.replace("http://", "http://user:pw@");
+    let client = ClientBuilder::new().build().unwrap();
+    client
+        .execute(Request::get(format!("{url}/x")))
+        .await
+        .unwrap();
+    let seen = seen.lock().unwrap();
+    // "user:pw" in base64.
+    assert_eq!(
+        header_of(&seen[0], "authorization"),
+        Some("Basic dXNlcjpwdw==")
+    );
+}
+
+#[tokio::test]
 async fn the_user_agent_is_sent_when_configured() {
     let (base, seen) = server(|_| answer("200 OK", "", "")).await;
     let client = ClientBuilder::new()
@@ -568,6 +684,53 @@ async fn answer_secure<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S) {
             .await;
         let _ = stream.shutdown().await;
     }
+}
+
+/// Serves HTTPS on a loopback port with a `localhost` certificate of `ca`, answering every
+/// request with `answer`, and returns the URL.
+async fn https_server_answering(ca: &Ca, answer: String) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let acceptor = TlsAcceptor::from(ca.server_config());
+    tokio::spawn(async move {
+        while let Ok((tcp, _)) = listener.accept().await {
+            let acceptor = acceptor.clone();
+            let answer = answer.clone();
+            tokio::spawn(async move {
+                if let Ok(mut tls) = acceptor.accept(tcp).await
+                    && read_request(&mut tls).await.is_some()
+                {
+                    let _ = tls.write_all(answer.as_bytes()).await;
+                    let _ = tls.shutdown().await;
+                }
+            });
+        }
+    });
+    format!("https://localhost:{port}/")
+}
+
+#[tokio::test]
+async fn a_redirect_from_https_to_http_is_not_followed() {
+    let ca = Ca::new();
+    let (plain, received) = server(|_| answer("200 OK", "", "plain")).await;
+    // A 302 (not only a 307) is refused: the downgrade alone is enough.
+    let url = https_server_answering(
+        &ca,
+        answer("302 Found", &format!("Location: {plain}/landing\r\n"), ""),
+    )
+    .await;
+    let client = ClientBuilder::new()
+        .tls(ca.client_config())
+        .follow_redirects(2)
+        .build()
+        .unwrap();
+    let response = client
+        .execute(Request::get(url).header("x-api-key", "key-1"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), http::StatusCode::FOUND);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(received.lock().unwrap().is_empty());
 }
 
 /// Serves HTTPS on a loopback port with a `localhost` certificate of `ca` and returns the URL.

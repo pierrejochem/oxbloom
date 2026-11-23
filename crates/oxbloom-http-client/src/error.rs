@@ -28,7 +28,12 @@ pub enum HttpClientError {
     Build,
     /// The response body could not be decoded.
     Decode,
-    /// The request is not valid, for example because of a bad header name.
+    /// The request is not valid, for example because of a bad header name, a malformed URL
+    /// or a scheme other than `http` or `https`.
+    ///
+    /// It does not always mean the request must be fixed: when redirects are followed, a
+    /// server-controlled redirect whose `Location` is malformed or names a scheme other
+    /// than `http` or `https` (for example `ftp:`) also surfaces as this variant.
     InvalidRequest,
 }
 
