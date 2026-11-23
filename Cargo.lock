@@ -1629,10 +1629,16 @@ name = "oxbloom-http-client"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "form_urlencoded",
  "http",
+ "oxbloom-tasks",
+ "rcgen",
+ "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-rustls",
 ]
 
 [[package]]

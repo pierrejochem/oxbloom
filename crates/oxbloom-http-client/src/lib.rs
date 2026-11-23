@@ -8,6 +8,11 @@
 //! header value or a body in `Debug` or in error text. The cargo feature `json` (on by
 //! default) adds [`Body::Json`].
 //!
+//! The cargo feature `reqwest` (on by default) adds `ReqwestClient` and its `ClientBuilder`:
+//! rustls with `aws-lc-rs`, a total timeout, a body size limit and no redirects by default.
+//! The cargo feature `retry` (off by default) adds `RetryingClient`, which retries
+//! idempotent requests with the retry policy of `oxbloom-tasks`.
+//!
 //! # Examples
 //!
 //! ```
@@ -33,10 +38,18 @@ mod client;
 mod error;
 mod interceptor;
 mod request;
+#[cfg(feature = "reqwest")]
+mod reqwest_client;
 mod response;
+#[cfg(feature = "retry")]
+mod retry;
 
 pub use client::HttpClient;
 pub use error::HttpClientError;
 pub use interceptor::{InterceptedClient, Interceptor};
 pub use request::{Body, Request};
+#[cfg(feature = "reqwest")]
+pub use reqwest_client::{ClientBuilder, ReqwestClient};
 pub use response::Response;
+#[cfg(feature = "retry")]
+pub use retry::RetryingClient;
