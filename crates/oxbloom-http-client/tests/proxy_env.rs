@@ -1,7 +1,9 @@
 //! `ReqwestClient` honors the proxy environment variables.
 //!
 //! This file holds a single test, so it runs alone in its own test binary and nothing else
-//! reads the environment while it changes it.
+//! reads the environment while it changes it. The environment is not restored afterwards,
+//! because the process exits after this single test. `HTTPS_PROXY` and `ALL_PROXY` are not
+//! exercised separately; they come from the same matcher as `HTTP_PROXY`.
 
 #![cfg(feature = "reqwest")]
 

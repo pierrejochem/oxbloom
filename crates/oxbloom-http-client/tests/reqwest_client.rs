@@ -418,8 +418,38 @@ async fn no_referer_and_no_cookies_are_sent() {
     for request in seen.iter() {
         assert!(!has_header(request, "cookie"), "{request}");
         assert!(!has_header(request, "referer"), "{request}");
-        assert!(!has_header(request, "authorization"), "{request}");
     }
+}
+
+#[tokio::test]
+async fn a_redirect_to_another_origin_drops_the_authorization_header() {
+    let (target, received) = server(|_| answer("200 OK", "", "moved")).await;
+    let location = format!("Location: {target}/landing\r\n");
+    let (origin, first) = server(move |_| answer("302 Found", &location, "")).await;
+    let client = ClientBuilder::new().follow_redirects(2).build().unwrap();
+    let response = client
+        .execute(
+            Request::get(format!("{origin}/start"))
+                .header("authorization", "Bearer secret")
+                .header("x-api-key", "key-1"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.text().unwrap(), "moved");
+    // The first server, on the original origin, gets the credentials.
+    assert_eq!(
+        header_of(&first.lock().unwrap()[0], "authorization"),
+        Some("Bearer secret")
+    );
+    // The second server, on another port, gets the custom header but no credentials.
+    let received = received.lock().unwrap();
+    assert_eq!(path_of(&received[0]), "/landing");
+    assert!(
+        !has_header(&received[0], "authorization"),
+        "{}",
+        received[0]
+    );
+    assert_eq!(header_of(&received[0], "x-api-key"), Some("key-1"));
 }
 
 #[tokio::test]

@@ -21,6 +21,9 @@ const LABEL: &str = "http-client";
 /// status, the last response is returned, not an error. When they run out on an error, the
 /// last error is returned. Every other error and status is returned at once.
 ///
+/// Each attempt gets the full timeout of the inner client, so the worst case is about
+/// `max_attempts` times that timeout plus the waits between attempts.
+///
 /// # Examples
 ///
 /// ```no_run

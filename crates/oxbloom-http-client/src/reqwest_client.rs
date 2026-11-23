@@ -151,6 +151,11 @@ impl ClientBuilder {
     /// response. When a request would need more than `max` redirects, the last 3xx answer
     /// is returned.
     ///
+    /// On a redirect to another scheme, host or port, the `Authorization`, `Cookie`,
+    /// `Cookie2`, `Proxy-Authorization` and `WWW-Authenticate` headers are removed, while
+    /// other headers (for example a custom `X-Api-Key`) are kept. A redirect from `https` to
+    /// `http` is followed.
+    ///
     /// # Examples
     ///
     /// ```
@@ -192,6 +197,11 @@ impl ClientBuilder {
     /// `oxbloom_ssl::SslBundle::client_config`. A configuration with its own root store
     /// trusts only those CAs. Build it with the `aws-lc-rs` provider; the client is built
     /// once from the configuration as it is at [`ClientBuilder::build`].
+    ///
+    /// This client speaks HTTP/1.1 only: a configuration whose ALPN offers `h2` can
+    /// negotiate HTTP/2 with the server, and the request then fails with
+    /// [`HttpClientError::Network`]. The client does not reject a configuration built on the
+    /// `ring` provider, so callers must build it on `aws-lc-rs` themselves.
     ///
     /// # Examples
     ///
