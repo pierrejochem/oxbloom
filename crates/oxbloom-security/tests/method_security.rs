@@ -1,5 +1,10 @@
-//! `#[method_security]` with `#[pre_authorize]`: every rule form, the combinators, custom checks,
-//! the denial log, controller handlers and DI bean methods.
+//! `#[method_security]` with `#[pre_authorize]`, `#[post_authorize]`, `#[pre_filter]` and
+//! `#[post_filter]`: every rule form, the combinators, custom checks, the filters, the order of
+//! the checks, the denial log, controller handlers and DI bean methods.
+//!
+//! The whole file denies warnings, so the generated code must not cause a warning such as
+//! `unused_braces` on a one-line body or `unused_mut` on a parameter that is already `mut`.
+#![deny(warnings)]
 
 use std::future::Future;
 use std::io::Write;
@@ -38,6 +43,7 @@ async fn as_caller<F: Future>(auth: Option<Authentication>, future: F) -> F::Out
 #[derive(Debug, PartialEq)]
 enum ServiceError {
     Denied(AccessDenied),
+    NotFound,
 }
 
 impl From<AccessDenied> for ServiceError {
@@ -512,4 +518,416 @@ async fn the_denial_log_names_the_method_and_the_principal_but_no_argument() {
     for value in ["victim-owner", "4242", "secret-name"] {
         assert!(!text.contains(value), "argument {value} leaked: {text}");
     }
+}
+
+/// A document with an owner, for the checks on a returned value. The token shows whether the
+/// document was dropped.
+#[derive(Debug, Clone)]
+struct Document {
+    owner: String,
+    title: String,
+    _token: Arc<()>,
+}
+
+impl PartialEq for Document {
+    fn eq(&self, other: &Self) -> bool {
+        self.owner == other.owner && self.title == other.title
+    }
+}
+
+fn document(owner: &str, title: &str, token: Arc<()>) -> Document {
+    Document {
+        owner: owner.to_owned(),
+        title: title.to_owned(),
+        _token: token,
+    }
+}
+
+/// True when the caller owns the returned document.
+fn owns_document(auth: Option<&Authentication>, doc: &Document) -> bool {
+    auth.is_some_and(|a| a.principal() == doc.owner)
+}
+
+/// True when the caller owns the document and asked for it under this title.
+fn owns_titled(auth: Option<&Authentication>, doc: &Document, title: &String) -> bool {
+    owns_document(auth, doc) && doc.title == *title
+}
+
+/// A post check that must never run.
+fn never(_auth: Option<&Authentication>, _value: &u32) -> bool {
+    panic!("the post check ran")
+}
+
+/// Keeps the even numbers for an authenticated caller and nothing for an anonymous one.
+fn even_for_callers(auth: Option<&Authentication>, n: &u32) -> bool {
+    auth.is_some() && n.is_multiple_of(2)
+}
+
+#[derive(Default)]
+struct Library;
+
+#[method_security]
+impl Library {
+    #[post_authorize(custom = owns_document(returned))]
+    fn fetch(&self, owner: &str, token: Arc<()>) -> Result<Document, AccessDenied> {
+        Ok(document(owner, "report", token))
+    }
+
+    #[post_authorize(custom = owns_titled(returned, title))]
+    fn fetch_titled(&self, owner: &str, title: String) -> Result<Document, AccessDenied> {
+        Ok(document(owner, &title, Arc::new(())))
+    }
+
+    #[post_authorize(custom = never(returned))]
+    fn missing(&self) -> Result<u32, ServiceError> {
+        Err(ServiceError::NotFound)
+    }
+
+    #[post_authorize(custom = owns_document(returned))]
+    fn find(&self, owner: &str, early: bool) -> Result<Document, AccessDenied> {
+        if early {
+            return Ok(document(owner, "early", Arc::new(())));
+        }
+        Ok(document(owner, "late", Arc::new(())))
+    }
+
+    #[post_authorize(authenticated)]
+    fn parse(&self, text: &str) -> Result<u32, ServiceError> {
+        let n: u32 = text.parse().map_err(|_| ServiceError::NotFound)?;
+        Ok(n)
+    }
+
+    #[pre_filter(arg = ids, custom = even_for_callers)]
+    fn keep(&self, ids: Vec<u32>) -> Result<Vec<u32>, AccessDenied> {
+        Ok(ids)
+    }
+
+    /// A pre filter needs no `Result`, because a filter never denies.
+    #[pre_filter(arg = ids, custom = even_for_callers)]
+    fn count(&self, ids: Vec<u32>) -> usize {
+        ids.len()
+    }
+
+    /// The parameter is already `mut`; the filter runs before the body pushes 100.
+    #[pre_filter(arg = ids, custom = even_for_callers)]
+    fn keep_and_push(&self, mut ids: Vec<u32>) -> Vec<u32> {
+        ids.push(100);
+        ids
+    }
+
+    #[post_filter(custom = even_for_callers)]
+    fn list(&self, ids: Vec<u32>) -> Result<Vec<u32>, AccessDenied> {
+        Ok(ids)
+    }
+
+    #[post_filter(custom = even_for_callers)]
+    fn list_missing(&self) -> Result<Vec<u32>, ServiceError> {
+        Err(ServiceError::NotFound)
+    }
+
+    #[post_authorize(custom = owns_document(returned))]
+    async fn load(&self, owner: &str, early: bool) -> Result<Document, AccessDenied> {
+        tokio::task::yield_now().await;
+        if early {
+            return Ok(document(owner, "early", Arc::new(())));
+        }
+        Ok(document(owner, "late", Arc::new(())))
+    }
+
+    #[post_filter(custom = even_for_callers)]
+    async fn load_list(&self, ids: Vec<u32>) -> Result<Vec<u32>, AccessDenied> {
+        tokio::task::yield_now().await;
+        Ok(ids)
+    }
+
+    #[pre_authorize(authenticated)]
+    #[pre_filter(arg = ids, custom = even_for_callers)]
+    #[post_authorize(authenticated)]
+    #[post_filter(custom = even_for_callers)]
+    async fn load_all(&self, ids: Vec<u32>) -> Result<Vec<u32>, AccessDenied> {
+        tokio::task::yield_now().await;
+        Ok(ids.into_iter().chain([7, 8]).collect())
+    }
+
+    /// One-line bodies: no `unused_braces` warning may appear for them. rustc reports that
+    /// lint only for braces on one line, so rustfmt must keep these bodies on one line.
+    #[rustfmt::skip]
+    #[pre_authorize(authenticated)]
+    fn one(&self) -> Result<u8, AccessDenied> { Ok(1) }
+
+    #[rustfmt::skip]
+    #[post_authorize(authenticated)]
+    fn two(&self) -> Result<u8, AccessDenied> { Ok(2) }
+
+    #[rustfmt::skip]
+    #[pre_authorize(authenticated)]
+    async fn three(&self) -> Result<u8, AccessDenied> { Ok(3) }
+}
+
+#[tokio::test]
+async fn post_authorize_sees_the_returned_value() {
+    let lib = Library;
+    let token = Arc::new(());
+    let mine = as_caller(caller("alice", &[]), async {
+        lib.fetch("alice", token.clone())
+    })
+    .await;
+    assert_eq!(mine, Ok(document("alice", "report", Arc::new(()))));
+    drop(mine);
+
+    let theirs = as_caller(caller("bob", &[]), async {
+        lib.fetch("alice", token.clone())
+    })
+    .await;
+    assert_eq!(theirs, Err(AccessDenied::Forbidden));
+    assert_eq!(
+        Arc::strong_count(&token),
+        1,
+        "the denied value was not dropped"
+    );
+
+    let anonymous = as_caller(None, async { lib.fetch("alice", token.clone()) }).await;
+    assert_eq!(anonymous, Err(AccessDenied::Unauthenticated));
+}
+
+#[tokio::test]
+async fn post_authorize_can_also_read_a_parameter() {
+    let lib = Library;
+    let alice = || caller("alice", &[]);
+    let ok = as_caller(alice(), async { lib.fetch_titled("alice", "notes".into()) }).await;
+    assert_eq!(ok.map(|d| d.title), Ok("notes".to_owned()));
+    let other = as_caller(caller("bob", &[]), async {
+        lib.fetch_titled("alice", "notes".into())
+    })
+    .await;
+    assert_eq!(other, Err(AccessDenied::Forbidden));
+}
+
+#[tokio::test]
+async fn post_authorize_skipped_on_err() {
+    let lib = Library;
+    assert_eq!(
+        as_caller(None, async { lib.missing() }).await,
+        Err(ServiceError::NotFound)
+    );
+}
+
+#[tokio::test]
+async fn early_return_in_the_body_still_reaches_post_authorize() {
+    let lib = Library;
+    let bob = || caller("bob", &[]);
+    assert_eq!(
+        as_caller(bob(), async { lib.find("alice", true) }).await,
+        Err(AccessDenied::Forbidden)
+    );
+    assert_eq!(
+        as_caller(bob(), async { lib.find("bob", true) })
+            .await
+            .map(|d| d.title),
+        Ok("early".to_owned())
+    );
+    assert_eq!(
+        as_caller(bob(), async { lib.find("alice", false) }).await,
+        Err(AccessDenied::Forbidden)
+    );
+    // `?` in the body leaves only the body, so its error passes through the post check.
+    assert_eq!(
+        as_caller(bob(), async { lib.parse("x") }).await,
+        Err(ServiceError::NotFound)
+    );
+    assert_eq!(as_caller(bob(), async { lib.parse("4") }).await, Ok(4));
+    assert_eq!(
+        lib.parse("4"),
+        Err(ServiceError::Denied(AccessDenied::Unauthenticated))
+    );
+}
+
+#[tokio::test]
+async fn pre_filter_retains_matching_elements() {
+    let lib = Library;
+    let bob = || caller("bob", &[]);
+    assert_eq!(
+        as_caller(bob(), async { lib.keep(vec![1, 2, 3, 4]) }).await,
+        Ok(vec![2, 4])
+    );
+    assert_eq!(
+        as_caller(bob(), async { lib.count(vec![1, 2, 3, 4, 6]) }).await,
+        3
+    );
+    assert_eq!(
+        as_caller(bob(), async { lib.keep_and_push(vec![1, 2, 3]) }).await,
+        vec![2, 100]
+    );
+}
+
+#[tokio::test]
+async fn post_filter_retains_matching_elements() {
+    let lib = Library;
+    assert_eq!(
+        as_caller(caller("bob", &[]), async { lib.list(vec![1, 2, 3, 4]) }).await,
+        Ok(vec![2, 4])
+    );
+}
+
+#[tokio::test]
+async fn a_filter_that_removes_everything_gives_an_empty_vec() {
+    let lib = Library;
+    let bob = || caller("bob", &[]);
+    assert_eq!(
+        as_caller(bob(), async { lib.keep(vec![1, 3]) }).await,
+        Ok(vec![])
+    );
+    assert_eq!(
+        as_caller(bob(), async { lib.list(vec![5, 7]) }).await,
+        Ok(vec![])
+    );
+}
+
+#[tokio::test]
+async fn filters_never_deny() {
+    let lib = Library;
+    assert_eq!(
+        as_caller(None, async { lib.keep(vec![2, 4]) }).await,
+        Ok(vec![])
+    );
+    assert_eq!(
+        as_caller(None, async { lib.list(vec![2, 4]) }).await,
+        Ok(vec![])
+    );
+    assert_eq!(lib.count(vec![2, 4]), 0);
+}
+
+#[tokio::test]
+async fn post_filter_passes_an_err_through() {
+    let lib = Library;
+    assert_eq!(
+        as_caller(caller("bob", &[]), async { lib.list_missing() }).await,
+        Err(ServiceError::NotFound)
+    );
+}
+
+#[tokio::test]
+async fn async_methods_with_post_checks() {
+    let lib = Library;
+    let bob = || caller("bob", &[]);
+    assert_eq!(
+        as_caller(bob(), lib.load("alice", true)).await,
+        Err(AccessDenied::Forbidden)
+    );
+    assert_eq!(
+        as_caller(bob(), lib.load("bob", false))
+            .await
+            .map(|d| d.title),
+        Ok("late".to_owned())
+    );
+    assert_eq!(
+        as_caller(bob(), lib.load_list(vec![1, 2, 3, 4])).await,
+        Ok(vec![2, 4])
+    );
+    assert_eq!(
+        as_caller(bob(), lib.load_all(vec![1, 2, 3, 4])).await,
+        Ok(vec![2, 4, 8])
+    );
+    assert_eq!(
+        as_caller(None, lib.load_all(vec![2])).await,
+        Err(AccessDenied::Unauthenticated)
+    );
+}
+
+#[tokio::test]
+async fn one_line_bodies_work() {
+    let lib = Library;
+    let bob = || caller("bob", &[]);
+    assert_eq!(as_caller(bob(), async { lib.one() }).await, Ok(1));
+    assert_eq!(as_caller(bob(), async { lib.two() }).await, Ok(2));
+    assert_eq!(as_caller(bob(), lib.three()).await, Ok(3));
+}
+
+/// The calls of the ordered method, in the order they ran. Only `Ordered` writes to it.
+static ORDER: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+
+fn record_pre_filter(_auth: Option<&Authentication>, _n: &u32) -> bool {
+    ORDER.lock().unwrap().push("pre_filter");
+    true
+}
+
+fn record_pre_authorize(_auth: Option<&Authentication>) -> bool {
+    ORDER.lock().unwrap().push("pre_authorize");
+    true
+}
+
+fn record_post_authorize(_auth: Option<&Authentication>, _value: &Vec<u32>) -> bool {
+    ORDER.lock().unwrap().push("post_authorize");
+    true
+}
+
+fn record_post_filter(_auth: Option<&Authentication>, _n: &u32) -> bool {
+    ORDER.lock().unwrap().push("post_filter");
+    true
+}
+
+struct Ordered;
+
+#[method_security]
+impl Ordered {
+    // The attributes are listed out of order on purpose: the order of execution is fixed.
+    #[post_filter(custom = record_post_filter)]
+    #[post_authorize(custom = record_post_authorize(returned))]
+    #[pre_authorize(custom = record_pre_authorize())]
+    #[pre_filter(arg = ids, custom = record_pre_filter)]
+    fn run(&self, ids: Vec<u32>) -> Result<Vec<u32>, AccessDenied> {
+        ORDER.lock().unwrap().push("body");
+        Ok(ids)
+    }
+}
+
+#[test]
+fn order_is_pre_filter_pre_authorize_body_post_authorize_post_filter() {
+    assert_eq!(Ordered.run(vec![1]), Ok(vec![1]));
+    assert_eq!(
+        *ORDER.lock().unwrap(),
+        [
+            "pre_filter",
+            "pre_authorize",
+            "body",
+            "post_authorize",
+            "post_filter"
+        ]
+    );
+}
+
+/// How often the post checks of `Guarded` ran.
+static GUARDED_POST_RUNS: AtomicU32 = AtomicU32::new(0);
+
+fn count_post_authorize(_auth: Option<&Authentication>, _value: &Vec<u32>) -> bool {
+    GUARDED_POST_RUNS.fetch_add(1, Ordering::SeqCst);
+    true
+}
+
+fn count_post_filter(_auth: Option<&Authentication>, _n: &u32) -> bool {
+    GUARDED_POST_RUNS.fetch_add(1, Ordering::SeqCst);
+    true
+}
+
+struct Guarded;
+
+#[method_security]
+impl Guarded {
+    #[pre_authorize(role = "ADMIN")]
+    #[post_authorize(custom = count_post_authorize(returned))]
+    #[post_filter(custom = count_post_filter)]
+    async fn run(&self) -> Result<Vec<u32>, AccessDenied> {
+        Ok(vec![1])
+    }
+}
+
+#[tokio::test]
+async fn a_denied_pre_authorize_does_not_run_post_checks() {
+    assert_eq!(
+        as_caller(user(), Guarded.run()).await,
+        Err(AccessDenied::Forbidden)
+    );
+    assert_eq!(GUARDED_POST_RUNS.load(Ordering::SeqCst), 0);
+    assert_eq!(as_caller(admin(), Guarded.run()).await, Ok(vec![1]));
+    assert_eq!(GUARDED_POST_RUNS.load(Ordering::SeqCst), 2);
 }

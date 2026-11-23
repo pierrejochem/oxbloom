@@ -1,0 +1,5 @@
+error: `id` is bound inside a pattern parameter, and pattern parameters cannot be named here; bind the whole parameter to a name, e.g. `pair: (u64, String)`, and name that
+  --> tests/ui/pattern_parameter.rs:11:35
+   |
+11 |     #[pre_authorize(custom = owns(id))]
+   |                                   ^^

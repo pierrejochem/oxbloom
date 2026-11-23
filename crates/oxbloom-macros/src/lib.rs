@@ -2,8 +2,8 @@
 //! dependency injection (`#[component]`, `#[configuration]`, `#[bean]`, used through
 //! `oxbloom_di`, and `#[auto_configuration]`, used through `oxbloom_boot`), scheduled tasks and
 //! retry (`#[scheduling]`, `#[scheduled]` and `#[retryable]`, used through `oxbloom_tasks`), and
-//! method security (`#[method_security]` with `#[pre_authorize]`, used through
-//! `oxbloom_security`).
+//! method security (`#[method_security]` with `#[pre_authorize]`, `#[post_authorize]`,
+//! `#[pre_filter]` and `#[post_filter]`, used through `oxbloom_security`).
 //!
 //! Controllers:
 //! `#[controller("/base")]` goes on an `impl` block. Methods annotated with
@@ -1066,14 +1066,27 @@ pub fn retryable(args: TokenStream, input: TokenStream) -> TokenStream {
     retryable::expand(args.into(), input.into()).into()
 }
 
-/// Checks the caller's `Authentication` before a method body runs. Put it on an inherent `impl`
-/// block and give each secured method a `#[pre_authorize(<rule>)]` attribute.
+/// Checks the caller's `Authentication` around a method body. Put it on an inherent `impl`
+/// block and give each secured method one or more of these attributes:
 ///
-/// Use it through `oxbloom_security::method_security`; the generated code refers to the
-/// `oxbloom_security` crate by that name, so the dependency must not be renamed in
-/// `Cargo.toml`. The rule is checked against `SecurityContext::current()`, which the security
-/// filter chain sets for every request; outside any `SecurityContext::scope` the caller is
-/// anonymous. Methods without an attribute stay as written.
+/// - `#[pre_authorize(<rule>)]` checks the rule before the body runs;
+/// - `#[post_authorize(<rule>)]` checks the rule after the body returned `Ok(value)`; a denial
+///   drops the value and returns `Err`, and an `Err` from the body skips the check and passes
+///   through;
+/// - `#[pre_filter(arg = ids, custom = keep)]` keeps only the elements of the `Vec<T>`
+///   parameter `ids` (taken by value) for which `keep(auth, &element)` returns true;
+/// - `#[post_filter(custom = keep)]` does the same for the `Vec<T>` in an `Ok` result; an `Err`
+///   passes through.
+///
+/// Only `method_security` needs an import: inside its `impl` block it handles the four method
+/// attributes itself, so `pre_authorize` and the others need no `use`. Use it through
+/// `oxbloom_security::method_security`; the generated code refers to the `oxbloom_security`
+/// crate by that name, so the dependency must not be renamed in `Cargo.toml`. The rules are
+/// checked against `SecurityContext::current()`, which the security filter chain sets for every
+/// request; outside any `SecurityContext::scope` the caller is anonymous. The context is read
+/// once per call. For an `async` method the check runs when the returned future is first
+/// polled, not when the method is called, so await the future inside the caller's scope.
+/// Methods without an attribute stay as written.
 ///
 /// Rules, all checked at compile time:
 ///
@@ -1087,21 +1100,35 @@ pub fn retryable(args: TokenStream, input: TokenStream) -> TokenStream {
 /// - `all(<rule>, ..)`, `any(<rule>, ..)` and `not(<rule>)` to combine rules;
 /// - `custom = check(arg1, arg2)` calls the synchronous function
 ///   `check(auth: Option<&Authentication>, &arg1, &arg2) -> bool`, where each name is a
-///   parameter of the method.
+///   parameter of the method that is bound to a plain name (not a pattern such as
+///   `(a, b): (u32, u32)`). In `#[post_authorize]` the reserved name `returned` stands for
+///   `&T`, a reference to the `Ok` value; there a parameter can be named only when the body did
+///   not move it.
 ///
-/// A secured method, `async` or not, must return `Result<T, E>` with
-/// `E: From<oxbloom_security::AccessDenied>`, for example `AccessDenied` itself or
-/// `oxbloom_web::HttpError` (401 for an anonymous caller, 403 otherwise). When the rule fails,
-/// the method returns `Err(AccessDenied::Unauthenticated.into())` for an anonymous caller and
-/// `Err(AccessDenied::Forbidden.into())` for any other caller, without running the body, and
-/// logs the method (`Type::method`) and the principal at debug level on the target
-/// `oxbloom::security`. Argument values are never logged.
+/// The order of execution is fixed: `pre_filter`, `pre_authorize`, the body, `post_authorize`
+/// and `post_filter`, whatever the order of the attributes. Filters never deny; they only
+/// shrink the collection, possibly to an empty `Vec`.
+///
+/// A method with `#[pre_authorize]`, `#[post_authorize]` or `#[post_filter]`, `async` or not,
+/// must return `Result<T, E>` with `E: From<oxbloom_security::AccessDenied>`, for example
+/// `AccessDenied` itself or `oxbloom_web::HttpError` (401 for an anonymous caller, 403
+/// otherwise); `#[post_filter]` also needs `T = Vec<_>`. A method with only `#[pre_filter]` may
+/// return anything. When a rule fails, the method returns
+/// `Err(AccessDenied::Unauthenticated.into())` for an anonymous caller and
+/// `Err(AccessDenied::Forbidden.into())` for any other caller, and logs the method
+/// (`Type::method`) and the principal at debug level on the target `oxbloom::security`.
+/// Argument values and returned values are never logged.
+///
+/// With a post attribute the body is wrapped (in a closure for a synchronous method and in an
+/// `async` block for an `async` one, both of the declared return type), so `return` and `?` in
+/// the body leave only the body and the post checks still run. The return type of such a
+/// method must therefore be written out; `impl Trait` is a compile error there.
 ///
 /// It combines with `#[controller]` on the same block, in either order, so a handler can carry
-/// both a route and a rule. A trait impl, a repeated `#[pre_authorize]`, an unknown rule, a
-/// `custom` argument that is not a parameter of the method, the name `returned` (reserved for
-/// `#[post_authorize]`) and a method whose return type is visibly not a `Result` are compile
-/// errors.
+/// both a route and a rule. A trait impl, a repeated attribute, an unknown rule or option, a
+/// `custom` argument that is not a parameter of the method, `returned` outside
+/// `#[post_authorize]`, an `arg` that is not a by-value `Vec<T>` parameter, and a method whose
+/// return type is visibly not a `Result` are compile errors.
 ///
 /// # Examples
 ///
@@ -1145,6 +1172,69 @@ pub fn retryable(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// // Outside a scope the caller is anonymous.
 /// assert_eq!(Accounts.close(7).await, Err(AccessDenied::Unauthenticated));
+/// # });
+/// # Ok::<(), std::io::Error>(())
+/// ```
+///
+/// Checks after the body and filters, with no import for the method attributes:
+///
+/// ```
+/// use oxbloom_security::{AccessDenied, Authentication, SecurityContext, method_security};
+///
+/// #[derive(Debug, PartialEq)]
+/// struct Note {
+///     owner: String,
+///     text: String,
+/// }
+///
+/// /// True when the caller wrote the note.
+/// fn wrote(auth: Option<&Authentication>, note: &Note) -> bool {
+///     auth.is_some_and(|a| a.principal() == note.owner)
+/// }
+///
+/// /// True for the ids an authenticated caller may see: the even ones.
+/// fn visible(auth: Option<&Authentication>, id: &u64) -> bool {
+///     auth.is_some() && id.is_multiple_of(2)
+/// }
+///
+/// struct Notes;
+///
+/// #[method_security]
+/// impl Notes {
+///     #[post_authorize(custom = wrote(returned))]
+///     async fn open(&self, owner: &str) -> Result<Note, AccessDenied> {
+///         if owner.is_empty() {
+///             // An early return still passes through the check.
+///             return Ok(Note { owner: "nobody".into(), text: String::new() });
+///         }
+///         Ok(Note { owner: owner.into(), text: "hello".into() })
+///     }
+///
+///     #[pre_filter(arg = ids, custom = visible)]
+///     fn delete(&self, ids: Vec<u64>) -> usize {
+///         ids.len()
+///     }
+///
+///     #[post_filter(custom = visible)]
+///     fn list(&self) -> Result<Vec<u64>, AccessDenied> {
+///         Ok(vec![1, 2, 3, 4])
+///     }
+/// }
+///
+/// # tokio::runtime::Builder::new_current_thread().build()?.block_on(async {
+/// let bob = SecurityContext::authenticated(Authentication::new("bob", []));
+/// let mine = SecurityContext::scope(bob.clone(), Notes.open("bob")).await;
+/// assert_eq!(mine.map(|n| n.text).as_deref(), Ok("hello"));
+/// let theirs = SecurityContext::scope(bob.clone(), Notes.open("alice")).await;
+/// assert_eq!(theirs, Err(AccessDenied::Forbidden));
+///
+/// let deleted = SecurityContext::scope(bob.clone(), async { Notes.delete(vec![1, 2, 4]) });
+/// assert_eq!(deleted.await, 2);
+/// let listed = SecurityContext::scope(bob, async { Notes.list() }).await;
+/// assert_eq!(listed, Ok(vec![2, 4]));
+///
+/// // A filter never denies: an anonymous caller gets an empty list.
+/// assert_eq!(Notes.list(), Ok(vec![]));
 /// # });
 /// # Ok::<(), std::io::Error>(())
 /// ```
@@ -1235,58 +1325,107 @@ method_security_attr! {
     /// # Ok::<(), std::io::Error>(())
     /// ```
     pre_authorize;
-    /// Reserved for a check after the method body returned; not available yet, and outside a
-    /// `#[method_security]` impl it is a compile error.
+    /// Checks a rule after the method body returned `Ok(value)`; only valid on a method of a
+    /// `#[method_security]` impl, which lists the rules. In `custom = check(returned)` the
+    /// name `returned` stands for `&value`. A denial drops the value and returns `Err`; an
+    /// `Err` from the body skips the check.
     ///
     /// # Examples
     ///
-    /// ```compile_fail
-    /// use oxbloom_security::{AccessDenied, post_authorize};
+    /// ```
+    /// use oxbloom_security::{AccessDenied, Authentication, SecurityContext, method_security};
+    ///
+    /// /// True when the caller owns the returned account.
+    /// fn owns(auth: Option<&Authentication>, owner: &String) -> bool {
+    ///     auth.is_some_and(|a| a.principal() == owner)
+    /// }
     ///
     /// struct Accounts;
     ///
+    /// #[method_security]
     /// impl Accounts {
-    ///     #[post_authorize(authenticated)]
-    ///     fn balance(&self) -> Result<u64, AccessDenied> {
-    ///         Ok(1)
+    ///     #[post_authorize(custom = owns(returned))]
+    ///     fn owner_of(&self, id: u64) -> Result<String, AccessDenied> {
+    ///         Ok(if id == 1 { "ada".into() } else { "bob".into() })
     ///     }
     /// }
+    ///
+    /// # tokio::runtime::Builder::new_current_thread().build()?.block_on(async {
+    /// let ada = SecurityContext::authenticated(Authentication::new("ada", []));
+    /// let own = SecurityContext::scope(ada.clone(), async { Accounts.owner_of(1) }).await;
+    /// assert_eq!(own.as_deref(), Ok("ada"));
+    /// let other = SecurityContext::scope(ada, async { Accounts.owner_of(2) }).await;
+    /// assert_eq!(other, Err(AccessDenied::Forbidden));
+    /// # });
+    /// # Ok::<(), std::io::Error>(())
     /// ```
     post_authorize;
-    /// Reserved for filtering a `Vec` argument before the method body runs; not available yet,
-    /// and outside a `#[method_security]` impl it is a compile error.
+    /// Keeps only the elements of a by-value `Vec<T>` parameter for which
+    /// `custom(auth, &element)` returns true, before the method body runs; only valid on a
+    /// method of a `#[method_security]` impl. It never denies.
     ///
     /// # Examples
     ///
-    /// ```compile_fail
-    /// use oxbloom_security::{AccessDenied, pre_filter};
+    /// ```
+    /// use oxbloom_security::{Authentication, GrantedAuthority, SecurityContext, method_security};
+    ///
+    /// /// Administrators may close every account, other callers only ids below 100.
+    /// fn may_close(auth: Option<&Authentication>, id: &u64) -> bool {
+    ///     auth.is_some_and(|a| a.has_role("ADMIN") || *id < 100)
+    /// }
     ///
     /// struct Accounts;
     ///
+    /// #[method_security]
     /// impl Accounts {
-    ///     #[pre_filter(arg = ids, custom = keep)]
-    ///     fn close_all(&self, ids: Vec<u64>) -> Result<usize, AccessDenied> {
-    ///         Ok(ids.len())
+    ///     #[pre_filter(arg = ids, custom = may_close)]
+    ///     fn close_all(&self, ids: Vec<u64>) -> Vec<u64> {
+    ///         ids
     ///     }
     /// }
+    ///
+    /// # tokio::runtime::Builder::new_current_thread().build()?.block_on(async {
+    /// let bob = SecurityContext::authenticated(Authentication::new("bob", []));
+    /// let closed = SecurityContext::scope(bob, async { Accounts.close_all(vec![7, 700]) });
+    /// assert_eq!(closed.await, [7]);
+    /// let admin = Authentication::new("ada", [GrantedAuthority::new("ROLE_ADMIN")]);
+    /// let ctx = SecurityContext::authenticated(admin);
+    /// let closed = SecurityContext::scope(ctx, async { Accounts.close_all(vec![7, 700]) });
+    /// assert_eq!(closed.await, [7, 700]);
+    /// # });
+    /// # Ok::<(), std::io::Error>(())
     /// ```
     pre_filter;
-    /// Reserved for filtering a returned `Vec` after the method body ran; not available yet,
-    /// and outside a `#[method_security]` impl it is a compile error.
+    /// Keeps only the elements of the `Vec<T>` in an `Ok` result for which
+    /// `custom(auth, &element)` returns true; only valid on a method of a `#[method_security]`
+    /// impl. It never denies, and an `Err` passes through.
     ///
     /// # Examples
     ///
-    /// ```compile_fail
-    /// use oxbloom_security::{AccessDenied, post_filter};
+    /// ```
+    /// use oxbloom_security::{AccessDenied, Authentication, SecurityContext, method_security};
+    ///
+    /// /// True for the accounts the caller owns.
+    /// fn own(auth: Option<&Authentication>, owner: &&str) -> bool {
+    ///     auth.is_some_and(|a| a.principal() == *owner)
+    /// }
     ///
     /// struct Accounts;
     ///
+    /// #[method_security]
     /// impl Accounts {
-    ///     #[post_filter(custom = keep)]
-    ///     fn list(&self) -> Result<Vec<u64>, AccessDenied> {
-    ///         Ok(Vec::new())
+    ///     #[post_filter(custom = own)]
+    ///     async fn owners(&self) -> Result<Vec<&'static str>, AccessDenied> {
+    ///         Ok(vec!["ada", "bob", "ada"])
     ///     }
     /// }
+    ///
+    /// # tokio::runtime::Builder::new_current_thread().build()?.block_on(async {
+    /// let ada = SecurityContext::authenticated(Authentication::new("ada", []));
+    /// let mine = SecurityContext::scope(ada, Accounts.owners()).await;
+    /// assert_eq!(mine, Ok(vec!["ada", "ada"]));
+    /// # });
+    /// # Ok::<(), std::io::Error>(())
     /// ```
     post_filter;
 }

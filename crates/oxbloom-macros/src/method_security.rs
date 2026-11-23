@@ -1,10 +1,12 @@
-//! `#[method_security]` and its method attribute `#[pre_authorize]`: a rule checked against the
-//! caller's `Authentication` before the method body runs.
+//! `#[method_security]` and its method attributes: `#[pre_authorize]` and `#[post_authorize]`
+//! check a rule against the caller's `Authentication` before and after the method body, and
+//! `#[pre_filter]` and `#[post_filter]` shrink a `Vec` argument or a returned `Vec`.
 
-use proc_macro2::{Span, TokenStream as TokenStream2};
-use quote::quote;
+use proc_macro2::{Span, TokenStream as TokenStream2, TokenTree};
+use quote::{quote, quote_spanned};
 use syn::meta::ParseNestedMeta;
 use syn::punctuated::Punctuated;
+use syn::spanned::Spanned;
 use syn::{
     Attribute, Error, Expr, FnArg, Ident, ImplItem, ImplItemFn, ItemImpl, LitStr, Pat, ReturnType,
     Token, Type, token,
@@ -218,7 +220,7 @@ impl Rule {
     /// reserved for `#[post_authorize]`; `returned_allowed` says whether it is available.
     pub(crate) fn check_names(
         &self,
-        params: &[Ident],
+        params: &Parameters,
         returned_allowed: bool,
         attribute: &str,
     ) -> syn::Result<()> {
@@ -241,11 +243,8 @@ impl Rule {
                             ),
                         ));
                     }
-                    if !params.contains(arg) {
-                        return Err(Error::new(
-                            arg.span(),
-                            format!("`{arg}` is not a parameter of the method"),
-                        ));
+                    if params.named(arg).is_none() {
+                        return Err(params.unknown(arg));
                     }
                 }
                 Ok(())
@@ -312,19 +311,140 @@ fn type_name(ty: &Type) -> syn::Result<String> {
     ))
 }
 
-/// The names of the method's parameters that are plain identifiers, for `custom`.
-fn parameter_names(f: &ImplItemFn) -> Vec<Ident> {
-    f.sig
-        .inputs
-        .iter()
-        .filter_map(|input| match input {
-            FnArg::Typed(typed) => match &*typed.pat {
-                Pat::Ident(p) => Some(p.ident.clone()),
-                _ => None,
-            },
-            FnArg::Receiver(_) => None,
-        })
-        .collect()
+/// A parameter of the method bound to a plain name, such as `ids: Vec<u64>`.
+pub(crate) struct Named {
+    name: Ident,
+    ty: Type,
+    /// The binding is already `mut`, so a filter needs no rebinding.
+    mutable: bool,
+    /// The binding is `ref`, so it is not taken by value.
+    by_ref: bool,
+}
+
+/// The parameters of a method, as far as `custom` and `arg` can name them.
+#[derive(Default)]
+pub(crate) struct Parameters {
+    named: Vec<Named>,
+    /// Names bound inside a pattern parameter such as `(id, name): (u64, String)`.
+    in_patterns: Vec<Ident>,
+}
+
+impl Parameters {
+    fn of(f: &ImplItemFn) -> Self {
+        let mut params = Self::default();
+        for input in &f.sig.inputs {
+            let FnArg::Typed(typed) = input else { continue };
+            match &*typed.pat {
+                Pat::Ident(p) if p.subpat.is_none() => params.named.push(Named {
+                    name: p.ident.clone(),
+                    ty: (*typed.ty).clone(),
+                    mutable: p.mutability.is_some(),
+                    by_ref: p.by_ref.is_some(),
+                }),
+                pat => bindings(pat, &mut params.in_patterns),
+            }
+        }
+        params
+    }
+
+    fn named(&self, name: &Ident) -> Option<&Named> {
+        self.named.iter().find(|p| p.name == *name)
+    }
+
+    /// The error for a name that is not a plain parameter of the method.
+    fn unknown(&self, name: &Ident) -> Error {
+        let message = if self.in_patterns.contains(name) {
+            format!(
+                "`{name}` is bound inside a pattern parameter, and pattern parameters cannot be \
+                 named here; bind the whole parameter to a name, e.g. `pair: (u64, String)`, \
+                 and name that"
+            )
+        } else {
+            format!("`{name}` is not a parameter of the method")
+        };
+        Error::new(name.span(), message)
+    }
+
+    /// Resolves the `arg` of `#[pre_filter]`: a by-value `Vec<T>` parameter. Returns whether
+    /// it is already bound as `mut`.
+    fn filtered(&self, arg: &Ident) -> syn::Result<bool> {
+        let Some(param) = self.named(arg) else {
+            return Err(self.unknown(arg));
+        };
+        if param.by_ref || !is_vec(&param.ty) {
+            return Err(Error::new_spanned(
+                &param.ty,
+                format!(
+                    "#[pre_filter] can only filter a `Vec<T>` parameter taken by value, and \
+                     `{arg}` is not one"
+                ),
+            ));
+        }
+        Ok(param.mutable)
+    }
+}
+
+/// Collects the names a pattern binds.
+fn bindings(pat: &Pat, out: &mut Vec<Ident>) {
+    match pat {
+        Pat::Ident(p) => {
+            out.push(p.ident.clone());
+            if let Some((_, sub)) = &p.subpat {
+                bindings(sub, out);
+            }
+        }
+        Pat::Tuple(t) => t.elems.iter().for_each(|p| bindings(p, out)),
+        Pat::TupleStruct(t) => t.elems.iter().for_each(|p| bindings(p, out)),
+        Pat::Slice(s) => s.elems.iter().for_each(|p| bindings(p, out)),
+        Pat::Or(o) => o.cases.iter().for_each(|p| bindings(p, out)),
+        Pat::Struct(s) => s.fields.iter().for_each(|field| bindings(&field.pat, out)),
+        Pat::Reference(r) => bindings(&r.pat, out),
+        Pat::Paren(p) => bindings(&p.pat, out),
+        Pat::Type(t) => bindings(&t.pat, out),
+        _ => {}
+    }
+}
+
+/// True for a type written as `Vec<T>` (also with a path such as `std::vec::Vec<T>`).
+fn is_vec(ty: &Type) -> bool {
+    match ty {
+        Type::Path(p) if p.qself.is_none() => p.path.segments.last().is_some_and(|last| {
+            last.ident == "Vec" && matches!(last.arguments, syn::PathArguments::AngleBracketed(_))
+        }),
+        Type::Group(g) => is_vec(&g.elem),
+        Type::Paren(p) => is_vec(&p.elem),
+        _ => false,
+    }
+}
+
+/// True when the tokens contain the keyword `impl`, which in a type means `impl Trait`.
+fn mentions_impl(tokens: TokenStream2) -> bool {
+    tokens.into_iter().any(|tree| match tree {
+        TokenTree::Ident(ident) => ident == "impl",
+        TokenTree::Group(group) => mentions_impl(group.stream()),
+        _ => false,
+    })
+}
+
+/// Rejects an `impl Trait` return type on a method with a post attribute: the body is wrapped
+/// in a closure or an `async` block annotated with the declared return type, which cannot name
+/// `impl Trait`.
+fn check_written_out(f: &ImplItemFn, attribute: &str) -> syn::Result<()> {
+    let ReturnType::Type(_, ty) = &f.sig.output else {
+        return Ok(());
+    };
+    if !mentions_impl(quote!(#ty)) {
+        return Ok(());
+    }
+    Err(Error::new_spanned(
+        ty,
+        format!(
+            "the method `{}` has #[{attribute}], so its return type must be written out: the body \
+             is wrapped in a closure or an `async` block of the declared return type, and that \
+             cannot be `impl Trait`",
+            f.sig.ident
+        ),
+    ))
 }
 
 /// Rejects a return type that is visibly not a `Result`. A path type passes, so aliases such
@@ -356,15 +476,95 @@ fn check_returns_result(f: &ImplItemFn, attribute: &str) -> syn::Result<()> {
     })
 }
 
+/// The function of a filter attribute and, for `#[pre_filter]`, the filtered parameter.
+struct Filter {
+    arg: Option<Ident>,
+    keep: syn::ExprPath,
+}
+
+impl Filter {
+    /// Parses `#[pre_filter(arg = ids, custom = keep)]` (`takes_arg`) or
+    /// `#[post_filter(custom = keep)]`.
+    fn from_attribute(attr: &Attribute, name: &str, takes_arg: bool) -> syn::Result<Filter> {
+        let example = if takes_arg {
+            "e.g. `#[pre_filter(arg = ids, custom = keep)]`"
+        } else {
+            "e.g. `#[post_filter(custom = keep)]`"
+        };
+        let options = if takes_arg {
+            "`arg` and `custom`"
+        } else {
+            "`custom`"
+        };
+        if !matches!(attr.meta, syn::Meta::List(_)) {
+            return Err(Error::new_spanned(
+                attr,
+                format!("#[{name}] takes {options}, {example}"),
+            ));
+        }
+        let mut arg: Option<Ident> = None;
+        let mut keep: Option<syn::ExprPath> = None;
+        attr.parse_nested_meta(|meta| {
+            let key = meta
+                .path
+                .get_ident()
+                .map(Ident::to_string)
+                .unwrap_or_default();
+            let repeated = || meta.error(format!("`{key}` is given twice in #[{name}]"));
+            match key.as_str() {
+                "arg" if !takes_arg => Err(meta.error(format!(
+                    "#[{name}] filters the returned `Vec` and takes no `arg`; {example}"
+                ))),
+                "arg" if arg.is_some() => Err(repeated()),
+                "arg" => {
+                    let usage = "`arg` takes the name of a `Vec<T>` parameter, e.g. `arg = ids`";
+                    let value = meta.value().map_err(|e| Error::new(e.span(), usage))?;
+                    arg = Some(value.parse().map_err(|e| Error::new(e.span(), usage))?);
+                    Ok(())
+                }
+                "custom" if keep.is_some() => Err(repeated()),
+                "custom" => {
+                    let usage = "`custom` takes the path of a function \
+                                 `fn(Option<&Authentication>, &T) -> bool`, e.g. `custom = keep`; \
+                                 the filter passes each element to it";
+                    let value = meta.value().map_err(|e| Error::new(e.span(), usage))?;
+                    match value.parse::<Expr>() {
+                        Ok(Expr::Path(path)) => {
+                            keep = Some(path);
+                            Ok(())
+                        }
+                        Ok(other) => Err(Error::new_spanned(other, usage)),
+                        Err(e) => Err(Error::new(e.span(), usage)),
+                    }
+                }
+                _ => Err(meta.error(format!(
+                    "unknown option of #[{name}]; it takes {options}, {example}"
+                ))),
+            }
+        })?;
+        let missing = |option: &str| {
+            Error::new_spanned(attr, format!("#[{name}] needs `{option}`, {example}"))
+        };
+        if takes_arg && arg.is_none() {
+            return Err(missing("arg"));
+        }
+        let keep = keep.ok_or_else(|| missing("custom"))?;
+        Ok(Filter { arg, keep })
+    }
+}
+
 /// The method security attributes of one method, taken off it.
 #[derive(Default)]
 struct MethodAttributes {
     pre_authorize: Option<Attribute>,
+    post_authorize: Option<Attribute>,
+    pre_filter: Option<Attribute>,
+    post_filter: Option<Attribute>,
 }
 
 impl MethodAttributes {
     /// Removes every method security attribute from `f`, so the method stays valid even when
-    /// one of them is rejected, then rejects repeated ones and the ones not supported yet.
+    /// one of them is rejected, then rejects repeated ones.
     fn take(f: &mut ImplItemFn) -> syn::Result<Self> {
         let (ours, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut f.attrs)
             .into_iter()
@@ -372,56 +572,193 @@ impl MethodAttributes {
         f.attrs = kept;
         let mut found = Self::default();
         for attr in ours {
-            match attribute_name(&attr) {
-                Some("pre_authorize") if found.pre_authorize.is_some() => {
-                    return Err(Error::new_spanned(
-                        &attr,
-                        format!(
-                            "the method `{}` has two #[pre_authorize] attributes; combine the \
-                             rules with `all(..)` or `any(..)`",
-                            f.sig.ident
-                        ),
-                    ));
-                }
-                Some("pre_authorize") => found.pre_authorize = Some(attr),
-                other => {
-                    return Err(Error::new_spanned(
-                        &attr,
-                        format!("#[{}] is not supported yet", other.unwrap_or_default()),
-                    ));
-                }
+            let name = attribute_name(&attr).unwrap_or_default();
+            let (slot, hint) = match name {
+                "pre_authorize" => (
+                    &mut found.pre_authorize,
+                    "combine the rules with `all(..)` or `any(..)`",
+                ),
+                "post_authorize" => (
+                    &mut found.post_authorize,
+                    "combine the rules with `all(..)` or `any(..)`",
+                ),
+                "pre_filter" => (&mut found.pre_filter, "combine the checks in one function"),
+                _ => (&mut found.post_filter, "combine the checks in one function"),
+            };
+            if slot.is_some() {
+                return Err(Error::new_spanned(
+                    &attr,
+                    format!(
+                        "the method `{}` has two #[{name}] attributes; {hint}",
+                        f.sig.ident
+                    ),
+                ));
             }
+            *slot = Some(attr);
         }
         Ok(found)
     }
+
+    fn is_empty(&self) -> bool {
+        self.pre_authorize.is_none()
+            && self.post_authorize.is_none()
+            && self.pre_filter.is_none()
+            && self.post_filter.is_none()
+    }
 }
 
-/// Rewrites one method: reads the context once, checks the `pre_authorize` rule and returns
-/// the denial before the original body runs.
+/// Rewrites one method. The order of execution is `pre_filter`, `pre_authorize`, the body,
+/// `post_authorize` and `post_filter`. Without a post attribute the body stays as written and
+/// the context is read and dropped in its own block before it. With a post attribute the body
+/// is wrapped (a closure for a synchronous method, an `async` block for an `async` one, both of
+/// the declared return type), so `return` and `?` in the body leave only the body and the post
+/// checks still run.
 fn secure_method(type_name: &str, f: &mut ImplItemFn) -> syn::Result<()> {
     let attrs = MethodAttributes::take(f)?;
-    let Some(pre) = attrs.pre_authorize else {
+    if attrs.is_empty() {
         return Ok(());
+    }
+    let params = Parameters::of(f);
+    let pre_authorize = match &attrs.pre_authorize {
+        Some(attr) => {
+            check_returns_result(f, "pre_authorize")?;
+            let rule = Rule::from_attribute(attr, "pre_authorize")?;
+            rule.check_names(&params, false, "pre_authorize")?;
+            Some(rule)
+        }
+        None => None,
     };
-    check_returns_result(f, "pre_authorize")?;
-    let rule = Rule::from_attribute(&pre, "pre_authorize")?;
-    rule.check_names(&parameter_names(f), false, "pre_authorize")?;
+    let post_authorize = match &attrs.post_authorize {
+        Some(attr) => {
+            check_written_out(f, "post_authorize")?;
+            check_returns_result(f, "post_authorize")?;
+            let rule = Rule::from_attribute(attr, "post_authorize")?;
+            rule.check_names(&params, true, "post_authorize")?;
+            Some(rule)
+        }
+        None => None,
+    };
+    let pre_filter = match &attrs.pre_filter {
+        Some(attr) => {
+            let filter = Filter::from_attribute(attr, "pre_filter", true)?;
+            let arg = filter.arg.clone().unwrap_or_else(|| unreachable!());
+            let mutable = params.filtered(&arg)?;
+            Some((filter, arg, mutable))
+        }
+        None => None,
+    };
+    let post_filter = match &attrs.post_filter {
+        Some(attr) => {
+            check_written_out(f, "post_filter")?;
+            check_returns_result(f, "post_filter")?;
+            Some(Filter::from_attribute(attr, "post_filter", false)?)
+        }
+        None => None,
+    };
 
-    let context = Ident::new("__oxbloom_context", Span::mixed_site());
-    let auth = Ident::new("__auth", Span::mixed_site());
+    let local = |name: &str| Ident::new(name, Span::mixed_site());
+    let context = local("__oxbloom_context");
+    let auth = local("__auth");
+    let element = local("__element");
     let method = format!("{type_name}::{}", f.sig.ident);
-    let check = rule.tokens(&auth, None);
-    let body = &f.block;
-    f.block = syn::parse_quote!({
+    // A type error from the generated `Err(..)` (a return type that is not a `Result`, or an
+    // error type without `From<AccessDenied>`) points at the declared return type.
+    let return_span = match &f.sig.output {
+        ReturnType::Type(_, ty) => ty.span(),
+        ReturnType::Default => Span::call_site(),
+    };
+    let deny = quote_spanned!(return_span=>
+        return ::core::result::Result::Err(::core::convert::Into::into(
+            ::oxbloom_security::__private::deny(#method, #auth),
+        ));
+    );
+    let read_context = quote! {
         let #context = ::oxbloom_security::SecurityContext::current();
         let #auth: ::core::option::Option<&::oxbloom_security::Authentication> =
             #context.authentication();
-        if !(#check) {
-            return ::core::result::Result::Err(::core::convert::Into::into(
-                ::oxbloom_security::__private::deny(#method, #auth),
-            ));
+    };
+    let (rebind, pre_filter) = match pre_filter {
+        Some((filter, arg, mutable)) => {
+            let keep = &filter.keep;
+            let rebind = (!mutable).then(|| quote!(let mut #arg = #arg;));
+            let retain = quote!(#arg.retain(|#element| #keep(#auth, #element)););
+            (rebind, Some(retain))
         }
-        #body
+        None => (None, None),
+    };
+    let pre_authorize = pre_authorize.map(|rule| {
+        let check = rule.tokens(&auth, None);
+        quote!(if !(#check) { #deny })
+    });
+    // The body's statements are spliced into a block of the macro, so a one-line body does not
+    // keep its own braces as a nested block (which rustc reports as `unused_braces`).
+    let stmts = &f.block.stmts;
+
+    if post_authorize.is_none() && post_filter.is_none() {
+        f.block = syn::parse_quote!({
+            #rebind
+            {
+                #read_context
+                #pre_filter
+                #pre_authorize
+            }
+            #(#stmts)*
+        });
+        return Ok(());
+    }
+
+    let ReturnType::Type(_, ret) = &f.sig.output else {
+        unreachable!("check_returns_result rejected a method without a return type")
+    };
+    let result = local("__result");
+    let value = local("__value");
+    let wrapped = if f.sig.asyncness.is_some() {
+        quote!(async {
+            let #value: #ret = { #(#stmts)* };
+            #value
+        }
+        .await)
+    } else {
+        // The closure is passed as `FnOnce`, so a body that returns a borrow of a `&mut`
+        // parameter (`Ok(&mut self.items)`) compiles as it does without the wrapper.
+        let call = local("__call_once");
+        quote!({
+            fn #call<R, F: ::core::ops::FnOnce() -> R>(f: F) -> R {
+                f()
+            }
+            #call(|| -> #ret { #(#stmts)* })
+        })
+    };
+    let post_authorize = post_authorize.map(|rule| {
+        let returned = local("__returned");
+        let check = rule.tokens(&auth, Some(&quote!(#returned)));
+        quote! {
+            if let ::core::result::Result::Ok(#returned) = &#result {
+                if !(#check) { #deny }
+            }
+        }
+    });
+    let (mutable, post_filter) = match post_filter {
+        Some(filter) => {
+            let keep = &filter.keep;
+            let retain = quote! {
+                if let ::core::result::Result::Ok(#value) = &mut #result {
+                    #value.retain(|#element| #keep(#auth, #element));
+                }
+            };
+            (Some(quote!(mut)), Some(retain))
+        }
+        None => (None, None),
+    };
+    f.block = syn::parse_quote!({
+        #rebind
+        #read_context
+        #pre_filter
+        #pre_authorize
+        let #mutable #result: #ret = #wrapped;
+        #post_authorize
+        #post_filter
+        #result
     });
     Ok(())
 }
@@ -498,8 +835,9 @@ mod tests {
     #[test]
     fn returned_maps_to_the_given_expression_only_when_allowed() {
         let r = rule(syn::parse_quote!(#[pre_authorize(custom = mine(returned))])).unwrap();
-        assert!(r.check_names(&[], false, "pre_authorize").is_err());
-        assert!(r.check_names(&[], true, "post_authorize").is_ok());
+        let params = Parameters::default();
+        assert!(r.check_names(&params, false, "pre_authorize").is_err());
+        assert!(r.check_names(&params, true, "post_authorize").is_ok());
         let auth = Ident::new("auth", Span::call_site());
         let value = quote!(&__value);
         assert_eq!(
