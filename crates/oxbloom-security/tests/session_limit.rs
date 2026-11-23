@@ -267,9 +267,10 @@ async fn parallel_logins_all_succeed_and_a_later_login_trims_the_extra_sessions(
     // Every login succeeded (`log_in` asserts the redirect) and got its own session.
     assert_eq!(cookies.len(), RACERS);
     assert!(cookies.iter().all(|c| !c.is_empty()));
-    // At most limit + racers - 1 sessions.
+    // Racing logins may each miss the others' sessions and so leave extras, but there are only
+    // RACERS sessions in total, and eviction never cuts below the limit of 2.
     let after_race = env.index.sessions_of("alice").await.unwrap().len();
-    assert!(after_race < 2 + RACERS, "{after_race} sessions");
+    assert!((2..=RACERS).contains(&after_race), "{after_race} sessions");
     // One more login at a quiet moment leaves at most the limit.
     env.browser().log_in("alice", "s3cret").await;
     let after = env.index.sessions_of("alice").await.unwrap().len();
