@@ -7,7 +7,7 @@ rust-version.workspace = true
 
 [features]
 di = ["dep:oxbloom-di"]
-jwks = ["dep:reqwest", "dep:rustls"]
+jwks = ["dep:oxbloom-http-client", "dep:rustls"]
 
 [dependencies]
 async-trait = "0.1.92"
@@ -18,13 +18,17 @@ base64 = "0.23.1"
 argon2 = { version = "0.6.0", default-features = false, features = ["alloc", "getrandom", "password-hash"] }
 http = "1.5.0"
 jsonwebtoken = { version = "12.0.0", features = ["rust_crypto"] }
-reqwest = { version = "0.13.5", default-features = false, features = ["rustls"], optional = true }
 # Only to name `rustls::ClientConfig` in `ReqwestJwksFetcher::with_tls`; the client
 # configuration a caller passes carries its own crypto provider (aws-lc-rs, never ring).
 rustls = { version = "0.23.46", default-features = false, features = ["std"], optional = true }
 oxbloom-config = { version = "0.1.0", path = "../oxbloom-config" }
 oxbloom-core = { version = "0.1.0", path = "../oxbloom-core" }
 oxbloom-di = { version = "0.1.0", path = "../oxbloom-di", optional = true }
+# `ClientBuilder` and `HttpClient` for `ReqwestJwksFetcher` (feature `jwks`); its `reqwest` feature is
+# the rustls client over aws-lc-rs.
+oxbloom-http-client = { version = "0.1.0", path = "../oxbloom-http-client", default-features = false, features = [
+    "reqwest",
+], optional = true }
 # `#[method_security]` and its attributes; the generated code names `::oxbloom_security`.
 oxbloom-macros = { version = "0.1.0", path = "../oxbloom-macros" }
 oxbloom-web = { version = "0.1.0", path = "../oxbloom-web" }
@@ -34,6 +38,8 @@ tokio = { version = "1.54.1", features = ["rt", "sync", "time"] }
 tracing = "0.1.44"
 
 [dev-dependencies]
+# `MockHttpClient` for `tests/jwks_http_client.rs` (an integration test, so no dev-dependency cycle).
+oxbloom-test = { path = "../oxbloom-test", features = ["http-client"] }
 # A local HTTPS JWKS server for `tests/jwks_tls.rs`, with a private CA generated at test time;
 # `aws-lc-rs` only, no `ring`.
 rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs", "pem"] }

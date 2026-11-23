@@ -1,4 +1,4 @@
-//! [`JwksFetcher`] over `reqwest` (cargo feature `jwks`, rustls only).
+//! [`JwksFetcher`] over `oxbloom-http-client` (cargo feature `jwks`, rustls only).
 
 use std::fmt;
 use std::sync::Arc;
@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use jsonwebtoken::jwk::JwkSet;
+use oxbloom_http_client::{ClientBuilder, HttpClient, HttpClientError, Request};
 
 use crate::{FetchError, JwksFetcher};
 
@@ -13,7 +14,8 @@ use crate::{FetchError, JwksFetcher};
 const MAX_BODY_BYTES: usize = 1_048_576;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Fetches a JWKS over HTTP(S) with `reqwest`, rustls and the platform certificate verifier, or
+/// Fetches a JWKS over HTTP(S) through an `oxbloom_http_client::HttpClient` (by default a `ReqwestClient` with rustls and the platform
+/// certificate verifier), or
 /// with a given rustls client configuration ([`ReqwestJwksFetcher::with_tls`]).
 ///
 /// Limits: the whole request (connect, headers and body) must finish within the timeout
@@ -23,7 +25,7 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 /// 1 MiB (a larger `Content-Length` is refused before reading). No cookies, credentials or
 /// `Referer` are sent. Errors carry fixed text only, never the body, URL or headers.
 ///
-/// Proxies: the `reqwest` default is kept, so the `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and
+/// Proxies: the `reqwest` default of the built client is kept, so the `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and
 /// `NO_PROXY` environment variables are honored.
 ///
 /// # Examples
@@ -40,8 +42,9 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 /// ```
 #[derive(Clone)]
 pub struct ReqwestJwksFetcher {
-    client: reqwest::Client,
-    timeout: Duration,
+    client: Arc<dyn HttpClient>,
+    /// The outer deadline of a fetch; `None` when the caller's client decides.
+    timeout: Option<Duration>,
 }
 
 impl ReqwestJwksFetcher {
@@ -79,7 +82,37 @@ impl ReqwestJwksFetcher {
     /// assert!(fetcher.is_ok());
     /// ```
     pub fn with_timeout(timeout: Duration) -> Result<Self, FetchError> {
-        Self::build(reqwest::Client::builder(), timeout)
+        Self::build(ClientBuilder::new(), timeout)
+    }
+
+    /// A fetcher over a client the caller already has, for example the application's shared
+    /// `HttpClient` bean.
+    ///
+    /// The caller's client then decides the timeout, redirects, proxies, TLS and its own body
+    /// limit; the fetcher adds no deadline of its own. It still refuses a body over 1 MiB
+    /// itself (by checking `Response::bytes().len()`, so the answer is
+    /// [`FetchError::TooLarge`]) and treats any non-2xx status, a 3xx answer included, as
+    /// [`FetchError::BadStatus`]. A client that follows redirects therefore follows them for
+    /// the fetch too.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use oxbloom_http_client::{ClientBuilder, HttpClient};
+    /// use oxbloom_security::ReqwestJwksFetcher;
+    ///
+    /// let client: Arc<dyn HttpClient> = Arc::new(ClientBuilder::new().build()?);
+    /// let fetcher = ReqwestJwksFetcher::with_client(client);
+    /// # let _ = fetcher;
+    /// # Ok::<(), oxbloom_http_client::HttpClientError>(())
+    /// ```
+    #[must_use]
+    pub fn with_client(client: Arc<dyn HttpClient>) -> Self {
+        Self {
+            client,
+            timeout: None,
+        }
     }
 
     /// A fetcher that verifies the server with `client_config` instead of the platform
@@ -128,68 +161,56 @@ impl ReqwestJwksFetcher {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn with_tls(client_config: Arc<rustls::ClientConfig>) -> Result<Self, FetchError> {
-        // reqwest takes the configuration by value; the clone shares the root store, the
-        // verifier and the certificate resolver through their `Arc`s.
-        let builder = reqwest::Client::builder()
-            .tls_backend_preconfigured(Arc::unwrap_or_clone(client_config));
-        Self::build(builder, DEFAULT_TIMEOUT)
+        Self::build(ClientBuilder::new().tls(client_config), DEFAULT_TIMEOUT)
     }
 
-    /// Applies the settings every fetcher shares and builds the client.
-    fn build(builder: reqwest::ClientBuilder, timeout: Duration) -> Result<Self, FetchError> {
+    /// Applies the settings every built fetcher shares and builds the client.
+    fn build(builder: ClientBuilder, timeout: Duration) -> Result<Self, FetchError> {
         let client = builder
-            .redirect(reqwest::redirect::Policy::none())
             .timeout(timeout)
-            .referer(false)
+            .max_body_bytes(MAX_BODY_BYTES)
+            .follow_redirects(0)
             .build()
             .map_err(|_| FetchError::Network)?;
-        Ok(Self { client, timeout })
+        Ok(Self {
+            client: Arc::new(client),
+            timeout: Some(timeout),
+        })
     }
 
     async fn fetch_inner(&self, uri: &str) -> Result<JwkSet, FetchError> {
-        let mut response = self
-            .client
-            .get(uri)
-            .header(reqwest::header::ACCEPT, "application/json")
-            .send()
-            .await
-            .map_err(map_error)?;
+        let request = Request::get(uri).header("accept", "application/json");
+        let response = self.client.execute(request).await.map_err(map_error)?;
         if !response.status().is_success() {
             return Err(FetchError::BadStatus);
         }
-        if response
-            .content_length()
-            .is_some_and(|len| len > MAX_BODY_BYTES as u64)
-        {
+        if response.bytes().len() > MAX_BODY_BYTES {
             return Err(FetchError::TooLarge);
         }
-        let mut body = Vec::new();
-        while let Some(chunk) = response.chunk().await.map_err(map_error)? {
-            if body.len() + chunk.len() > MAX_BODY_BYTES {
-                return Err(FetchError::TooLarge);
-            }
-            body.extend_from_slice(&chunk);
-        }
-        serde_json::from_slice(&body).map_err(|_| FetchError::Malformed)
+        serde_json::from_slice(response.bytes()).map_err(|_| FetchError::Malformed)
     }
 }
 
-fn map_error(err: reqwest::Error) -> FetchError {
-    if err.is_timeout() {
-        FetchError::Timeout
-    } else {
-        FetchError::Network
+fn map_error(err: HttpClientError) -> FetchError {
+    match err {
+        HttpClientError::Timeout => FetchError::Timeout,
+        HttpClientError::TooLarge => FetchError::TooLarge,
+        HttpClientError::BadStatus(_) => FetchError::BadStatus,
+        _ => FetchError::Network,
     }
 }
 
 #[async_trait]
 impl JwksFetcher for ReqwestJwksFetcher {
     async fn fetch(&self, uri: &str) -> Result<JwkSet, FetchError> {
-        // reqwest's own timeout covers the whole exchange; this outer deadline is a backstop so
-        // a slow-drip body can never outlive it.
-        tokio::time::timeout(self.timeout, self.fetch_inner(uri))
-            .await
-            .unwrap_or(Err(FetchError::Timeout))
+        match self.timeout {
+            // The client's own timeout covers the whole exchange; this outer deadline is a
+            // backstop so a slow-drip body can never outlive it.
+            Some(timeout) => tokio::time::timeout(timeout, self.fetch_inner(uri))
+                .await
+                .unwrap_or(Err(FetchError::Timeout)),
+            None => self.fetch_inner(uri).await,
+        }
     }
 }
 
