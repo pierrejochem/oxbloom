@@ -9,7 +9,8 @@
 //! [`RunningApp`] with a connected client.
 //!
 //! The features `security` and `logging` forward to the same features of `oxbloom-boot`;
-//! `TestApp::secured` needs `security`. The feature `tls` turns on `web` and boot's `ssl` and
+//! `TestApp::secured` needs `security`, which also adds `with_authentication` to run a secured
+//! service as a given caller without HTTP. The feature `tls` turns on `web` and boot's `ssl` and
 //! adds `TestClient::connect_tls` and `RunningApp::client_tls`, which send HTTPS to a server
 //! whose certificate a given CA signed. `web`, `security`, `logging` and `tls` are off by
 //! default.
@@ -33,6 +34,8 @@ mod config_dir;
 mod lifecycle;
 mod log;
 mod runner;
+#[cfg(feature = "security")]
+mod security_context;
 
 #[cfg(feature = "web")]
 pub use app::{RunningApp, Stopped, TestApp};
@@ -43,3 +46,5 @@ pub use clock::{FixedClock, ManualClock};
 pub use config_dir::TempConfigDir;
 pub use log::Log;
 pub use runner::{ContextRunner, ContextView, FailureView};
+#[cfg(feature = "security")]
+pub use security_context::with_authentication;
