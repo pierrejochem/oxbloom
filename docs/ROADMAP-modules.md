@@ -21,7 +21,7 @@ Spring Boot splits one feature into many modules: the feature itself, its `-test
 |---|---|---|
 | `actuator`, `actuator-autoconfigure`, `health` | `oxbloom-actuator` (slice C8): health, liveness and readiness, info | done in core slice C8 |
 | `micrometer-metrics`, `micrometer-observation`, `micrometer-tracing*`, `opentelemetry`, `zipkin` | `oxbloom-observability`: `tracing` spans, metrics, OpenTelemetry export | M2 |
-| `http-client`, `restclient`, `webclient`, `http-converter`, `http-codec` | `oxbloom-http-client`: outbound HTTP with timeouts, retries and SSL bundles (candidate: `reqwest`) | M1 |
+| `http-client`, `restclient`, `webclient`, `http-converter`, `http-codec` | `oxbloom-http-client`: outbound HTTP with timeouts, retries and SSL bundles (candidate: `reqwest`) | done: M1, delivered in security Slice 9 part A on 2026-11-23 (the `HttpClient` trait, `ReqwestClient`, `RetryingClient`, `InterceptedClient`, the `http.client.*` keys, `HttpClientAutoConfiguration`, `MockHttpClient`; HTTP/2, a proxy setter and per-host clients are parked) |
 | `jackson`, `jackson2`, `gson`, `jsonb`, `kotlinx-serialization-json` | covered by `serde_json` and the JSON work in slice C6; no separate crates | folded |
 | `validation` | `oxbloom-validation`: a `Validate` trait, request-body validation, error mapping (shares the config validation hook from C2b) | M4 |
 | `jdbc`, `r2dbc`, `data-jdbc`, `data-r2dbc`, `sql`, `transaction`, `jooq` | `oxbloom-data`: pooled SQL access, transactions and migrations (candidate: `sqlx`) | M3 |
@@ -48,7 +48,7 @@ Spring Boot splits one feature into many modules: the feature itself, its `-test
 
 Core slices C1 (DI v2), C3 (application lifecycle), C4 (auto-configuration) and C5 (logging) come first, because every crate below registers itself through them. Then, in this order:
 
-1. **M1 `oxbloom-http-client`.** Small, used by `oxbloom-security`'s JWKS fetcher today (`reqwest` directly), and it makes the SSL bundles (C7) useful.
+1. **M1 `oxbloom-http-client`** (done on 2026-11-23, in security Slice 9 part A). The JWKS fetcher of `oxbloom-security` runs on it, and `http.client.ssl-bundle` makes the SSL bundles (C7) useful for outbound calls.
 2. **M2 `oxbloom-observability` with the actuator (C8).** `tracing`, metrics, OpenTelemetry, health.
 3. **M3 `oxbloom-data`.** Pooled SQL, transactions, migrations. The largest design decision of the list (toolkit choice, compile-time versus runtime query checking).
 4. **M4 `oxbloom-validation`.** Shares the validation hook planned for config binding (C2b).
@@ -59,7 +59,7 @@ Core slices C1 (DI v2), C3 (application lifecycle), C4 (auto-configuration) and 
 9. **M9 `oxbloom-batch`, `oxbloom-mail`.**
 10. Store-specific crates only on demand.
 
-Security Slices 6a, 6b, 6c and 6d are done; Slices 7 to 9 interleave: sessions need Redis or SQL stores (after M3 or M5), OAuth2 login needs `oxbloom-http-client` (after M1).
+Security Slices 6a, 6b, 6c and 6d are done; Slices 7 to 9 interleave: sessions need Redis or SQL stores (after M3 or M5), OAuth2 login needs `oxbloom-http-client` (M1, done), so Slice 9 part B follows.
 
 ## What each crate follows
 

@@ -928,7 +928,7 @@ Delivered:
 - The check runs at the first poll of an async method. A denial logs the method and the principal at debug level on the target `oxbloom::security` and never an argument or a returned value. There are no configuration keys.
 - In `oxbloom-test` (feature `security`, which now also enables the optional `oxbloom-security` dependency): `with_authentication`.
 - `examples/todos`: `TodoAdmin::purge_done`, a service method secured with `#[pre_authorize(role = "ADMIN")]`, behind `DELETE /api/admin/done`, and `tests/method_security.rs` (a service test with `with_authentication` and a test of 401, 403 and 200 with the demo users).
-- ADR 0092, the guide chapter 25 (the roadmap chapter is now 26, renamed with `git mv`) and the API section.
+- ADR 0092, the guide chapter 25 (the roadmap chapter became 26 then, and is chapter 29 since Slice 9 part A) and the API section.
 
 Gate numbers at the end of Slice 8: `cargo test --workspace --all-features --no-fail-fast` 3562 passed, 0 failed, 8 ignored (3471 before Slice 8; counted by summing the `test result` lines, doctests included); `make check-examples` 79 passed (76 before), 0 failed; clippy `-D warnings` and `cargo fmt --check` clean; the boot stack probes are unchanged at 238 KB passing and 237 KB overflowing (exit 101) with no features, and 239 KB passing and 238 KB overflowing (exit 101) with all features; the fourteen `cargo build -p oxbloom-boot --no-default-features` builds of CI (none, `logging`, `web`, `security`, `ssl`, `actuator`, `actuator,logging`, `actuator,ssl`, `actuator,security`, `tasks`, `tasks,logging`, `tasks,ssl`, `tasks,security` and `tasks,actuator`) and the four `oxbloom-security` builds with `--no-default-features` (no features, `di`, `jwks`, `di,jwks`) pass; `cargo tree -i ring --workspace --all-features` finds no `ring` (cargo prints "nothing to print").
 
@@ -959,6 +959,42 @@ Rulings made during Slice 8:
 - `pre_filter` alone leaves the body unwrapped and allows any return type, `impl Trait` included, because only post steps need the wrapper.
 - `oxbloom-test` feature `security` enables an optional `oxbloom-security` dependency, because `with_authentication` names its types.
 - The `.stderr` files of the UI cases were generated and read by hand.
+
+### Security Slice 9 part A: HTTP client (`oxbloom-http-client`) — delivered, part B and C follow
+Done on 2026-11-23 (group A of Slice 9, which is also the module slice M1); the design is the Slice 9 spec `2026-11-23-oauth2-design.md` (part A) and the plan is `2026-11-23-oauth2.md` (both local files under `docs/superpowers`, named here without a link), usage is in the guide chapter `docs/guide/26-http-client.md` and `docs/API.md` (section 4.14), the decisions are in ADR 0093. The next parts are OAuth2 and OIDC login (group B, guide chapter 27) and the OAuth2 client (group C, guide chapter 28); the roadmap chapter is now 29, renamed with `git mv`.
+
+Delivered:
+- The crate `oxbloom-http-client`: the object-safe `HttpClient` trait, `Request` (builder, `set_header`, `validate`), `Body` (`Empty`, `Bytes`, `Form`, `Json`), `Response` (`bytes`, `text`, `json`, `error_for_status`), `HttpClientError` with fixed text, and `Interceptor` with `InterceptedClient`.
+- `ClientBuilder` and `ReqwestClient` (feature `reqwest`, default): rustls on `aws-lc-rs` and no `ring`, a 10 second total timeout, a 1 MiB incremental body limit, no redirects, no `Referer`, HTTP/1.1 only, an optional connect timeout, `User-Agent` and TLS client configuration. A request that `reqwest` cannot build is `InvalidRequest`. More redirects than `follow_redirects(n)` returns the last 3xx response, and `reqwest` drops `Authorization`, `Cookie`, `Cookie2`, `Proxy-Authorization` and `WWW-Authenticate` on a cross-origin redirect (tested). Proxies come from the environment (tested with `HTTP_PROXY` and `NO_PROXY`).
+- `RetryingClient` (feature `retry`): idempotent methods only, through the `RetryPolicy` of `oxbloom-tasks`; `Network`, `Timeout` and the statuses 502, 503 and 504 are retried, mapped inside `RetryPolicy::run`, and the last response is returned when the attempts run out.
+- `HttpClientSettings` (feature `config`) and the `http.client.*` keys (`timeout`, `connect-timeout`, `max-body-bytes`, `follow-redirects`, `user-agent`, `ssl-bundle`, `retry.*`); zero timeouts and body limits are rejected, the retry settings apply only when `retry.max-attempts` is set, and errors name the key and never the value.
+- `HttpClientAutoConfiguration` in `oxbloom-boot` (feature `http-client`): one `Arc<dyn HttpClient>` bean unless the application has one, the `ssl-bundle` lookup with the feature `ssl`, twelve property metadata entries and an analyzer for invalid `http.client` configuration. It is last in `auto_configurations()`.
+- `MockHttpClient` and `MockResponse` in `oxbloom-test` (feature `http-client`): exact URL rules, answers in order with the last repeating, `on_fn` in insertion order, an unmatched request is `Network`, requests recorded.
+- The JWKS fetcher of `oxbloom-security` runs on the client: `new`, `with_timeout` and `with_tls` keep their API and limits, and `with_client` is new. The `jwks` feature no longer depends on `reqwest` directly.
+- ADR 0093, the guide chapter 26 and the API section 4.14; AGENT.md, the README of the ADRs and the status chapter are updated.
+
+Limits that users must know (also in the guide):
+- HTTP/1.1 only; a TLS configuration that offers ALPN `h2` makes calls fail with `Network`.
+- Proxies come from the environment variables only.
+- The retry settings are ignored without `retry.max-attempts`, and each attempt gets the full timeout.
+- `ReqwestJwksFetcher::with_client` checks 1 MiB only after the body is buffered; the real bound is the supplied client's own limit.
+- The closure of `MockHttpClient::on_fn` runs while the mock's lock is held, so it must not call the same mock.
+
+Parked, not yet scheduled:
+- HTTP/2.
+- A proxy setter on `ClientBuilder`.
+- Per-host clients.
+- A request-level retry override.
+- Metrics and request logging.
+
+Known minors after the Slice 9 part A reviews (none changes behavior):
+- Task 1: tokio `rt` is a normal dependency although only tests and doc examples use it; `Request::method()` returns an owned clone; a long assert in a doc example; no test of the `validate()` call after the interceptors.
+- Task 2: `HTTPS_PROXY` and `ALL_PROXY` are not tested separately from `HTTP_PROXY`.
+- Task 3: no non-`ssl` test for `ssl-bundle` set without the feature `ssl`.
+- Task 4: the `Failing` stub of the fetcher test maps `Timeout` and `TooLarge` from the error value only (the real `ClientBuilder` path is covered by the existing `jwks_tls` tests).
+- The documentation minors of Tasks 3 and 4 (the `on_fn` lock note, the long line in `autoconfigure/mod.rs`, the `with_client` and struct docs of the fetcher, the `lib.rs`, AGENT.md and API.md descriptions) were fixed in the documentation task.
+
+Gate numbers at the end of Slice 9 part A: to be filled by the controller.
 
 ### C10: Test support (`oxbloom-test`)
 
@@ -1019,7 +1055,7 @@ Deferred minors from the C10b reviews:
 6. **C4 Conditions and auto-configuration** (C4a, the mechanism, and C4b, auto-configuring the existing wiring with property metadata, done).
 7. **C10 Test support** (C10a, the context runner and clock, and C10b, `TestApp`, `TestClient` and slicing, done).
 8. **C7 SSL bundles** (done) and **C8 Availability, info and health** (done), **C9a Tasks and scheduling** (done) and **C9b Retry** (done).
-9. Security Slice 8 (method security, done) and 9 (OAuth2 login and client), then `oxbloom-ai`, database, jobs and the rest of `IDEA.md`.
+9. Security Slice 8 (method security, done) and 9 (OAuth2 login and client; part A, the HTTP client and module M1, is done), then `oxbloom-ai`, database, jobs and the rest of `IDEA.md`.
 10. **C11 Service connections** after the database and queue crates exist.
 
 ## Open questions for the design steps

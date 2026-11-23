@@ -20,13 +20,14 @@ Only what is implemented and tested is documented as available. Anything else is
 | `oxbloom-ssl` | Named SSL bundles from the `ssl.*` keys (PEM and PKCS#12), reloaded when their files change, with certificate validity warnings | `SslBundles`, `SslBundle`, `SslError`, `CertValidity`, `ReloadTask`, `PROPERTIES` |
 | `oxbloom-actuator` | Operational endpoints: availability state, health indicators, build and platform info, runtime log levels, a certificate validity indicator | `Availability`, `Liveness`, `Readiness`, `Status`, `Health`, `HealthIndicator`, `HealthRunner`, `BuildInfo`, `build_info!`, `build::emit`, `Platform`, `Info`, `InfoContributor`, `ActuatorSettings`, `ActuatorController` (feature `web`), `SslHealthIndicator` (feature `ssl`) |
 | `oxbloom-tasks` | Task scheduling and retry: fixed-rate, fixed-delay and cron triggers with zones, the `Scheduler`, `RetryPolicy` with backoff and jitter, and the `#[scheduling]`, `#[scheduled]` and `#[retryable]` macros | `Trigger`, `CronExpr`, `Zone`, `TriggerError`, `parse_duration`, `Task`, `Scheduling`, `Outcome`, `TaskError`, `BoxFuture`, `RunFn`, `Scheduler`, `SchedulerConfig`, `TaskStatus`, `TasksSettings`, `RetryPolicy`, `Backoff`, `Jitter`, `RetryDefaults`, `RetryError`, `defaults`, `set_defaults`, `reset_defaults`, `scheduling`, `scheduled`, `retryable` |
+| `oxbloom-http-client` | Outbound HTTP: the `HttpClient` trait, requests and responses, a `reqwest` client with safe defaults, retry for idempotent requests, interceptors, the `http.client.*` settings | `HttpClient`, `Request`, `Response`, `Body`, `HttpClientError`, `Interceptor`, `InterceptedClient`, `ClientBuilder` and `ReqwestClient` (feature `reqwest`), `RetryingClient` (feature `retry`), `HttpClientSettings` (feature `config`) |
 | `oxbloom-cli` | `oxbloom` binary: project generator | `new`, `list` |
 | `examples/todos` | A CRUD REST API on the web, security and logging stack (controller with `#[post]`, `#[get]`, `#[put]`, `#[patch]`, `#[delete]`, a thread-safe in-memory store, `Json<T>` and `Request::json`, `tracing` events at the target `todos`, a scheduled cleanup task) | `cargo run -p todos -- --server.port=0` or `make run-todos` |
 | `examples/hello` | A small application that uses the current features (configuration and beans, trait injection, lifecycle, runners, listeners, exit codes, security and `WebServer` auto-configured through a `SecurityCustomizer` and a `dyn Controller`, a custom failure analyzer, an auto-configuration with a user override) | `cargo run -p hello -- --server.port=0` |
 
 Feature flags: `oxbloom-web/json` (default) adds `Json`, `JsonBody`, `Request::json` and the built-in `Accept` check; `oxbloom-web/gzip`, `brotli` and `zstd` enable one codec each of the compression filter and `oxbloom-web/compression` (default) enables all three (CORS and static resources need no feature); `oxbloom-web/di` adds `App::controller` and `AppError`. `oxbloom-config/di`
 adds `ContainerBuilderExt::config`, `From<ConfigError> for DiError` and `impl Environment for Config`. `oxbloom-security/jwks` adds
-`ReqwestJwksFetcher` (with `with_tls`); `oxbloom-security/di` adds `SecurityContainerExt::security_chain` and
+`ReqwestJwksFetcher` (with `with_tls` and `with_client`; it runs on `oxbloom-http-client`); `oxbloom-security/di` adds `SecurityContainerExt::security_chain` and
 `From<SecurityBuildError> for DiError`. `oxbloom-boot/web` adds `WebServer`, `BindError` and the
 port-in-use analyzer and `WebServerAutoConfiguration`; `oxbloom-boot/security` enables
 `oxbloom-security/di` and adds the security analyzer, a built-in analyzer for invalid `security.jwt`
@@ -39,7 +40,7 @@ SSL bundle errors. `oxbloom-web/tls` adds `App::serve_tls`. `oxbloom-ssl/di` imp
 `oxbloom_di::Lifecycle` for `SslBundles`. `oxbloom-boot/actuator` (it turns `web` on) enables `oxbloom-actuator/web` and adds
 `ActuatorAutoConfiguration`; with `logging` or `ssl` it also enables `oxbloom-actuator/logging` or
 `oxbloom-actuator/ssl`. `oxbloom-boot/tasks` adds `oxbloom-tasks`, `TasksAutoConfiguration`, `RetryAutoConfiguration` and
-`SchedulerService`; the macros `#[scheduling]`, `#[scheduled]` and `#[retryable]` have no feature flag. `oxbloom-test/tls` adds `TestClient::connect_tls` and
+`SchedulerService`; the macros `#[scheduling]`, `#[scheduled]` and `#[retryable]` have no feature flag. `oxbloom-http-client/json` (default) adds `Body::Json`; `reqwest` (default) adds `ClientBuilder` and `ReqwestClient`; `retry` adds `RetryingClient` and `oxbloom-tasks`; `config` (it implies `reqwest` and `retry`) adds `HttpClientSettings`. `oxbloom-boot/http-client` enables `oxbloom-http-client/config` and adds `HttpClientAutoConfiguration` and a built-in analyzer for invalid `http.client` configuration; `oxbloom-test/http-client` adds `MockHttpClient` and `MockResponse`. `oxbloom-test/tls` adds `TestClient::connect_tls` and
 `RunningApp::client_tls`. With either
 feature, `oxbloom_boot::auto_configurations()` lists the auto-configurations of the enabled
 features. `oxbloom-boot` always enables `oxbloom-config/di`.
@@ -2952,8 +2953,8 @@ let converter = JwtAuthenticationConverter::default().authorities_claim("roles",
 `JwksSource::builder(fetcher, uri)` caches keys: https only unless `allow_insecure_http()`, TTL 5 min
 (`ttl`), one refresh per 30 s (`min_refresh_interval`), stale set served up to 2x TTL and then 503, 1 MiB
 body cap, 5 s timeout, no redirects. A token with a brand-new `kid` can be rejected for up to 30 s after a key
-rotation. `ReqwestJwksFetcher` needs a C compiler (rustls with aws-lc-rs) and honors `HTTP_PROXY`/`HTTPS_PROXY`.
-Implement `JwksFetcher` yourself for tests.
+rotation. `ReqwestJwksFetcher` runs on `oxbloom-http-client` (a `ReqwestClient`, see [section 4.14](#414-oxbloom-http-client)), needs a C compiler (rustls with aws-lc-rs) and honors `HTTP_PROXY`/`HTTPS_PROXY`.
+Implement `JwksFetcher` yourself for tests, or build the fetcher over a `MockHttpClient` with `with_client`.
 
 ```rust
 let source = JwksSource::builder(
@@ -2973,6 +2974,16 @@ root store trusts only those CAs, so a certificate from a public CA is then reje
 built once, so a later change of the configuration's certificates does not reach it. `FetchError::Network`
 when the client cannot be built. An `SslBundle` gives such a configuration with
 `SslBundle::client_config`; in an application, `security.jwt.jwks-ssl-bundle` does this for you.
+
+#### `ReqwestJwksFetcher::with_client(client)` (feature `jwks`)
+
+A fetcher over an `Arc<dyn HttpClient>` that you already have, for example the application's shared client or a
+`MockHttpClient` in a test. The client then decides the timeout, redirects, proxies and TLS, and the fetcher adds no
+deadline of its own. It sends `Accept: application/json`, treats any non-2xx status as `FetchError::BadStatus` and
+refuses a body over 1 MiB with `FetchError::TooLarge`, but only after the client has buffered the body, so the real
+memory bound is the limit of the client you give. A client that follows redirects follows them for the fetch too.
+`new`, `with_timeout` and `with_tls` keep their signatures and limits (the 1 MiB check holds for them because their own
+client has that limit).
 
 ```rust
 use rustls::{ClientConfig, RootCertStore};
@@ -6450,6 +6461,162 @@ assert_eq!(defaults(), RetryDefaults::default());
 Not covered: a circuit breaker, rate limiting, retry of a plain `fn` or on a result value, per-error backoff,
 named policies in configuration, metrics, an actuator view and a `recover` fallback method.
 
+### 4.14 `oxbloom-http-client`
+
+Outbound HTTP: the `HttpClient` trait, `Request` and `Response`, a `reqwest` client with safe defaults, retry for idempotent requests, interceptors, the `http.client.*` settings, the `HttpClientAutoConfiguration` bean in `oxbloom-boot` (feature `http-client`) and `MockHttpClient` in `oxbloom-test` (feature `http-client`). The guide chapter is [HTTP client](guide/26-http-client.md#http-client) and the decisions are in [ADR 0093](adr/0093-http-client.md). Rules to remember:
+
+- A status that is not 2xx is a normal `Response`. `Response::error_for_status` turns it into `HttpClientError::BadStatus`.
+- The text of every `HttpClientError` is fixed. No error and no `Debug` output holds a URL, a header value, a body or a status code in its text.
+- A request that `reqwest` cannot build (for example a bad URL) is `InvalidRequest`, not `Network`.
+- `Request::header` cannot fail: a bad header name or value marks the request invalid. Every client calls `Request::validate()` before it sends, and so should an `HttpClient` you write.
+- A `ReqwestClient` has a 10 second total timeout, a 1 MiB body limit, no redirects and no `Referer`, and speaks HTTP/1.1 only. Proxies come from `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and `NO_PROXY`, read when the client is built; there is no setter.
+- When a request needs more than `follow_redirects(n)` redirects, the last 3xx response is returned. On a redirect to another scheme, host or port, `Authorization`, `Cookie`, `Cookie2`, `Proxy-Authorization` and `WWW-Authenticate` are dropped.
+- `RetryingClient` retries only `GET`, `HEAD`, `PUT`, `DELETE` and `OPTIONS`, on `Network`, `Timeout` and the statuses 502, 503 and 504, and returns the last response when the attempts run out. Each attempt gets the full timeout.
+- The retry settings apply only when `http.client.retry.max-attempts` is set, and the client is wrapped only when it is above 1.
+
+Imports for the examples below:
+
+```rust
+use std::sync::Arc;
+use http::Method;
+use oxbloom_config::Config;
+use oxbloom_http_client::{
+    Body, ClientBuilder, HttpClient, HttpClientError, HttpClientSettings, InterceptedClient, Interceptor,
+    Request, Response, RetryingClient,
+};
+use oxbloom_test::{MockHttpClient, MockResponse};
+```
+
+#### `HttpClient`
+
+```rust
+#[async_trait::async_trait]
+pub trait HttpClient: Send + Sync {
+    async fn execute(&self, request: Request) -> Result<Response, HttpClientError>;
+}
+```
+
+Object safe; hold an `Arc<dyn HttpClient>`. Implemented by `ReqwestClient`, `RetryingClient`, `InterceptedClient` and `MockHttpClient`.
+
+```rust
+async fn ping(client: Arc<dyn HttpClient>) -> Result<String, HttpClientError> {
+    client.execute(Request::get("https://api.example.test/ping")).await?.text()
+}
+```
+
+#### `Request` and `Body`
+
+`Request::new(method, url)`, `Request::get(url)` and `Request::post(url)` start a request. The builder methods are `header(name, value)` (replaces an existing value), `body(Body)` and `timeout(Duration)`. `set_header(&mut self, name, value) -> Result<(), HttpClientError>` is for interceptors. The getters are `method()` (an owned `Method`), `url()`, `headers()`, `body_ref()`, `timeout_value()` and `validate()`. `Body` is `Empty`, `Bytes(Vec<u8>)`, `Form(Vec<(String, String)>)` and, with the feature `json`, `Json(serde_json::Value)`; the matching `Content-Type` is set when you did not set one.
+
+```rust
+let request = Request::post("https://idp.example.test/token")
+    .header("accept", "application/json")
+    .body(Body::Form(vec![("grant_type".into(), "client_credentials".into())]))
+    .timeout(std::time::Duration::from_secs(3));
+assert_eq!(request.url(), "https://idp.example.test/token");
+assert!(request.validate().is_ok());
+assert_eq!(Request::get("https://x.test/").header("bad name", "v").validate(), Err(HttpClientError::InvalidRequest));
+```
+
+#### `Response`
+
+`Response::new(status, headers, body)`, `status()`, `headers()`, `bytes()`, `text()` (`Decode` for non-UTF-8), `json::<T>()` (`Decode` on bad JSON) and `error_for_status()`.
+
+```rust
+let response = Response::new(http::StatusCode::OK, http::HeaderMap::new(), br#"{"n":1}"#.to_vec());
+let value: serde_json::Value = response.json()?;
+assert_eq!(value["n"], 1);
+```
+
+#### `HttpClientError`
+
+`Timeout`, `Network`, `TooLarge`, `BadStatus(StatusCode)`, `Build`, `Decode` and `InvalidRequest`, a `#[non_exhaustive]` enum with fixed text, for example `"the HTTP request timed out"`.
+
+#### `ClientBuilder` and `ReqwestClient` (feature `reqwest`, default)
+
+`ClientBuilder::new()` has the defaults above. `timeout(Duration)`, `connect_timeout(Duration)`, `max_body_bytes(usize)`, `follow_redirects(usize)`, `user_agent(&str)` and `tls(Arc<rustls::ClientConfig>)` change them, and `build()` returns `Result<ReqwestClient, HttpClientError>` (`Build` for a bad `User-Agent` or a failed TLS setup). `ReqwestClient` is `Clone` and the clones share the settings. `tls` takes a configuration built on `aws-lc-rs`, for example `SslBundle::client_config`; a configuration whose ALPN offers `h2` makes calls fail with `Network`, because only HTTP/1.1 is built in.
+
+```rust
+let client = ClientBuilder::new()
+    .timeout(std::time::Duration::from_secs(5))
+    .max_body_bytes(64 * 1024)
+    .follow_redirects(2)
+    .user_agent("billing/2.0")
+    .build()?;
+```
+
+#### `RetryingClient` (feature `retry`)
+
+`RetryingClient::new(inner: Arc<dyn HttpClient>, policy: oxbloom_tasks::RetryPolicy)`.
+
+```rust
+let policy = oxbloom_tasks::RetryPolicy { max_attempts: 3, ..Default::default() };
+let client = RetryingClient::new(Arc::new(ClientBuilder::new().build()?), policy);
+```
+
+#### `Interceptor` and `InterceptedClient`
+
+`Interceptor::before(&self, request: &mut Request) -> Result<(), HttpClientError>` runs before the send. `InterceptedClient::new(inner)` and `.with(Arc<dyn Interceptor>)` register interceptors, which run in registration order; an error stops the request. `execute` validates the request before the interceptors and again after them.
+
+```rust
+struct Trace;
+
+#[async_trait::async_trait]
+impl Interceptor for Trace {
+    async fn before(&self, request: &mut Request) -> Result<(), HttpClientError> {
+        request.set_header("x-trace", "on")
+    }
+}
+
+let client = InterceptedClient::new(Arc::new(ClientBuilder::new().build()?)).with(Arc::new(Trace));
+```
+
+#### `HttpClientSettings` (feature `config`)
+
+`HttpClientSettings::from_config(&Config) -> Result<_, ConfigError>`, `Default` and `build(tls: Option<Arc<rustls::ClientConfig>>) -> Result<Arc<dyn HttpClient>, HttpClientError>`. The public fields are `timeout`, `connect_timeout`, `max_body_bytes`, `follow_redirects`, `user_agent`, `ssl_bundle` and `retry: Option<RetryPolicy>`. `build` does not resolve `ssl_bundle`; the caller does and passes the result as `tls`. An error names the full key and never the value.
+
+```rust
+let config = Config::from_str("[http.client]\ntimeout = \"3s\"\n[http.client.retry]\nmax-attempts = 2")?;
+let settings = HttpClientSettings::from_config(&config)?;
+let client: Arc<dyn HttpClient> = settings.build(None)?;
+```
+
+| Key | Default | Meaning |
+|---|---|---|
+| `http.client.timeout` | `10s` | The total time of a request, connect included. Above zero. |
+| `http.client.connect-timeout` | unset | The time to connect. Above zero. |
+| `http.client.max-body-bytes` | `1048576` | The response body limit. At least 1. |
+| `http.client.follow-redirects` | `0` | How many redirects are followed. |
+| `http.client.user-agent` | unset | The `User-Agent` header. Not empty. |
+| `http.client.ssl-bundle` | unset | Boot (feature `ssl`): the bundle whose client configuration the client uses. Not empty; unknown names list the bundles. |
+| `http.client.retry.max-attempts` | unset | Turns the retry settings on; the client retries when it is above 1. |
+| `http.client.retry.backoff` | `exponential` | `fixed` or `exponential`. |
+| `http.client.retry.initial` | `100ms` | The delay before the first retry; not above `max-delay`. |
+| `http.client.retry.multiplier` | `2.0` | Finite and at least 1.0. |
+| `http.client.retry.max-delay` | `30s` | The cap on every delay. |
+| `http.client.retry.jitter` | `full` | `none`, `full` or `equal`. |
+
+An unknown key under `http.client` or `http.client.retry` is an error. The `retry` keys other than `max-attempts` are checked and then ignored when `max-attempts` is not set.
+
+#### `HttpClientAutoConfiguration` (feature `http-client` of `oxbloom-boot`)
+
+Registers one `Arc<dyn HttpClient>` bean built from `HttpClientSettings`, unless the application registers a `dyn HttpClient` bean (`on_missing_bean`). It has no conditions, so the bean exists with the defaults when the section is missing. `auto_configurations()` lists it last. With the feature `ssl`, `http.client.ssl-bundle` resolves a bundle of the `SslBundles` bean; without it the key is an error. A bad value fails the start with `DiError::Creation` whose source is the `ConfigError` for the key. `HttpClientAutoConfiguration::properties()` lists the twelve keys as property metadata.
+
+```rust
+// In a bean: `client: Arc<dyn HttpClient>` is the configured client.
+// OxbloomApplication::builder().auto_configuration::<HttpClientAutoConfiguration>()
+```
+
+#### `MockHttpClient` and `MockResponse` (feature `http-client` of `oxbloom-test`)
+
+`MockResponse::status(code)` (panics for an invalid code) with `header(name, value)`, `json(&value)`, `text(&str)` and `bytes(Vec<u8>)`; a `Response` converts into one. `MockHttpClient::new()`, `on(method, url, response) -> &Self`, `on_fn(f) -> &Self`, `requests()` and `request_count()`. `on` matches the method and the exact URL, a second `on` for the same pair adds a later answer, answers are served in order and the last repeats. `on_fn` closures and `on` rules are tried in the order they were added, and a closure returns `None` to pass. A request that no rule answers is `Network`. Every valid request is recorded; an invalid one is an error and is not recorded. The closure of `on_fn` runs while the mock's state lock is held, so it must not call the same mock.
+
+```rust
+let mock = Arc::new(MockHttpClient::new());
+mock.on(Method::GET, "https://idp.example.test/jwks", MockResponse::status(200).text("{}"));
+let fetcher = oxbloom_security::ReqwestJwksFetcher::with_client(mock.clone());
+```
+
 ## 5. Recipe: a complete small service
 
 A configured greeting, a controller with an injected bean, and a web server started through
@@ -6552,10 +6719,10 @@ exclusion through configuration keys, a runtime `on_feature` condition (use `#[c
 and naming condition-skipped registrations in the missing-bean failure report. For TLS and SSL bundles: mutual
 TLS and `client-auth`, an HTTP to HTTPS redirect, ALPN `h2` (HTTP/2), hot reload of the JWKS client (it is built
 once at startup), OCSP stapling, revocation checks, JKS keystores, encrypted PEM private keys, a file-system
-watcher (reload polls), SSL bundles for database or HTTP clients, and a limit on concurrent TLS handshakes.
+watcher (reload polls), SSL bundles for database clients (the HTTP client takes `http.client.ssl-bundle`), and a limit on concurrent TLS handshakes.
 For the actuator: a separate management port, roles per endpoint, `/metrics`, `/env`, `/beans` and
 `/threaddump` endpoints, a `diskSpace` indicator, and resetting a log level through `configuredLevel: null`.
-For task scheduling: retry, backoff and jitter (C9b), an actuator `/scheduledtasks` endpoint, persistence and
+For the HTTP client: HTTP/2, a proxy setter (proxies come from the environment), per-host clients, a request-level retry override, streaming bodies, response interceptors and metrics. For task scheduling: retry, backoff and jitter (C9b), an actuator `/scheduledtasks` endpoint, persistence and
 catch-up of missed runs, distributed locking, adding or removing tasks at run time, per-task concurrency limits,
 a backward clock clamp for cron tasks, and one duration grammar for configuration and attributes.
 Do not document these as available.

@@ -58,8 +58,8 @@ use crate::autoconfig::AutoConfigurations;
 /// `SslAutoConfiguration`; with `actuator`, `ActuatorAutoConfiguration`; with `web`,
 /// `RequestLogAutoConfiguration` and then `WebServerAutoConfiguration` (after the others when
 /// several features are on); with `tasks`, `TasksAutoConfiguration` and then
-/// `RetryAutoConfiguration`; with `http-client`, `HttpClientAutoConfiguration` last. Remove one with
-/// [`exclude`](crate::OxbloomApplicationBuilder::exclude).
+/// `RetryAutoConfiguration`; with `http-client`, `HttpClientAutoConfiguration` last. Remove
+/// one with [`exclude`](crate::OxbloomApplicationBuilder::exclude).
 ///
 /// # Examples
 ///

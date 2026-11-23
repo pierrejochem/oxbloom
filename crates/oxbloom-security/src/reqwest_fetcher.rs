@@ -14,19 +14,22 @@ use crate::{FetchError, JwksFetcher};
 const MAX_BODY_BYTES: usize = 1_048_576;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Fetches a JWKS over HTTP(S) through an `oxbloom_http_client::HttpClient` (by default a `ReqwestClient` with rustls and the platform
-/// certificate verifier), or
-/// with a given rustls client configuration ([`ReqwestJwksFetcher::with_tls`]).
+/// Fetches a JWKS over HTTP(S) through an `oxbloom_http_client::HttpClient`. By default that is
+/// a `ReqwestClient` with rustls and the platform certificate verifier; with
+/// [`ReqwestJwksFetcher::with_tls`] it verifies the server with a given rustls client
+/// configuration, and with [`ReqwestJwksFetcher::with_client`] it uses a client you supply.
 ///
-/// Limits: the whole request (connect, headers and body) must finish within the timeout
-/// (default 5 seconds); redirects are never followed, so a 3xx answer is
-/// [`FetchError::BadStatus`]; a non-2xx status is [`FetchError::BadStatus`]; the body is read
-/// incrementally and the fetch fails with [`FetchError::TooLarge`] as soon as it exceeds
-/// 1 MiB (a larger `Content-Length` is refused before reading). No cookies, credentials or
-/// `Referer` are sent. Errors carry fixed text only, never the body, URL or headers.
+/// Limits, for a fetcher built with `new`, `with_timeout` or `with_tls`: the whole request
+/// (connect, headers and body) must finish within the timeout (default 5 seconds); redirects
+/// are never followed, so a 3xx answer is [`FetchError::BadStatus`]; a non-2xx status is
+/// [`FetchError::BadStatus`]; the body is read incrementally and the fetch fails with
+/// [`FetchError::TooLarge`] as soon as it exceeds 1 MiB (a larger `Content-Length` is refused
+/// before reading). No cookies, credentials or `Referer` are sent. Errors carry fixed text
+/// only, never the body, URL or headers. A fetcher built with `with_client` follows the
+/// limits of the client you supply instead; see [`ReqwestJwksFetcher::with_client`].
 ///
-/// Proxies: the `reqwest` default of the built client is kept, so the `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and
-/// `NO_PROXY` environment variables are honored.
+/// Proxies: the `reqwest` default of the built client is kept, so the `HTTP_PROXY`,
+/// `HTTPS_PROXY`, `ALL_PROXY` and `NO_PROXY` environment variables are honored.
 ///
 /// # Examples
 ///
@@ -89,11 +92,12 @@ impl ReqwestJwksFetcher {
     /// `HttpClient` bean.
     ///
     /// The caller's client then decides the timeout, redirects, proxies, TLS and its own body
-    /// limit; the fetcher adds no deadline of its own. It still refuses a body over 1 MiB
-    /// itself (by checking `Response::bytes().len()`, so the answer is
-    /// [`FetchError::TooLarge`]) and treats any non-2xx status, a 3xx answer included, as
-    /// [`FetchError::BadStatus`]. A client that follows redirects therefore follows them for
-    /// the fetch too.
+    /// limit; the fetcher adds no deadline of its own. It also refuses a body over 1 MiB
+    /// (answer [`FetchError::TooLarge`]), but that check runs after the client has buffered
+    /// the whole body, so the real memory bound is the body limit of the supplied client, not
+    /// 1 MiB. Give a client with a `max_body_bytes` that you accept. Any non-2xx status, a 3xx
+    /// answer included, is [`FetchError::BadStatus`]. A client that follows redirects
+    /// therefore follows them for the fetch too.
     ///
     /// # Examples
     ///
@@ -214,6 +218,8 @@ impl JwksFetcher for ReqwestJwksFetcher {
     }
 }
 
+/// The `Debug` output shows only the outer `timeout`, as an `Option<Duration>` (`None` for a
+/// fetcher built with `with_client`), never the client, a URL or a header.
 impl fmt::Debug for ReqwestJwksFetcher {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ReqwestJwksFetcher")

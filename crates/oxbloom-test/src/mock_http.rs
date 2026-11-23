@@ -293,6 +293,9 @@ impl MockHttpClient {
     /// Answers with `f`: it gets the request and returns the response, or `None` to let a
     /// later rule answer.
     ///
+    /// The closure runs while the mock's state lock is held, so it must not call the same
+    /// mock (for example through `execute`, `requests` or `on`): that would deadlock.
+    ///
     /// # Examples
     ///
     /// ```

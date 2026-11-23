@@ -81,9 +81,10 @@
 //!
 //! # Features
 //!
-//! - `jwks`: [`ReqwestJwksFetcher`] (reqwest with rustls), with `ReqwestJwksFetcher::with_tls`
-//!   for a custom rustls client configuration such as one from an SSL bundle. Needs a C
-//!   compiler to build.
+//! - `jwks`: [`ReqwestJwksFetcher`], which runs on `oxbloom-http-client` (rustls with
+//!   `aws-lc-rs`), with `ReqwestJwksFetcher::with_tls` for a custom rustls client
+//!   configuration such as one from an SSL bundle and `ReqwestJwksFetcher::with_client` for a
+//!   client you already have. Needs a C compiler to build.
 //! - `di`: [`SecurityContainerExt`] registers a built chain in a `oxbloom-di` container.
 
 mod authentication;
