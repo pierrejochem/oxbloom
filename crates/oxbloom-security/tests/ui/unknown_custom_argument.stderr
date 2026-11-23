@@ -1,0 +1,5 @@
+error: `account` is not a parameter of the method
+  --> tests/ui/unknown_custom_argument.rs:11:35
+   |
+11 |     #[pre_authorize(custom = owns(account))]
+   |                                   ^^^^^^^

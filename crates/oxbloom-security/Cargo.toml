@@ -25,6 +25,8 @@ rustls = { version = "0.23.46", default-features = false, features = ["std"], op
 oxbloom-config = { version = "0.1.0", path = "../oxbloom-config" }
 oxbloom-core = { version = "0.1.0", path = "../oxbloom-core" }
 oxbloom-di = { version = "0.1.0", path = "../oxbloom-di", optional = true }
+# `#[method_security]` and its attributes; the generated code names `::oxbloom_security`.
+oxbloom-macros = { version = "0.1.0", path = "../oxbloom-macros" }
 oxbloom-web = { version = "0.1.0", path = "../oxbloom-web" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
@@ -38,6 +40,8 @@ rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs"
 rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 tokio-rustls = { version = "0.26.6", default-features = false }
 tempfile = "3.27.0"
+# Compile-fail tests of `#[method_security]` in `tests/method_security_ui.rs`.
+trybuild = "1.0.122"
 # Log capture in `tests/session_filter.rs`.
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["std", "fmt"] }
 tokio = { version = "1.54.1", features = ["rt", "rt-multi-thread", "macros", "test-util", "net", "io-util", "sync"] }

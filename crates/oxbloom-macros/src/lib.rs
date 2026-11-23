@@ -1,7 +1,9 @@
 //! Attribute macros for Oxbloom: controllers (`#[controller]` and the route attributes),
 //! dependency injection (`#[component]`, `#[configuration]`, `#[bean]`, used through
 //! `oxbloom_di`, and `#[auto_configuration]`, used through `oxbloom_boot`), scheduled tasks and
-//! retry (`#[scheduling]`, `#[scheduled]` and `#[retryable]`, used through `oxbloom_tasks`).
+//! retry (`#[scheduling]`, `#[scheduled]` and `#[retryable]`, used through `oxbloom_tasks`), and
+//! method security (`#[method_security]` with `#[pre_authorize]`, used through
+//! `oxbloom_security`).
 //!
 //! Controllers:
 //! `#[controller("/base")]` goes on an `impl` block. Methods annotated with
@@ -14,6 +16,7 @@
 mod auto_configuration;
 mod component;
 mod configuration;
+mod method_security;
 mod options;
 mod retryable;
 mod scheduling;
@@ -1061,4 +1064,229 @@ pub fn scheduled(_args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn retryable(args: TokenStream, input: TokenStream) -> TokenStream {
     retryable::expand(args.into(), input.into()).into()
+}
+
+/// Checks the caller's `Authentication` before a method body runs. Put it on an inherent `impl`
+/// block and give each secured method a `#[pre_authorize(<rule>)]` attribute.
+///
+/// Use it through `oxbloom_security::method_security`; the generated code refers to the
+/// `oxbloom_security` crate by that name, so the dependency must not be renamed in
+/// `Cargo.toml`. The rule is checked against `SecurityContext::current()`, which the security
+/// filter chain sets for every request; outside any `SecurityContext::scope` the caller is
+/// anonymous. Methods without an attribute stay as written.
+///
+/// Rules, all checked at compile time:
+///
+/// - `role = "ADMIN"` and `any_role("ADMIN", "AUDITOR")`: the caller holds `ROLE_ADMIN`, or
+///   one of the roles;
+/// - `authority = "accounts:read"` and `any_authority("a", "b")`: the exact authority, or one
+///   of them;
+/// - `authenticated` (also a caller restored from a remember-me cookie) and
+///   `fully_authenticated` (not a remembered caller);
+/// - `permit_all` and `deny_all`;
+/// - `all(<rule>, ..)`, `any(<rule>, ..)` and `not(<rule>)` to combine rules;
+/// - `custom = check(arg1, arg2)` calls the synchronous function
+///   `check(auth: Option<&Authentication>, &arg1, &arg2) -> bool`, where each name is a
+///   parameter of the method.
+///
+/// A secured method, `async` or not, must return `Result<T, E>` with
+/// `E: From<oxbloom_security::AccessDenied>`, for example `AccessDenied` itself or
+/// `oxbloom_web::HttpError` (401 for an anonymous caller, 403 otherwise). When the rule fails,
+/// the method returns `Err(AccessDenied::Unauthenticated.into())` for an anonymous caller and
+/// `Err(AccessDenied::Forbidden.into())` for any other caller, without running the body, and
+/// logs the method (`Type::method`) and the principal at debug level on the target
+/// `oxbloom::security`. Argument values are never logged.
+///
+/// It combines with `#[controller]` on the same block, in either order, so a handler can carry
+/// both a route and a rule. A trait impl, a repeated `#[pre_authorize]`, an unknown rule, a
+/// `custom` argument that is not a parameter of the method, the name `returned` (reserved for
+/// `#[post_authorize]`) and a method whose return type is visibly not a `Result` are compile
+/// errors.
+///
+/// # Examples
+///
+/// ```
+/// use oxbloom_security::{
+///     AccessDenied, Authentication, GrantedAuthority, SecurityContext, method_security,
+/// };
+///
+/// /// True when the caller owns the account.
+/// fn owns(auth: Option<&Authentication>, owner: &String) -> bool {
+///     auth.is_some_and(|a| a.principal() == owner)
+/// }
+///
+/// struct Accounts;
+///
+/// #[method_security]
+/// impl Accounts {
+///     #[pre_authorize(role = "ADMIN")]
+///     async fn close(&self, id: u64) -> Result<u64, AccessDenied> {
+///         Ok(id)
+///     }
+///
+///     #[pre_authorize(any(role = "ADMIN", custom = owns(owner)))]
+///     fn rename(&self, owner: String, name: &str) -> Result<String, AccessDenied> {
+///         Ok(format!("{owner}: {name}"))
+///     }
+/// }
+///
+/// # tokio::runtime::Builder::new_current_thread().build()?.block_on(async {
+/// let admin = Authentication::new("ada", [GrantedAuthority::new("ROLE_ADMIN")]);
+/// let closed = SecurityContext::scope(SecurityContext::authenticated(admin), Accounts.close(7));
+/// assert_eq!(closed.await, Ok(7));
+///
+/// let bob = SecurityContext::authenticated(Authentication::new("bob", []));
+/// let renamed = SecurityContext::scope(bob.clone(), async {
+///     Accounts.rename("bob".to_owned(), "savings")
+/// });
+/// assert_eq!(renamed.await.as_deref(), Ok("bob: savings"));
+/// let denied = SecurityContext::scope(bob, Accounts.close(7));
+/// assert_eq!(denied.await, Err(AccessDenied::Forbidden));
+///
+/// // Outside a scope the caller is anonymous.
+/// assert_eq!(Accounts.close(7).await, Err(AccessDenied::Unauthenticated));
+/// # });
+/// # Ok::<(), std::io::Error>(())
+/// ```
+///
+/// On a controller, a denial becomes a 401 or 403 answer:
+///
+/// ```
+/// use std::sync::Arc;
+/// use oxbloom_security::{SecurityContext, method_security};
+/// use oxbloom_web::{App, HttpError, HttpMethod, Request, controller};
+///
+/// struct Admin;
+///
+/// #[controller("/admin")]
+/// #[method_security]
+/// impl Admin {
+///     #[get("/stats")]
+///     #[pre_authorize(role = "ADMIN")]
+///     async fn stats(&self, _req: Request) -> Result<&'static str, HttpError> {
+///         Ok("42 users")
+///     }
+/// }
+///
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let app = App::new().routes(Arc::new(Admin).routes())?;
+/// let res = SecurityContext::scope(
+///     SecurityContext::anonymous(),
+///     app.handle(Request::new(HttpMethod::Get, "/admin/stats")),
+/// )
+/// .await;
+/// assert_eq!(res.status(), 401);
+/// # Ok(())
+/// # }
+/// ```
+#[proc_macro_attribute]
+pub fn method_security(args: TokenStream, input: TokenStream) -> TokenStream {
+    let item = parse_macro_input!(input as ItemImpl);
+    method_security::expand(args.into(), item)
+        .unwrap_or_else(Error::into_compile_error)
+        .into()
+}
+
+/// Defines the method attributes of `#[method_security]`. Outside such an impl each one is a
+/// compile error; the item stays, so the misplaced attribute is the only error.
+macro_rules! method_security_attr {
+    ($($(#[$doc:meta])* $name:ident;)*) => {$(
+        $(#[$doc])*
+        #[proc_macro_attribute]
+        pub fn $name(_args: TokenStream, input: TokenStream) -> TokenStream {
+            let input = TokenStream2::from(input);
+            // The call site of an attribute macro is the attribute itself.
+            let error = Error::new(
+                proc_macro2::Span::call_site(),
+                concat!("#[", stringify!($name), "] is only valid inside a #[method_security] impl"),
+            )
+            .into_compile_error();
+            quote! { #error #input }.into()
+        }
+    )*};
+}
+
+method_security_attr! {
+    /// Checks a rule before the method body runs; only valid on a method of a
+    /// `#[method_security]` impl, which lists the rules.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_security::{AccessDenied, Authentication, SecurityContext, method_security};
+    ///
+    /// struct Profile;
+    ///
+    /// #[method_security]
+    /// impl Profile {
+    ///     #[pre_authorize(fully_authenticated)]
+    ///     fn change_password(&self) -> Result<(), AccessDenied> {
+    ///         Ok(())
+    ///     }
+    /// }
+    ///
+    /// # tokio::runtime::Builder::new_current_thread().build()?.block_on(async {
+    /// let remembered = Authentication::new("ada", []).remembered();
+    /// let ctx = SecurityContext::authenticated(remembered);
+    /// let result = SecurityContext::scope(ctx, async { Profile.change_password() }).await;
+    /// assert_eq!(result, Err(AccessDenied::Forbidden));
+    /// # });
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
+    pre_authorize;
+    /// Reserved for a check after the method body returned; not available yet, and outside a
+    /// `#[method_security]` impl it is a compile error.
+    ///
+    /// # Examples
+    ///
+    /// ```compile_fail
+    /// use oxbloom_security::{AccessDenied, post_authorize};
+    ///
+    /// struct Accounts;
+    ///
+    /// impl Accounts {
+    ///     #[post_authorize(authenticated)]
+    ///     fn balance(&self) -> Result<u64, AccessDenied> {
+    ///         Ok(1)
+    ///     }
+    /// }
+    /// ```
+    post_authorize;
+    /// Reserved for filtering a `Vec` argument before the method body runs; not available yet,
+    /// and outside a `#[method_security]` impl it is a compile error.
+    ///
+    /// # Examples
+    ///
+    /// ```compile_fail
+    /// use oxbloom_security::{AccessDenied, pre_filter};
+    ///
+    /// struct Accounts;
+    ///
+    /// impl Accounts {
+    ///     #[pre_filter(arg = ids, custom = keep)]
+    ///     fn close_all(&self, ids: Vec<u64>) -> Result<usize, AccessDenied> {
+    ///         Ok(ids.len())
+    ///     }
+    /// }
+    /// ```
+    pre_filter;
+    /// Reserved for filtering a returned `Vec` after the method body ran; not available yet,
+    /// and outside a `#[method_security]` impl it is a compile error.
+    ///
+    /// # Examples
+    ///
+    /// ```compile_fail
+    /// use oxbloom_security::{AccessDenied, post_filter};
+    ///
+    /// struct Accounts;
+    ///
+    /// impl Accounts {
+    ///     #[post_filter(custom = keep)]
+    ///     fn list(&self) -> Result<Vec<u64>, AccessDenied> {
+    ///         Ok(Vec::new())
+    ///     }
+    /// }
+    /// ```
+    post_filter;
 }

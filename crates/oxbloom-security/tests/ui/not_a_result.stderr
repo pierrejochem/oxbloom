@@ -1,0 +1,11 @@
+error: the method `close` has #[pre_authorize], so it must return `Result<T, E>` with `E: From<oxbloom_security::AccessDenied>`
+ --> tests/ui/not_a_result.rs:8:5
+  |
+8 |     fn close(&self) {}
+  |     ^^^^^^^^^^^^^^^
+
+error: the method `count` has #[pre_authorize], so it must return `Result<T, E>` with `E: From<oxbloom_security::AccessDenied>`
+  --> tests/ui/not_a_result.rs:11:24
+   |
+11 |     fn count(&self) -> (u32, u32) {
+   |                        ^^^^^^^^^^

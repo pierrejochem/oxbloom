@@ -1,0 +1,31 @@
+error: #[pre_authorize] is only valid inside a #[method_security] impl
+ --> tests/ui/outside_method_security.rs:6:5
+  |
+6 |     #[pre_authorize(role = "ADMIN")]
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `pre_authorize` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: #[post_authorize] is only valid inside a #[method_security] impl
+  --> tests/ui/outside_method_security.rs:11:5
+   |
+11 |     #[post_authorize(authenticated)]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the attribute macro `post_authorize` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: #[pre_filter] is only valid inside a #[method_security] impl
+  --> tests/ui/outside_method_security.rs:16:5
+   |
+16 |     #[pre_filter(arg = items, custom = keep)]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the attribute macro `pre_filter` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: #[post_filter] is only valid inside a #[method_security] impl
+  --> tests/ui/outside_method_security.rs:22:5
+   |
+22 |     #[post_filter(custom = keep)]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the attribute macro `post_filter` (in Nightly builds, run with -Z macro-backtrace for more info)

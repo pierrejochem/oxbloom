@@ -1,0 +1,5 @@
+error: the method `close` has two #[pre_authorize] attributes; combine the rules with `all(..)` or `any(..)`
+ --> tests/ui/repeated_pre_authorize.rs:8:5
+  |
+8 |     #[pre_authorize(authenticated)]
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

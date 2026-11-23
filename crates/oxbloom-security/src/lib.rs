@@ -139,6 +139,7 @@ pub use jwt::{
 };
 pub use matcher::RequestMatcher;
 pub use method_security::{__private, AccessDenied, spawn};
+pub use oxbloom_macros::{method_security, post_authorize, post_filter, pre_authorize, pre_filter};
 pub use password::{
     ARGON2_ID, Argon2PasswordEncoder, DelegatingPasswordEncoder, PasswordEncoder,
     PasswordEncoderError,
