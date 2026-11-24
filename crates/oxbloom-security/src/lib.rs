@@ -144,7 +144,8 @@ pub use matcher::RequestMatcher;
 pub use method_security::{__private, AccessDenied, spawn};
 #[cfg(feature = "oauth2")]
 pub use oauth2::{
-    ClientAuthentication, ClientRegistration, OAuth2Login, OAuth2Settings, ProviderConfig,
+    AccessToken, ClientAuthentication, ClientRegistration, OAuth2Client, OAuth2Login,
+    OAuth2Settings, ProviderConfig, TokenError,
 };
 
 /// The steps of an OAuth2 login, reachable for the integration tests and the doc examples

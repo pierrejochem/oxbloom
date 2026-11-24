@@ -255,6 +255,28 @@ impl TokenEndpoint {
             .await
     }
 
+    /// Requests a token with the `client_credentials` grant: `grant_type=client_credentials`
+    /// and the registration's scopes joined by spaces (the field is left out when there are
+    /// none), with the client authentication of the registration.
+    ///
+    /// A public client (`client-authentication = none`) has nothing to authenticate with, so
+    /// the grant is refused with [`OAuth2Error::Config`] before any request is made.
+    pub(crate) async fn client_credentials(
+        &self,
+        registration: &ClientRegistration,
+        metadata: &ProviderMetadata,
+    ) -> Result<TokenResponse, OAuth2Error> {
+        if registration.client_authentication == ClientAuthentication::None {
+            return Err(OAuth2Error::Config);
+        }
+        let mut form = vec![("grant_type".to_owned(), "client_credentials".to_owned())];
+        if !registration.scopes.is_empty() {
+            form.push(("scope".to_owned(), registration.scopes.join(" ")));
+        }
+        self.request(registration, &metadata.token_endpoint, form)
+            .await
+    }
+
     /// Sends a token request with `form` plus the client authentication, and reads the answer.
     async fn request(
         &self,

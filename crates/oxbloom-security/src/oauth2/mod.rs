@@ -7,6 +7,8 @@
 //! chain.
 
 mod authorization;
+mod cache;
+mod client;
 mod error;
 mod id_token;
 mod login;
@@ -19,6 +21,7 @@ mod stored;
 mod token;
 mod user;
 
+pub use client::{AccessToken, OAuth2Client, TokenError};
 pub use error::OAuth2Error;
 pub use id_token::{IdTokenClaims, IdTokenValidator};
 pub use login::OAuth2Login;
