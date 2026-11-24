@@ -16,4 +16,9 @@
 //! assert_eq!(error.to_string(), "attempted to acquire a connection on a closed pool");
 //! ```
 
+mod error;
+mod settings;
+
+pub use error::DataError;
+pub use settings::{DataSettings, Driver, PROPERTIES, SourceSettings, SslMode};
 pub use sqlx;

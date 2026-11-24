@@ -16,6 +16,10 @@ sqlite = ["sqlx/sqlite", "sqlx/tls-rustls-aws-lc-rs-native-roots"]
 retry = []
 
 [dependencies]
+# The `data.*` keys: the lenient `Config` reading and `Secret` for the URL. Durations are read by
+# `oxbloom-config` itself, so there is no dependency on `oxbloom-tasks`.
+oxbloom-config = { version = "0.1.0", path = "../oxbloom-config" }
+serde = { version = "1.0.229", features = ["derive"] }
 # Each driver feature also enables rustls with aws-lc-rs and the platform root certificates
 # (never ring), so a build without drivers has no TLS crates. The migrate and macros features
 # are left to the application.

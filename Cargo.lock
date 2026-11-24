@@ -1861,6 +1861,8 @@ dependencies = [
 name = "oxbloom-data"
 version = "0.1.0"
 dependencies = [
+ "oxbloom-config",
+ "serde",
  "sqlx",
  "tokio",
 ]
