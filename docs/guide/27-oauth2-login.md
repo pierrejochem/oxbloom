@@ -89,7 +89,7 @@ The default login page of form login does not list the registrations, so add you
 <a href="/oauth2/authorization/github">Sign in with GitHub</a>
 ```
 
-A protected route reads the user like any other: the principal is the value of `user-name-attribute`, the authorities are `OIDC_USER` or `OAUTH2_USER` plus `SCOPE_<scope>` for each granted scope, and the details hold the user attributes, `oauth2.registration` (the registration id) and `oauth2.principal = true`.
+A protected route reads the user like any other: the principal is the value of `user-name-attribute`, the authorities are `OIDC_USER` or `OAUTH2_USER` plus `SCOPE_<scope>` for each granted scope, and the details hold the user attributes, `oauth2.registration` (the registration id) and `oauth2.principal = true`. Provider attributes whose names start with `oxbloom.` or `oauth2.` are dropped, so a provider cannot set a framework detail such as `oxbloom.remembered`.
 
 ```rust
 use oxbloom_security::RequestSecurityExt;

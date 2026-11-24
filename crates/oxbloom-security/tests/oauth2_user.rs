@@ -267,3 +267,34 @@ fn an_integer_attribute_is_the_principal_as_a_decimal_string() {
         assert_eq!(auth.details()["id"], value);
     }
 }
+
+#[test]
+fn provider_attributes_in_the_reserved_namespaces_are_dropped() {
+    let attrs = attributes(json!({
+        "login": "alice",
+        "oxbloom.remembered": true,
+        "oxbloom.security.anything": "x",
+        "oauth2.registration": "another",
+        "oauth2.principal": false,
+        "oauth2.extra": 1,
+        "oxbloomish": "kept",
+        "oauth2x": "kept",
+    }));
+    let auth = authentication_from(&registration(), &plain(Some("login")), false, attrs, &[])
+        .unwrap();
+    // A provider can never mark the user as remembered, or set any framework detail.
+    assert!(!auth.is_remembered());
+    let details = auth.details();
+    assert!(
+        details
+            .keys()
+            .all(|k| !k.starts_with("oxbloom.")),
+        "{details:?}"
+    );
+    assert!(!details.contains_key("oauth2.extra"), "{details:?}");
+    assert_eq!(details["oauth2.registration"], "idp");
+    assert_eq!(details["oauth2.principal"], true);
+    assert_eq!(details["oxbloomish"], "kept");
+    assert_eq!(details["oauth2x"], "kept");
+    assert_eq!(details["login"], "alice");
+}

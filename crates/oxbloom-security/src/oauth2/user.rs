@@ -102,9 +102,10 @@ impl UserInfo {
 /// required. The attribute must be a non-empty string or a JSON integer, which becomes its
 /// decimal text (GitHub's numeric `id` gives the principal `"583231"`); the details keep the
 /// attribute with its JSON type. The authorities are `OIDC_USER` or `OAUTH2_USER`, plus `SCOPE_<scope>` for each
-/// granted scope. The `details` are the attributes, plus `oauth2.registration` with the
-/// registration id and `oauth2.principal = true`, which overwrite attributes of the same
-/// names; revalidation skips a principal with that marker.
+/// granted scope. The `details` are the attributes without those whose names start with
+/// `oxbloom.` or `oauth2.` (the framework's namespaces, so a provider cannot, for example,
+/// mark the user as remembered), plus `oauth2.registration` with the registration id and
+/// `oauth2.principal = true`; revalidation skips a principal with that marker.
 ///
 /// # Errors
 ///
@@ -178,6 +179,9 @@ pub fn authentication_from(
             .map(|scope| GrantedAuthority::new(format!("SCOPE_{scope}"))),
     );
     let mut details = attributes;
+    // The `oxbloom.` and `oauth2.` details belong to the framework: a provider attribute named
+    // `oxbloom.remembered` must not mark the user as remembered.
+    details.retain(|name, _| !name.starts_with("oxbloom.") && !name.starts_with("oauth2."));
     details.insert(
         REGISTRATION_KEY.to_owned(),
         Value::String(registration.id.clone()),
