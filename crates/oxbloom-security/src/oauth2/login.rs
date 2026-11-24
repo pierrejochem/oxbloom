@@ -65,6 +65,9 @@ const DEFAULT_PENDING_MAX_AGE: Duration = Duration::from_secs(600);
 ///   and a password user with the same name never evict each other's sessions. An application
 ///   that calls [`SessionRegistry::invalidate_all`](crate::SessionRegistry::invalidate_all) or
 ///   `sessions_of` for an OAuth2 user passes that key, for example `"oauth2:github:alice"`.
+///   Usernames that start with `oauth2:` are therefore reserved: a password user literally
+///   named `oauth2:github:alice` would share that key with the OAuth2 user, so a user store
+///   should refuse such names.
 ///
 /// # Examples
 ///

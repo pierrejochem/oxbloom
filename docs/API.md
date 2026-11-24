@@ -13,10 +13,10 @@ Only what is implemented and tested is documented as available. Anything else is
 | `oxbloom-web` | Router, request/response, Hyper server, filters | `App`, `Router`, `RouterConfig`, `Route`, `Request`, `Response`, `IntoResponse`, `Controller`, `RouteError`, `Filter`, `Next`, `Ordered`, `order` (with `order::CORS`, `order::NEGOTIATION` and `order::COMPRESSION`), `RequestLogFilter`, `CorsConfig`, `CorsFilter`, `CorsError`, `CompressionConfig`, `CompressionLevel`, `CompressionFilter`, `codecs`, `StaticResources`, `ResourceSource`, `DiskResources`, `EmbeddedResources`, `Resource`, `ResourceError`, `Json` and `JsonBody` (feature `json`), `HttpError`, `ErrorValue`, `ErrorAttributes`, `RequestInfo`, `ErrorRenderer`, `ProblemRenderer`, `ClientInfo`, `Scheme`, `ForwardedConfig`, `ForwardStrategy`, `TrustedProxies`, `ProxyParseError`, `App::serve_tls` (feature `tls`) |
 | `oxbloom-di` | Singleton dependency injection: traits, collections, lifecycle, lazy beans, bean factories, profiles, conditions and groups | `ContainerBuilder`, `Container`, `Resolver`, `Component`, `Configuration`, `Lifecycle`, `ShutdownReport`, `DestroyFailure`, `Inject`, `BeanFn`, `TryBeanFn`, `DiError`, `ErrorSource`, `Environment`, `ConditionContext`, `ConditionOutcome`, `Conditions`, `ConditionReport`, `ConditionRecord` |
 | `oxbloom-config` | Typed config: TOML + imports, profiles, env and CLI sources, placeholders, origins | `Config`, `ConfigBuilder`, `Secret`, `ConfigError`, `Origin`, `DataSize`, `ConfigWarning` |
-| `oxbloom-security` | Filter-chain security, JWT resource server, password login with HTTP Basic, sessions, form login, remember-me, method security | `HttpSecurity`, `PasswordEncoder`, `Argon2PasswordEncoder`, `DelegatingPasswordEncoder`, `UserDetails`, `UserDetailsService`, `InMemoryUserDetailsService`, `DaoAuthenticationProvider`, `SecurityFilterChain`, `JwtDecoderBuilder`, `JwksSource`, `Authentication`, `jwt_decoder_from_config`, `jwks_ssl_bundle`, `Session`, `SessionFilter`, `SessionStore`, `CookieSessionBackend`, `FormLogin`, `FormLoginConfig`, `is_safe_redirect_target`, `ReqwestJwksFetcher` with `with_tls` and `with_client` (feature `jwks`) |
+| `oxbloom-security` | Filter-chain security, JWT resource server, password login with HTTP Basic, sessions, form login, remember-me, method security, OAuth2 and OpenID Connect login | `HttpSecurity`, `PasswordEncoder`, `Argon2PasswordEncoder`, `DelegatingPasswordEncoder`, `UserDetails`, `UserDetailsService`, `InMemoryUserDetailsService`, `DaoAuthenticationProvider`, `SecurityFilterChain`, `JwtDecoderBuilder`, `JwksSource`, `Authentication`, `jwt_decoder_from_config`, `jwks_ssl_bundle`, `Session`, `SessionFilter`, `SessionStore`, `CookieSessionBackend`, `FormLogin`, `FormLoginConfig`, `is_safe_redirect_target`, `ReqwestJwksFetcher` with `with_tls` and `with_client` (feature `jwks`), `OAuth2Login`, `OAuth2Settings`, `ClientRegistration`, `ProviderConfig` and `ClientAuthentication` (feature `oauth2`) |
 | `oxbloom-boot` | Application entry point: lifecycle events, runners, services, signals, exit codes, banner, failure analysis, auto-configuration and the conditions report | `OxbloomApplication`, `OxbloomApplicationBuilder`, `ApplicationArguments`, `RunListener`, `ApplicationRunner`, `CommandLineRunner`, `Service`, `ExitCodeGenerator`, `ShutdownHandle`, `StartupError`, `StartupPhase`, `ServiceError`, `RunnerError`, `ExitStatus`, `Banner`, `FailureAnalysis`, `FailureAnalyzer`, `AutoConfiguration`, `AutoConfigurations`, `ConfigRef`, `auto_configuration`, `Conditions`, `Configuration`, `PropertyMetadata`, `boot_properties`, `WebServer`, `BindError`, `WebServerAutoConfiguration` and `RequestLogAutoConfiguration` (feature `web`), `auto_configurations` (feature `security` or `web`), `JwtDecoderAutoConfiguration`, `PasswordEncoderAutoConfiguration`, `SecurityAutoConfiguration` and `SecurityCustomizer` (feature `security`), `WebServer::with_ssl` and `SslAutoConfiguration` (feature `ssl`), `ActuatorAutoConfiguration` (feature `actuator`), `TasksAutoConfiguration`, `RetryAutoConfiguration` and `SchedulerService` (feature `tasks`), `OxbloomApplicationBuilder::logging` (feature `logging`), `async_trait` |
 | `oxbloom-logging` | `tracing` subscriber from the `logging.*` keys: levels, groups, console format and color, rotating file output, JSON lines, runtime change | `Level`, `ParseLevelError`, `ConsoleFormat`, `ConsoleColor`, `FileRotation`, `FileFormat`, `JsonField`, `LoggingError`, `LoggingSystem`, `PROPERTIES` |
-| `oxbloom-test` | Test support (dev-dependency): run an application context through the real boot lifecycle, captured output, temporary config directories, controllable clocks, a test client and whole applications on port 0 | `ContextRunner`, `ContextView`, `FailureView`, `Captured`, `Log`, `TempConfigDir`, `FixedClock`, `ManualClock`, `TestClient`, `TestResponse`, `TestApp` and `RunningApp` (feature `web`), `TestClient::connect_tls` and `RunningApp::client_tls` (feature `tls`), `MockHttpClient` and `MockResponse` (feature `http-client`) |
+| `oxbloom-test` | Test support (dev-dependency): run an application context through the real boot lifecycle, captured output, temporary config directories, controllable clocks, a test client and whole applications on port 0 | `ContextRunner`, `ContextView`, `FailureView`, `Captured`, `Log`, `TempConfigDir`, `FixedClock`, `ManualClock`, `TestClient`, `TestResponse`, `TestApp` and `RunningApp` (feature `web`), `TestClient::connect_tls` and `RunningApp::client_tls` (feature `tls`), `MockHttpClient` and `MockResponse` (feature `http-client`), `FakeProvider`, `FakeUser`, `Fault` and `TokenRequest` (feature `oauth2`) |
 | `oxbloom-ssl` | Named SSL bundles from the `ssl.*` keys (PEM and PKCS#12), reloaded when their files change, with certificate validity warnings | `SslBundles`, `SslBundle`, `SslError`, `CertValidity`, `ReloadTask`, `PROPERTIES` |
 | `oxbloom-actuator` | Operational endpoints: availability state, health indicators, build and platform info, runtime log levels, a certificate validity indicator | `Availability`, `Liveness`, `Readiness`, `Status`, `Health`, `HealthIndicator`, `HealthRunner`, `BuildInfo`, `build_info!`, `build::emit`, `Platform`, `Info`, `InfoContributor`, `ActuatorSettings`, `ActuatorController` (feature `web`), `SslHealthIndicator` (feature `ssl`) |
 | `oxbloom-tasks` | Task scheduling and retry: fixed-rate, fixed-delay and cron triggers with zones, the `Scheduler`, `RetryPolicy` with backoff and jitter, and the `#[scheduling]`, `#[scheduled]` and `#[retryable]` macros | `Trigger`, `CronExpr`, `Zone`, `TriggerError`, `parse_duration`, `Task`, `Scheduling`, `Outcome`, `TaskError`, `BoxFuture`, `RunFn`, `Scheduler`, `SchedulerConfig`, `TaskStatus`, `TasksSettings`, `RetryPolicy`, `Backoff`, `Jitter`, `RetryDefaults`, `RetryError`, `defaults`, `set_defaults`, `reset_defaults`, `scheduling`, `scheduled`, `retryable` |
@@ -28,7 +28,7 @@ Only what is implemented and tested is documented as available. Anything else is
 Feature flags: `oxbloom-web/json` (default) adds `Json`, `JsonBody`, `Request::json` and the built-in `Accept` check; `oxbloom-web/gzip`, `brotli` and `zstd` enable one codec each of the compression filter and `oxbloom-web/compression` (default) enables all three (CORS and static resources need no feature); `oxbloom-web/di` adds `App::controller` and `AppError`. `oxbloom-config/di`
 adds `ContainerBuilderExt::config`, `From<ConfigError> for DiError` and `impl Environment for Config`. `oxbloom-security/jwks` adds
 `ReqwestJwksFetcher` (with `with_tls` and `with_client`; it runs on `oxbloom-http-client`); `oxbloom-security/di` adds `SecurityContainerExt::security_chain` and
-`From<SecurityBuildError> for DiError`. `oxbloom-boot/web` adds `WebServer`, `BindError` and the
+`From<SecurityBuildError> for DiError`; `oxbloom-security/oauth2` (it implies `jwks`) adds OAuth2 login (`HttpSecurity::oauth2_login`, `OAuth2Login`, `OAuth2Settings`, `ClientRegistration`, `ProviderConfig`, `ClientAuthentication`). `oxbloom-boot/oauth2` (it turns `security` and `http-client` on) adds OAuth2 login from the `security.oauth2.*` keys to `SecurityAutoConfiguration` and an analyzer for them; `oxbloom-test/oauth2` (it implies `http-client`) adds `FakeProvider`, `FakeUser`, `Fault` and `TokenRequest`. `oxbloom-boot/web` adds `WebServer`, `BindError` and the
 port-in-use analyzer and `WebServerAutoConfiguration`; `oxbloom-boot/security` enables
 `oxbloom-security/di` and adds the security analyzer, a built-in analyzer for invalid `security.jwt`
 configuration, `JwtDecoderAutoConfiguration`, `SecurityAutoConfiguration` and `SecurityCustomizer`;
@@ -3348,8 +3348,8 @@ assert_eq!(Accounts.close(7), Err(AccessDenied::Unauthenticated));
 - `oxbloom_test::with_authentication(authentication, future)` (feature `security` of `oxbloom-test`) runs a future with that caller, for service tests without HTTP. See section 4.10.
 - Limits: method denials do not use the entry point or the access-denied handler of the chain, so a 401 carries no `WWW-Authenticate` challenge, a form-login application does not redirect an anonymous browser to the login page, and a custom 403 handler is skipped; `custom = f(self)` cannot name the receiver (error "not a parameter of the method"); converting `AccessDenied` into an error type such as `anyhow::Error` or `Box<dyn Error>` loses the 401/403 mapping and gives a 500, because only `From<AccessDenied> for HttpError` maps; `custom` checks are synchronous; there is no expression language, no caching of decisions, and only inherent impls are supported; the check of an `async` method sees the context of its first poll; the role rules of `HasAnyRole` and `HasAnyAuthority` allocate a small `Vec<&str>` per call.
 
-Roadmap: slices 7a (security headers, session management), 7b (remember-me) and 8 (method security) are done, then 9 (OAuth2 login and client). Not implemented:
-OAuth2 login, opaque-token introspection, several chains per app, login rate limiting, database user stores.
+Roadmap: slices 7a (security headers, session management), 7b (remember-me), 8 (method security) and 9 part B (OAuth2 login, see [section 4.15](#415-oauth2-login)) are done; the OAuth2 client (Slice 9 part C) follows. Not implemented:
+the OAuth2 client, RP-initiated logout, opaque-token introspection, several chains per app, login rate limiting, database user stores.
 
 ### 4.8 `oxbloom-boot`
 
@@ -3946,6 +3946,8 @@ build fails with `FormLoginWithoutProvider`, whose text names no key). `Security
 `SecurityAutoConfiguration` also applies the slice 7a settings, before the `SecurityCustomizer` beans, so a customizer can override or compose them (form login and CSRF are applied after the customizers, so there the configuration wins). It calls `clock` with the `dyn Clock` bean when there is one, `headers` with `HeadersProperties::from_config`, `session_limit` with `SessionFilter::principal_sessions` when `security.session.max-sessions-per-user` is set, and `revalidate` with the `dyn UserDetailsService` bean. The default revalidation (5 minutes) applies only with form login from configuration and that bean, and stays off without them; an explicit `security.session.revalidate-interval` without the bean fails the startup naming the key, and `0s` is off and needs no bean. A limit with the cookie store, or with a store bean that has no index, fails the startup with an error that names `security.session.max-sessions-per-user` (a `SessionManagementAnalyzer` renders it). Its metadata lists nine more `security.headers.*` keys (23 in all) and the `SessionAutoConfiguration` metadata lists the two session keys (12 in all). The keys are applied only by this auto-configuration: with a user `SecurityFilterChain` bean they are ignored, as for form login and CSRF.
 
 `SecurityAutoConfiguration` also reads `security.remember-me` with `RememberMeProperties::from_config`. It is off unless `enabled` is `true`, but its keys are checked either way: an unknown key or a bad value fails the startup even while it is off, and a secret on the command line is refused. When on, it calls `remember_me` with the secret, the old secrets, the lifetime, the field name, the cookie name, the `dyn UserDetailsService` bean (the one revalidation uses) and the same clock as form login and revalidation, before the `SecurityCustomizer` beans, so a customizer can change it with `http.remember_me(|r| ..)` (a customizer's `http.clock(..)` does not change the clock of remember-me). Enabled remember-me needs form login, a secret and the user service bean: without form login the startup fails with an error that names `security.form-login.enabled`, without a secret with one that names `security.remember-me.secret`, and without the bean with one that names `security.remember-me.enabled`. A cookie name equal to the session cookie name fails it with an error that names `security.remember-me.cookie-name`. No error, report or metadata entry shows a secret. The six `security.remember-me.*` keys are in the metadata of this auto-configuration.
+
+With the feature `oauth2`, `SecurityAutoConfiguration` also reads `security.oauth2`. When `security.oauth2.client.registration` has an entry, it calls `oauth2_login` after the `SecurityCustomizer` beans with the registrations and providers of `OAuth2Settings::from_config`, the `dyn HttpClient` bean, `security.oauth2.base-url`, the optional `security.oauth2.failure-url` and the `dyn Clock` bean when there is one. A customizer that already called `oauth2_login` wins (`HttpSecurity::has_oauth2_login`), and then the base URL is not required. The keys are checked either way, and every failure names its key and never the value or the client secret: an unknown key under `security.oauth2`, a bad registration, a missing base URL (`ConfigError::Missing`), a base URL with a path, a query or a fragment, a `redirect-uri` that does not resolve to `{base-url}/login/oauth2/code/{id}` (reported on `security.oauth2.client.registration.<id>.redirect-uri`), and a failure URL that is not local or lies on an OAuth2 endpoint. Without form login the report says to set `security.form-login.enabled = true`, and without an `HttpClient` bean it says the bean is missing. Its metadata lists the 14 `security.oauth2.*` keys. See [section 4.15](#415-oauth2-login).
 
 It also registers a `SessionRegistry` bean, unless the application has one, when there is a `SessionFilter` bean and `security.session.store` is `memory` or missing. The bean is lazy: it is built from `SessionFilter::principal_sessions` when first asked for. With a store that has no per-user index the request for it fails with `RegistryWithoutIndex` (a consumer of `Arc<SessionRegistry>` or `Option<Arc<SessionRegistry>>` fails the startup), and with the cookie store there is no bean.
 
@@ -6617,6 +6619,127 @@ mock.on(Method::GET, "https://idp.example.test/jwks", MockResponse::status(200).
 let fetcher = oxbloom_security::ReqwestJwksFetcher::with_client(mock.clone());
 ```
 
+### 4.15 OAuth2 login
+
+OAuth2 and OpenID Connect login with the authorization code flow and PKCE, in `oxbloom-security` behind the feature `oauth2` (it implies `jwks`), wired by `SecurityAutoConfiguration` with the feature `oauth2` of `oxbloom-boot`, and tested with `FakeProvider` from `oxbloom-test` (feature `oauth2`). The guide chapter is [OAuth2 login](guide/27-oauth2-login.md#oauth2-login) and the decisions are in [ADR 0094](adr/0094-oauth2-login.md). Rules to remember:
+
+- `GET /oauth2/authorization/{id}` starts a login and `GET /login/oauth2/code/{id}` is the callback. Both are open, answered before the rules; any other method, HEAD included, is a 405 with `Allow: GET`. The callback path is fixed.
+- OAuth2 login needs `form_login` and a `SessionFilter`. A successful login is a form login: new session id, new CSRF token, the `Authentication` in the session, the session limit, then the saved request or the default success URL. Every failure redirects to the failure URL with an empty body and logs a fixed text at debug on `oxbloom::security`.
+- The principal is the `user-name-attribute` value (default `sub`; a JSON integer becomes a string). The authorities are `OIDC_USER` or `OAUTH2_USER` plus `SCOPE_<scope>` for each granted scope. The details hold the user attributes, `oauth2.registration` and `oauth2.principal = true`; revalidation skips a principal with both markers.
+- The tokens are stored in the session under `oxbloom.security.oauth2.tokens.<registration>` and removed at every other login. The session limit and the session index count an OAuth2 user as `oauth2:<registration>:<principal>`, so usernames that start with `oauth2:` are reserved.
+- Id tokens are accepted with RS256, RS384, RS512, ES256 or ES384 only (default RS256 and ES256, narrowed by discovery); `none`, symmetric algorithms and PS256 are refused, and a `kid` is required.
+- No error, log line or `Debug` output holds a token, a code, a state, a nonce, a verifier, a secret, a URL or a response body.
+
+```rust
+use std::sync::Arc;
+use std::time::Duration;
+use oxbloom_config::{Config, Secret};
+use oxbloom_security::{
+    ClientAuthentication, ClientRegistration, HttpSecurity, OAuth2Login, OAuth2Settings,
+    ProviderConfig, SecurityBuildError,
+};
+use oxbloom_test::{FakeProvider, FakeUser, Fault, MockHttpClient};
+```
+
+#### `HttpSecurity::oauth2_login(f)` and `HttpSecurity::has_oauth2_login()` (feature `oauth2`)
+
+`oauth2_login(f: impl FnOnce(OAuth2Login) -> OAuth2Login)` turns OAuth2 login on. On the first call `f` receives settings with no client, so start from `OAuth2Login::new(client)` or call `client`; a later call tunes the result of the earlier one. `has_oauth2_login()` says whether `oauth2_login` was called; boot reads it to step aside when a customizer configured OAuth2 login. `build()` fails with `OAuth2LoginWithoutFormLogin`, `OAuth2LoginWithoutClient`, `OAuth2LoginWithoutRegistration` (none, an id outside `[a-z0-9-]+`, or an unknown provider), `OAuth2LoginWithoutBaseUrl` (missing, not `https` and not loopback `http`, or with a query or a fragment), `InvalidOAuth2Login` (a redirect URI that is not `{base-url}/login/oauth2/code/{id}`, or a zero pending max age) and `InvalidFormLoginUrl` (an unsafe failure URL, or one under `/oauth2/authorization/` or `/login/oauth2/code/`). With OAuth2 login on, form login needs no password provider.
+
+```rust
+let fake = FakeProvider::new("https://idp.example.test");
+let chain = HttpSecurity::new()
+    .form_login(|f| f)
+    .oauth2_login(|_| {
+        OAuth2Login::new(fake.client())
+            .registration(ClientRegistration {
+                id: "idp".into(),
+                client_id: "app".into(),
+                client_secret: Some(Secret::new("app-secret".into())),
+                scopes: vec!["email".into()],
+                redirect_uri: "{base-url}/login/oauth2/code/{id}".into(),
+                client_authentication: ClientAuthentication::Basic,
+                provider: "idp".into(),
+            })
+            .provider("idp", ProviderConfig {
+                issuer_uri: Some("https://idp.example.test".into()),
+                ..ProviderConfig::default()
+            })
+            .base_url("https://app.example.test")
+    })
+    .authorize(|a| a.any_request().authenticated())
+    .build()?;
+
+assert!(!HttpSecurity::new().has_oauth2_login());
+let err = HttpSecurity::new()
+    .oauth2_login(|_| OAuth2Login::new(Arc::new(MockHttpClient::new())))
+    .authorize(|a| a.any_request().authenticated())
+    .build()
+    .err();
+assert_eq!(err, Some(SecurityBuildError::OAuth2LoginWithoutFormLogin));
+```
+
+#### `OAuth2Login`
+
+The settings inside `oauth2_login`. `OAuth2Login::new(client: Arc<dyn HttpClient>)`, then `client(..)` (replace the client), `registration(ClientRegistration)` (the same id replaces it), `provider(name, ProviderConfig)`, `base_url(&str)` (the `{base-url}` of the redirect URI; a trailing slash is dropped; never taken from the `Host` header), `failure_url(&str)` (default: the failure URL of form login), `clock(Arc<dyn Clock>)` (default: the `HttpSecurity` clock) and `pending_max_age(Duration)` (default 10 minutes). A provider with `issuer_uri` or `jwk_set_uri` is an OpenID Connect provider (the login asks for `openid`, sends a `nonce` and validates the id token); any other uses `user_info_uri`. `Debug` shows the registration ids and provider names, never a secret. A provider with `jwk_set_uri` and no `issuer_uri` makes the build log one warning naming the registration.
+
+```rust
+let login = OAuth2Login::new(Arc::new(MockHttpClient::new()))
+    .base_url("https://app.example.test")
+    .failure_url("/signin?failed")
+    .pending_max_age(Duration::from_secs(300));
+assert!(format!("{login:?}").contains("/signin?failed"));
+```
+
+#### `OAuth2Settings`, `ClientRegistration`, `ProviderConfig`, `ClientAuthentication`
+
+`OAuth2Settings::from_config(&Config) -> Result<OAuth2Settings, ConfigError>` reads `security.oauth2.client.registration.<id>.*` (`client-id`, `client-secret`, `scope`, `redirect-uri`, `client-authentication`, `provider`) and `security.oauth2.client.provider.<id>.*` (`issuer-uri`, `authorization-uri`, `token-uri`, `user-info-uri`, `jwk-set-uri`, `user-name-attribute`). The fields are `registrations: Vec<ClientRegistration>` (ordered by id) and `providers: BTreeMap<String, ProviderConfig>`; without the section both are empty. An error is a `ConfigError::Invalid` that names the full key and never the value: a missing `client-id`, a missing `client-secret` unless `client-authentication` is `none`, an unknown provider, a provider with neither an `issuer-uri` nor both an `authorization-uri` and a `token-uri`, a plain provider with neither `user-info-uri` nor `user-name-attribute`, a non-`https` endpoint (loopback hosts excepted), an id outside `[a-z0-9-]+`, a bad scope or redirect template, an unknown key. `ClientRegistration` has the public fields `id`, `client_id`, `client_secret: Option<Secret<String>>`, `scopes`, `redirect_uri`, `client_authentication` and `provider`, and `resolved_redirect_uri(base_url)`; its `Debug` hides the secret. `ProviderConfig` has six `Option<String>` fields and `Default`. `ClientAuthentication` is `Basic` (default, HTTP Basic with form-URL-encoded id and secret), `Post` or `None`.
+
+```rust
+let config = Config::from_str(
+    "[security.oauth2.client.registration.idp]\nclient-id = \"app\"\nclient-secret = \"s3cret-value\"\n\
+     [security.oauth2.client.provider.idp]\nissuer-uri = \"https://idp.example\"\n",
+)?;
+let settings = OAuth2Settings::from_config(&config)?;
+let idp = &settings.registrations[0];
+assert_eq!(idp.client_authentication, ClientAuthentication::Basic);
+assert_eq!(idp.resolved_redirect_uri("https://app.example/"), "https://app.example/login/oauth2/code/idp");
+assert!(!format!("{idp:?}").contains("s3cret-value"));
+```
+
+#### The boot keys and the build errors in boot
+
+With the feature `oauth2` of `oxbloom-boot`, `SecurityAutoConfiguration` configures OAuth2 login when `security.oauth2.client.registration` has an entry (see `SecurityAutoConfiguration` in section 4.8). The two boot keys are `security.oauth2.base-url` (required then; an absolute `https` URL, `http` only for a loopback host, with no path beyond an optional `/`, no query and no fragment) and `security.oauth2.failure-url` (optional; a local path outside the two endpoints). The startup failure report names the key for every configuration error (for example `security.oauth2.client.registration.idp.redirect-uri` for a redirect URI that does not lead to the fixed callback path) and leaves out the value; `OAuth2LoginWithoutFormLogin` becomes a report that says to set `security.form-login.enabled = true`, and a missing `HttpClient` bean a report that names `HttpClientAutoConfiguration`. `SecurityAutoConfiguration::properties()` lists 14 `security.oauth2.*` keys with the feature.
+
+```toml
+[security.form-login]
+enabled = true
+[security.session]
+[security.oauth2]
+base-url = "https://app.example"
+[security.oauth2.client.registration.github]
+client-id = "Iv1.0123456789abcdef"
+client-secret = "${GITHUB_CLIENT_SECRET}"
+scope = ["read:user"]
+[security.oauth2.client.provider.github]
+authorization-uri = "https://github.com/login/oauth/authorize"
+token-uri = "https://github.com/login/oauth/access_token"
+user-info-uri = "https://api.github.com/user"
+user-name-attribute = "id"
+```
+
+#### `FakeProvider`, `FakeUser`, `Fault` and `TokenRequest` (feature `oauth2` of `oxbloom-test`)
+
+`FakeProvider::new(issuer)` is an OpenID Connect provider over a `MockHttpClient` with a fresh ES256 key: `/.well-known/openid-configuration`, `/jwks`, `POST /token` and `/userinfo` under the issuer (not `/authorize`, where only the browser goes). `client()` returns its `Arc<MockHttpClient>` (always the same one), `issuer()`, `clock(Arc<dyn Clock>)` takes the token times from a test clock, `issue_code(FakeUser) -> String` registers a code that works once, and `token_requests()` returns the token requests (`TokenRequest::field`, `fields`, `authorization`; `Debug` hides the values). By default the token endpoint checks nothing but the code; the expectations turn on checks: `expect_nonce(nonce)` (the nonce of the id tokens of codes issued from now on), `expect_pkce(challenge)` (the S256 of `code_verifier` must equal it, else `invalid_grant`), `expect_redirect_uri(uri)` (exact match, else `invalid_grant`) and `expect_client_secret(secret)` (from Basic or `client_secret`, else `invalid_client`). `misbehave(Fault)` adds a fault that stays in force: `WrongIssuer`, `WrongAudience`, `WrongAzp`, `Expired`, `NotYetValid`, `WrongNonce`, `AlgNone`, `Hs256WithPublicKey`, `MissingSub`, `TokenEndpointError(code)`, `TokenEndpointStatus(status)`, `OversizedBody`, `DiscoveryIssuerMismatch` and `UserinfoError`. `FakeUser::new(sub)` with `email`, `name`, `attr(key, value)` and `scope`; its user info is the attributes plus `sub`.
+
+```rust
+let fake = FakeProvider::new("https://idp.example.test");
+fake.expect_client_secret("app-secret")
+    .expect_redirect_uri("https://app.example.test/login/oauth2/code/idp");
+fake.misbehave(Fault::WrongNonce);
+let code = fake.issue_code(FakeUser::new("alice").email("alice@example.test").scope("openid email"));
+assert!(!code.is_empty() && fake.token_requests().is_empty());
+```
+
 ## 5. Recipe: a complete small service
 
 A configured greeting, a controller with an injected bean, and a web server started through
@@ -6709,7 +6832,7 @@ Compile-fail tests use `trybuild` (`tests/ui/*.rs` with `.stderr` snapshots). Re
 
 ## Not implemented
 
-OAuth2 login, login rate limiting, Redis and SQL session stores, database user stores, database, jobs and queue, metrics and
+The OAuth2 client (client credentials and the user's token refresh), RP-initiated logout and OAuth2 provider presets, login rate limiting, Redis and SQL session stores, database user stores, database, jobs and queue, metrics and
 other observability beyond the actuator, React integration, `oxbloom-ai`, `oxbloom add`, MVC web style. In
 boot: analysis of failures after startup, a report format other than text. In DI: transient and request scopes,
 injection of single configuration properties, qualifiers by name, async lifecycle hooks and

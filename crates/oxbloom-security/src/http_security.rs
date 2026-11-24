@@ -483,8 +483,11 @@ impl HttpSecurity {
     /// [`build`](Self::build) fails with [`SecurityBuildError::OAuth2LoginWithoutFormLogin`],
     /// [`SecurityBuildError::OAuth2LoginWithoutClient`],
     /// [`SecurityBuildError::OAuth2LoginWithoutRegistration`],
-    /// [`SecurityBuildError::OAuth2LoginWithoutBaseUrl`] and, for a failure URL that is not a
-    /// safe local target, [`SecurityBuildError::InvalidFormLoginUrl`].
+    /// [`SecurityBuildError::OAuth2LoginWithoutBaseUrl`],
+    /// [`SecurityBuildError::InvalidOAuth2Login`] (a redirect URI that is not
+    /// `{base-url}/login/oauth2/code/{id}`, or a zero pending max age) and, for a failure URL
+    /// that is not a safe local target or lies on an OAuth2 endpoint,
+    /// [`SecurityBuildError::InvalidFormLoginUrl`].
     ///
     /// # Examples
     ///

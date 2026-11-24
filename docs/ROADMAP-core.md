@@ -960,7 +960,7 @@ Rulings made during Slice 8:
 - `oxbloom-test` feature `security` enables an optional `oxbloom-security` dependency, because `with_authentication` names its types.
 - The `.stderr` files of the UI cases were generated and read by hand.
 
-### Security Slice 9 part A: HTTP client (`oxbloom-http-client`) — delivered, part B and C follow
+### Security Slice 9 part A: HTTP client (`oxbloom-http-client`) — delivered, part B delivered, part C follows
 Done on 2026-11-23 (group A of Slice 9, which is also the module slice M1); the design is the Slice 9 spec `2026-11-23-oauth2-design.md` (part A) and the plan is `2026-11-23-oauth2.md` (both local files under `docs/superpowers`, named here without a link), usage is in the guide chapter `docs/guide/26-http-client.md` and `docs/API.md` (section 4.14), the decisions are in ADR 0093. The next parts are OAuth2 and OIDC login (group B, guide chapter 27) and the OAuth2 client (group C, guide chapter 28); the roadmap chapter is now 29, renamed with `git mv`.
 
 Delivered:
@@ -995,6 +995,41 @@ Known minors after the Slice 9 part A reviews (none changes behavior):
 - The documentation minors of Tasks 3 and 4 (the `on_fn` lock note, the long line in `autoconfigure/mod.rs`, the `with_client` and struct docs of the fetcher, the `lib.rs`, AGENT.md and API.md descriptions) were fixed in the documentation task.
 
 Gate numbers at the end of Slice 9 part A: `cargo test --workspace --all-features --no-fail-fast` 3708 passed, 0 failed, 8 ignored (3562 before part A; counted by summing the `test result` lines, doctests included); `make check-examples` 79 passed, 0 failed; clippy `-D warnings` and `cargo fmt --check` clean; the boot stack probes are unchanged at 238 KB passing and 237 KB overflowing (exit 101) with no features, and 239 KB passing and 238 KB overflowing (exit 101) with all features; the seventeen `cargo build -p oxbloom-boot --no-default-features` builds (none, `logging`, `web`, `security`, `ssl`, `actuator`, `actuator,logging`, `actuator,ssl`, `actuator,security`, `tasks`, `tasks,logging`, `tasks,ssl`, `tasks,security`, `tasks,actuator`, `http-client`, `http-client,ssl` and `http-client,security`), the four `oxbloom-security` builds with `--no-default-features` (no features, `di`, `jwks`, `di,jwks`) and the six `oxbloom-http-client` builds (no default features, `json`, `reqwest`, `retry`, default and all features) pass; `cargo tree -i ring --workspace --all-features` finds no `ring` (cargo prints "nothing to print"). The gate runs with `CARGO_INCREMENTAL=0` and removes the incremental cache between stages, because the 16 GB tmpfs overflowed twice with the new feature variants.
+
+### Security Slice 9 part B: OAuth2 and OpenID Connect login (`oxbloom-security`, `oxbloom-boot`, `oxbloom-test`) — delivered, part C follows
+Done on 2026-11-24 (group B of Slice 9); the design is the Slice 9 spec `2026-11-23-oauth2-design.md` (part B) and the plan is `2026-11-23-oauth2.md` (both local files under `docs/superpowers`, named here without a link), usage is in the guide chapter `docs/guide/27-oauth2-login.md` and `docs/API.md` (section 4.15, and `SecurityAutoConfiguration` in section 4.8), the decisions are in ADR 0094. The next part is the OAuth2 client (group C, guide chapter 28).
+
+Delivered:
+- The registration model and its keys (feature `oauth2` of `oxbloom-security`, which implies `jwks`): `OAuth2Settings::from_config` over `security.oauth2.client.registration.<id>.*` and `security.oauth2.client.provider.<id>.*`, `ClientRegistration`, `ProviderConfig` and `ClientAuthentication` (`basic` by default, `post`, `none`), validated at startup with errors that name the full key and never the value.
+- The authorization request: a 32-byte `state`, a `nonce` for OpenID Connect and a PKCE `S256` verifier from `aws-lc-rs`, one pending record per state in the session (at most five, so two tabs work), the scope parameter left out when empty.
+- Discovery with a one-hour cache, single-flight fetches and a 5 second backoff after a failure; the token exchange with `Basic`, `post` or no client authentication and an allow-list of RFC 6749 error codes; id token validation (RS256, RS384, RS512, ES256 and ES384 only, narrowed by discovery, `kid` required, `iss`, `aud`, `azp`, `exp`, `iat`, `nonce`); the user info, with a matching `sub` when it is merged into an OpenID Connect login; the mapping to an `Authentication` with `OIDC_USER` or `OAUTH2_USER`, `SCOPE_*` for valid granted scopes, numeric principals as strings (ruling R10) and the two OAuth2 markers in the details.
+- The endpoints in the chain: `GET /oauth2/authorization/{id}` and `GET /login/oauth2/code/{id}` (other methods, HEAD included, are 405), the `iss` parameter check (RFC 9207), the state checked for format before the session is read and compared in constant time, the registration from the path checked before any request, a login through form login's `establish` (new session id, new CSRF token, session limit with the key `oauth2:<registration>:<principal>`, ruling R14), the tokens stored in the session and cleared at every other login, no remember-me cookie, revalidation skipped only with both markers, and every failure a redirect with an empty body and a debug log line with fixed text.
+- `HttpSecurity::oauth2_login`, `HttpSecurity::has_oauth2_login` and `OAuth2Login` (`new`, `client`, `registration`, `provider`, `base_url`, `failure_url`, `clock`, `pending_max_age`), with the build errors `OAuth2LoginWithoutFormLogin`, `OAuth2LoginWithoutClient`, `OAuth2LoginWithoutRegistration`, `OAuth2LoginWithoutBaseUrl` and `InvalidOAuth2Login` (a redirect URI that is not `{base-url}/login/oauth2/code/{id}`, ruling R15, or a zero pending max age); a missing session filter is a run-time log line, as for form login.
+- Boot (feature `oauth2`, which turns on `security` and `http-client`): `SecurityAutoConfiguration` configures OAuth2 login from the keys, the `dyn HttpClient` bean, the new keys `security.oauth2.base-url` (required, no path, query or fragment) and `security.oauth2.failure-url`, and the clock bean, and steps aside when a `SecurityCustomizer` configured it; unknown keys under `security.oauth2` are refused; a new analyzer names every `security.oauth2` key without its value, tells the user to set `security.form-login.enabled = true`, and names a missing `HttpClient` bean; 14 property metadata entries.
+- `FakeProvider`, `FakeUser`, `Fault` and `TokenRequest` in `oxbloom-test` (feature `oauth2`): discovery, JWKS, token and user info over `MockHttpClient` with an ES256 key, the expectations `expect_nonce`, `expect_pkce`, `expect_redirect_uri` and `expect_client_secret`, and fourteen faults for the negative tests.
+- Boot-level flows in `crates/oxbloom-boot/tests/oauth2_login.rs` (OpenID Connect and plain OAuth2 logins through a booted application, the protected route and its authorities, the failure URL, the customizer that wins, and the startup failures with their keys) and a test that no secret, token or code reaches the failure report or the debug logs of a login.
+- ADR 0094, the guide chapter 27 and the API section 4.15; the status and security guide pages, AGENT.md, the README of the ADRs and both roadmaps are updated.
+
+Usage pointers: configure `security.form-login.enabled = true`, the `security.session` table, `security.oauth2.base-url` and one registration with its provider, then link to `/oauth2/authorization/<id>`; see the guide chapter for an OpenID Connect and a GitHub-like sample, and `FakeProvider` for tests.
+
+Limits that users must know (also in the guide): tokens in a cookie-backed session can be too large (use a server-side store); a `SameSite=Strict` session cookie loses the login; no RP-initiated logout; form login is required; the callback path is fixed and the base URL has no path (a proxy must strip a prefix); `SCOPE_*` authorities are not tied to a registration; providers without an issuer are accepted with a warning; GitHub's 200 answer with an `error` field becomes a generic token error; an id token without `kid` is refused; fractional `exp` and `iat` are refused; HEAD on the endpoints is 405; the default login page does not list the registrations; `invalidate_all` for an OAuth2 user needs `oauth2:<registration>:<principal>`, and usernames that start with `oauth2:` are reserved.
+
+Parked, not yet scheduled:
+- RP-initiated (provider) logout.
+- Provider presets (GitHub, Google and others).
+- A configurable callback path.
+- A default login page that lists the registrations.
+- HEAD support on the two endpoints.
+- PS256 in the JWKS key lookup (and so in the id token algorithms).
+- Authority mapping per registration (`SCOPE_*` tied to a provider, custom authority claims).
+
+Known minors after the Slice 9 part B reviews (none changes behavior):
+- Task 6: port 0 and a port written as `:+8443` pass the endpoint port check.
+- Task 7: `Pending::store` removes the dropped oldest record before it writes the new one, so a serialization failure loses the oldest login; a `created_at` in the future is accepted (it only fails open against a clock step); a failure of the random number generator panics (the crate's convention).
+- Task 8: the discovery failure counter has no test of its own (a concurrent test with `failure_backoff(Duration::ZERO)` that expects one request would pin it); a backward clock step lengthens the failure backoff; `expires_in = 0` gives `Some(0)` and is neither documented nor tested; two over-long doc lines (`id_token.rs` near line 165, `user.rs` near line 104); the plan still lists PS256 (superseded by ruling R11).
+- Task 9: the loop check of the failure URL is literal (dot segments and encodings are a developer misconfiguration, documented); untested: an OAuth2 login of registration B removes the tokens of registration A, and a remember-me auto login clears the tokens; `StoredTokens::remove` is dead code kept for part C.
+
+Gate numbers at the end of Slice 9 part B: to be filled by the controller.
 
 ### C10: Test support (`oxbloom-test`)
 
