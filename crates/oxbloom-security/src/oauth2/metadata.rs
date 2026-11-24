@@ -264,7 +264,8 @@ struct Slot {
 /// others wait for its result, success or failure. A failure is not cached as metadata, but
 /// it is remembered for a short backoff window (default 5 seconds, measured on the time passed
 /// in): a call within the window gets the same error without a request, and the first call
-/// after it tries again. A success clears the failure. During a provider outage logins
+/// after it tries again. A failure recorded at a time later than the time passed in (the clock
+/// stepped back) counts as expired. A success clears the failure. During a provider outage logins
 /// therefore fail fast instead of queueing for one request each.
 ///
 /// # Examples
@@ -414,14 +415,17 @@ impl MetadataCache {
         {
             return Err(error);
         }
-        // A clock that went back counts as age zero.
+        // A clock that went back gives cached metadata the age zero.
         let age = |since: SystemTime| now.duration_since(since).unwrap_or(Duration::ZERO);
         if let Some(metadata) = &state.cached
             && age(metadata.resolved_at) < self.ttl
         {
             return Ok(metadata.clone());
         }
+        // A failure time in the future (the clock stepped back) counts as expired, so the
+        // backoff never lasts until the clock catches up.
         if let Some((error, failed_at)) = state.failure
+            && failed_at <= now
             && age(failed_at) < self.failure_backoff
         {
             return Err(error);

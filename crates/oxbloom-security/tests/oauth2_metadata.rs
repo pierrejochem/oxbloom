@@ -417,3 +417,49 @@ async fn debug_and_errors_hold_no_url() {
         assert!(!err.to_string().contains("http"));
     }
 }
+
+#[tokio::test]
+async fn a_failure_time_in_the_future_counts_as_expired() {
+    let mock = MockHttpClient::new();
+    mock.on(Method::GET, DISCOVERY, MockResponse::status(503));
+    let cache = MetadataCache::new();
+    assert!(
+        cache
+            .get_or_resolve("idp", &oidc(ISSUER), &mock, now())
+            .await
+            .is_err()
+    );
+    assert_eq!(mock.request_count(), 1);
+    // The clock stepped back a minute: the recorded failure lies in the future. The backoff
+    // must not last until the clock catches up, so the next call tries again.
+    let earlier = now() - Duration::from_secs(60);
+    assert!(
+        cache
+            .get_or_resolve("idp", &oidc(ISSUER), &mock, earlier)
+            .await
+            .is_err()
+    );
+    assert_eq!(mock.request_count(), 2);
+}
+
+#[tokio::test]
+async fn callers_queued_behind_a_failed_attempt_take_its_failure_even_without_a_backoff() {
+    let mock = Arc::new(MockHttpClient::new());
+    mock.on(Method::GET, DISCOVERY, MockResponse::status(503));
+    let client = Slow(mock.clone());
+    // Without a backoff window only the attempt counter keeps the queued callers from each
+    // making their own request.
+    let cache = MetadataCache::new().failure_backoff(Duration::ZERO);
+    let provider = oidc(ISSUER);
+    let call = || cache.get_or_resolve("idp", &provider, &client, now());
+    // On one thread, `join!` polls the first call into its request and queues the others
+    // behind the slot lock before the attempt finishes.
+    let (a, b, c, d) = tokio::join!(call(), call(), call(), call());
+    for result in [a, b, c, d] {
+        assert_eq!(result.unwrap_err(), OAuth2Error::Discovery);
+    }
+    assert_eq!(mock.request_count(), 1);
+    // A call that did not wait for that attempt tries again.
+    assert!(call().await.is_err());
+    assert_eq!(mock.request_count(), 2);
+}
