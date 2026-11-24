@@ -48,9 +48,11 @@ impl Isolation {
     }
 }
 
-/// The options of one [`transaction`] call.
+/// The options of one [`transaction`] (or `transaction_with_retry`) call.
 ///
-/// The default is the driver's own isolation level, a read-write transaction and no retry.
+/// The default is the driver's own isolation level and a read-write transaction. The struct
+/// is the same in every configuration of the cargo features; the retry policy is an argument
+/// of `transaction_with_retry`.
 /// The options are applied through each driver's begin statement: Postgres runs
 /// `BEGIN ISOLATION LEVEL .. READ ONLY`, MySQL runs `SET TRANSACTION ISOLATION LEVEL ..`
 /// followed by `START TRANSACTION READ ONLY`. An option a driver cannot honor is refused with
@@ -74,8 +76,6 @@ impl Isolation {
 pub struct TransactionOptions {
     isolation: Option<Isolation>,
     read_only: bool,
-    #[cfg(feature = "retry")]
-    retry: Option<oxbloom_tasks::RetryPolicy>,
 }
 
 impl TransactionOptions {
@@ -140,50 +140,6 @@ impl TransactionOptions {
         self
     }
 
-    /// Runs the work again, in a new transaction, after a serialization failure or a
-    /// deadlock, following `policy`: at most `policy.max_attempts` runs, with the policy's
-    /// delay before each new run. Needs the cargo feature `retry`.
-    ///
-    /// An error counts as such a failure when its [`RetryableError::is_retryable`] says so:
-    /// Postgres SQLSTATE `40001` and `40P01`, MySQL errors `1213` and `1205`, and SQLite
-    /// `SQLITE_BUSY` and `SQLITE_LOCKED`, whether the work returns it or the commit fails with
-    /// it. Every other error, such as a constraint violation or a syntax error, is returned at
-    /// once. When the attempts run out, the last error is returned. The work must be safe to
-    /// run again: everything it did in the database is rolled back, but effects outside the
-    /// database, such as a sent message, are not.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # #[cfg(feature = "sqlite")]
-    /// # #[tokio::main(flavor = "current_thread")]
-    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// use oxbloom_data::sqlx::{self, sqlite::SqlitePoolOptions};
-    /// use oxbloom_data::{TransactionOptions, transaction};
-    /// use oxbloom_tasks::RetryPolicy;
-    ///
-    /// let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await?;
-    /// sqlx::query("CREATE TABLE counters (n INTEGER)").execute(&pool).await?;
-    /// let options = TransactionOptions::default()
-    ///     .retry(RetryPolicy { max_attempts: 5, ..RetryPolicy::default() });
-    /// transaction(&pool, &options, async |tx| {
-    ///     sqlx::query("INSERT INTO counters (n) VALUES (1)").execute(&mut **tx).await?;
-    ///     Ok::<_, sqlx::Error>(())
-    /// })
-    /// .await?;
-    /// assert_eq!(options.get_retry().map(|p| p.max_attempts), Some(5));
-    /// # Ok(())
-    /// # }
-    /// # #[cfg(not(feature = "sqlite"))]
-    /// # fn main() {}
-    /// ```
-    #[cfg(feature = "retry")]
-    #[must_use]
-    pub fn retry(mut self, policy: oxbloom_tasks::RetryPolicy) -> Self {
-        self.retry = Some(policy);
-        self
-    }
-
     /// The isolation level, or `None` for the driver's default.
     ///
     /// # Examples
@@ -210,23 +166,6 @@ impl TransactionOptions {
     /// ```
     pub fn is_read_only(&self) -> bool {
         self.read_only
-    }
-
-    /// The retry policy, or `None` when nothing is retried. Needs the cargo feature `retry`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use oxbloom_data::TransactionOptions;
-    /// use oxbloom_tasks::RetryPolicy;
-    ///
-    /// assert!(TransactionOptions::default().get_retry().is_none());
-    /// let options = TransactionOptions::default().retry(RetryPolicy::default());
-    /// assert_eq!(options.get_retry(), Some(&RetryPolicy::default()));
-    /// ```
-    #[cfg(feature = "retry")]
-    pub fn get_retry(&self) -> Option<&oxbloom_tasks::RetryPolicy> {
-        self.retry.as_ref()
     }
 }
 
@@ -319,12 +258,17 @@ impl<E: std::error::Error + 'static> std::error::Error for TransactionError<E> {
 /// Whether an error is a serialization failure or a deadlock, after which a transaction may
 /// succeed when it runs again.
 ///
-/// With the cargo feature `retry`, [`transaction`] requires it of the work's error type and
-/// retries when it returns `true` and the options carry a retry policy. It is implemented for
-/// `sqlx::Error` (Postgres SQLSTATE `40001` and `40P01`, MySQL errors `1213` and `1205`,
-/// SQLite `SQLITE_BUSY` and `SQLITE_LOCKED`, for each enabled driver), for a boxed error that
-/// holds a `sqlx::Error`, and for a [`TransactionError`] whose inner error is retryable.
-/// Implement it for an application error that wraps a `sqlx::Error` by delegating to it.
+/// `transaction_with_retry` (cargo feature `retry`) requires it of the work's error type and
+/// runs the work again when it returns `true`. It is implemented for `sqlx::Error`
+/// (Postgres SQLSTATE `40001` and `40P01`, MySQL errors `1213` and `1205`, SQLite
+/// `SQLITE_BUSY` and `SQLITE_LOCKED`, for each enabled driver), for a boxed error that holds a
+/// `sqlx::Error` anywhere in its [`source`](std::error::Error::source) chain, and for a
+/// [`TransactionError`] whose inner error is retryable. Implement it for an application error
+/// that wraps a `sqlx::Error` by delegating to it.
+///
+/// SQLite reports `SQLITE_LOCKED` also for a conflict within one connection, such as dropping
+/// a table that an open statement still reads; such an error fails the same way on every run,
+/// so it is retried until the policy's `max_attempts` runs out and then returned.
 ///
 /// # Examples
 ///
@@ -381,10 +325,22 @@ impl RetryableError for sqlx::Error {
     }
 }
 
+/// Whether `error` or any error in its source chain is a retryable `sqlx::Error`.
+fn chain_is_retryable(error: &(dyn std::error::Error + 'static)) -> bool {
+    std::iter::successors(Some(error), |e| e.source())
+        .filter_map(|e| e.downcast_ref::<sqlx::Error>())
+        .any(RetryableError::is_retryable)
+}
+
 impl RetryableError for Box<dyn std::error::Error + Send + Sync> {
     fn is_retryable(&self) -> bool {
-        self.downcast_ref::<sqlx::Error>()
-            .is_some_and(RetryableError::is_retryable)
+        chain_is_retryable(self.as_ref())
+    }
+}
+
+impl RetryableError for Box<dyn std::error::Error> {
+    fn is_retryable(&self) -> bool {
+        chain_is_retryable(self.as_ref())
     }
 }
 
@@ -588,238 +544,281 @@ impl private::Sealed for sqlx::Sqlite {
     }
 }
 
-/// Generates the public `transaction` function, once per configuration of the cargo feature
-/// `retry`, with the shared documentation. `$($bound)*` is the extra bound on the work's error
-/// and `$classify` the function that decides whether that error is retried.
-macro_rules! transaction_fn {
-    ($classify:expr; $($bound:tt)*) => {
-        /// Runs `work` in a database transaction on a connection of `pool`, commits when it
-        /// returns `Ok` and rolls back when it returns `Err`.
-        ///
-        /// `pool` is a sqlx pool of any enabled driver. `work` is an async closure that gets
-        /// the transaction as `&mut sqlx::Transaction`; run statements on it with
-        /// `.execute(&mut **tx)`. Its error type `E` is the application's own; it comes back
-        /// as [`TransactionError::Inner`] after the rollback. A panic in `work` or dropping
-        /// the returned future also rolls the transaction back: sqlx's `Transaction` queues a
-        /// rollback when it is dropped, which runs on the connection before its next use, so
-        /// the next user of the connection sees neither rows nor locks of it.
-        ///
-        /// The [`TransactionOptions`] are applied through the driver's begin statement; an
-        /// option the driver cannot honor fails with [`TransactionError::Unsupported`] before
-        /// a connection is acquired. With the cargo feature `retry`, `E` must implement
-        /// [`RetryableError`] (as `sqlx::Error` does), and options with a
-        /// [`retry`](TransactionOptions::retry) policy run `work` again, in a new
-        /// transaction, after a serialization failure or a deadlock; `work` is an `AsyncFnMut`
-        /// for that reason and must be safe to run again.
-        ///
-        /// A nested transaction inside `work` goes through sqlx's `tx.begin()` (from the
-        /// re-exported `sqlx::Acquire`), which creates a savepoint: rolling it back undoes only
-        /// what ran after it.
-        ///
-        /// Where the returned future must be `Send`, as in a spawned task or a web handler,
-        /// write `work` as an `async move` closure that owns what it uses (clone it in
-        /// first). A closure that borrows from the surrounding async code makes the future
-        /// not `Send`, because of a current limitation of the compiler with async closures
-        /// (rust-lang/rust#110338); outside such contexts borrowing is fine.
-        ///
-        /// # Errors
-        ///
-        /// [`TransactionError::Unsupported`] for options the driver cannot honor,
-        /// [`TransactionError::Begin`] when no connection is available or the begin statement
-        /// fails, [`TransactionError::Inner`] with the error of `work`, and
-        /// [`TransactionError::Commit`] when the commit fails. The driver errors of begin and
-        /// commit are not kept, so that no SQL or server text reaches a log or a response.
-        ///
-        /// # Examples
-        ///
-        /// ```
-        /// # #[cfg(feature = "sqlite")]
-        /// # #[tokio::main(flavor = "current_thread")]
-        /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-        /// use oxbloom_data::sqlx::{self, sqlite::SqlitePoolOptions};
-        /// use oxbloom_data::{RetryableError, TransactionError, TransactionOptions, transaction};
-        ///
-        /// // The application's own error. `RetryableError` lets the cargo feature `retry`
-        /// // recognize a serialization failure inside it.
-        /// #[derive(Debug)]
-        /// enum TransferError {
-        ///     Database(sqlx::Error),
-        ///     InsufficientFunds,
-        /// }
-        ///
-        /// impl From<sqlx::Error> for TransferError {
-        ///     fn from(error: sqlx::Error) -> Self {
-        ///         TransferError::Database(error)
-        ///     }
-        /// }
-        ///
-        /// impl RetryableError for TransferError {
-        ///     fn is_retryable(&self) -> bool {
-        ///         matches!(self, TransferError::Database(e) if e.is_retryable())
-        ///     }
-        /// }
-        ///
-        /// let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await?;
-        /// sqlx::query("CREATE TABLE accounts (name TEXT PRIMARY KEY, balance INTEGER)")
-        ///     .execute(&pool)
-        ///     .await?;
-        ///
-        /// // Both inserts commit together.
-        /// let options = TransactionOptions::default();
-        /// transaction(&pool, &options, async |tx| {
-        ///     sqlx::query("INSERT INTO accounts VALUES ('alice', 100)").execute(&mut **tx).await?;
-        ///     sqlx::query("INSERT INTO accounts VALUES ('bob', 0)").execute(&mut **tx).await?;
-        ///     Ok::<_, sqlx::Error>(())
-        /// })
-        /// .await?;
-        ///
-        /// // An error rolls the transfer back and comes back as `Inner`.
-        /// let result = transaction(&pool, &options, async |tx| {
-        ///     sqlx::query("UPDATE accounts SET balance = balance - 500 WHERE name = 'alice'")
-        ///         .execute(&mut **tx)
-        ///         .await?;
-        ///     let balance: i64 =
-        ///         sqlx::query_scalar("SELECT balance FROM accounts WHERE name = 'alice'")
-        ///             .fetch_one(&mut **tx)
-        ///             .await?;
-        ///     if balance < 0 {
-        ///         return Err(TransferError::InsufficientFunds);
-        ///     }
-        ///     Ok(())
-        /// })
-        /// .await;
-        /// assert!(matches!(result, Err(TransactionError::Inner(TransferError::InsufficientFunds))));
-        /// let balance: i64 = sqlx::query_scalar("SELECT balance FROM accounts WHERE name = 'alice'")
-        ///     .fetch_one(&pool)
-        ///     .await?;
-        /// assert_eq!(balance, 100);
-        /// # Ok(())
-        /// # }
-        /// # #[cfg(not(feature = "sqlite"))]
-        /// # fn main() {}
-        /// ```
-        ///
-        /// In a spawned task, the closure owns its data:
-        ///
-        /// ```
-        /// # #[cfg(feature = "sqlite")]
-        /// # #[tokio::main(flavor = "current_thread")]
-        /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-        /// use oxbloom_data::sqlx::{self, sqlite::SqlitePoolOptions};
-        /// use oxbloom_data::{TransactionOptions, transaction};
-        ///
-        /// let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await?;
-        /// sqlx::query("CREATE TABLE users (name TEXT)").execute(&pool).await?;
-        /// let task_pool = pool.clone();
-        /// let name = String::from("alice");
-        /// tokio::spawn(async move {
-        ///     transaction(&task_pool, &TransactionOptions::default(), async move |tx| {
-        ///         sqlx::query("INSERT INTO users VALUES (?)").bind(&name).execute(&mut **tx).await?;
-        ///         Ok::<_, sqlx::Error>(())
-        ///     })
-        ///     .await
-        /// })
-        /// .await??;
-        /// let users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users").fetch_one(&pool).await?;
-        /// assert_eq!(users, 1);
-        /// # Ok(())
-        /// # }
-        /// # #[cfg(not(feature = "sqlite"))]
-        /// # fn main() {}
-        /// ```
-        ///
-        /// A savepoint inside the transaction:
-        ///
-        /// ```
-        /// # #[cfg(feature = "sqlite")]
-        /// # #[tokio::main(flavor = "current_thread")]
-        /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-        /// use oxbloom_data::sqlx::{self, Acquire, sqlite::SqlitePoolOptions};
-        /// use oxbloom_data::{TransactionOptions, transaction};
-        ///
-        /// let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await?;
-        /// sqlx::query("CREATE TABLE log (line TEXT)").execute(&pool).await?;
-        /// transaction(&pool, &TransactionOptions::default(), async |tx| {
-        ///     sqlx::query("INSERT INTO log VALUES ('kept')").execute(&mut **tx).await?;
-        ///     let mut savepoint = tx.begin().await?;
-        ///     sqlx::query("INSERT INTO log VALUES ('undone')").execute(&mut *savepoint).await?;
-        ///     savepoint.rollback().await?;
-        ///     Ok::<_, sqlx::Error>(())
-        /// })
-        /// .await?;
-        /// let lines: Vec<String> = sqlx::query_scalar("SELECT line FROM log").fetch_all(&pool).await?;
-        /// assert_eq!(lines, ["kept"]);
-        /// # Ok(())
-        /// # }
-        /// # #[cfg(not(feature = "sqlite"))]
-        /// # fn main() {}
-        /// ```
-        pub async fn transaction<DB, T, E, F>(
-            pool: &sqlx::Pool<DB>,
-            options: &TransactionOptions,
-            work: F,
-        ) -> Result<T, TransactionError<E>>
-        where
-            DB: TransactionDatabase,
-            F: for<'t, 'c> AsyncFnMut(&'t mut sqlx::Transaction<'c, DB>) -> Result<T, E>,
-            $($bound)*
-        {
-            run(pool, options, work, $classify).await
-        }
-    };
-}
-
-#[cfg(feature = "retry")]
-transaction_fn!(<E as RetryableError>::is_retryable; E: RetryableError,);
-
-#[cfg(not(feature = "retry"))]
-transaction_fn!(|_: &E| false;);
-
-/// One failed run: the error to return and whether a new run may succeed.
-struct Failure<E> {
-    error: TransactionError<E>,
-    /// Read only by the retry loop of the cargo feature `retry`.
-    #[cfg_attr(not(feature = "retry"), allow(dead_code))]
-    retryable: bool,
-}
-
-/// The body of [`transaction`]: checks the options, then runs attempts until one succeeds,
-/// an error is not retryable, or the retry policy's attempts run out.
-async fn run<DB, T, E, F>(
+/// Runs `work` in a database transaction on a connection of `pool`, commits when it
+/// returns `Ok` and rolls back when it returns `Err`.
+///
+/// `pool` is a sqlx pool of any enabled driver. `work` is an async closure that gets
+/// the transaction as `&mut sqlx::Transaction`; run statements on it with
+/// `.execute(&mut **tx)`. Its error type `E` is the application's own; it comes back
+/// as [`TransactionError::Inner`] after the rollback. A panic in `work` or dropping
+/// the returned future also rolls the transaction back: sqlx's `Transaction` queues a
+/// rollback when it is dropped, which runs on the connection before its next use, so
+/// the next user of the connection sees neither rows nor locks of it.
+///
+/// The [`TransactionOptions`] are applied through the driver's begin statement; an
+/// option the driver cannot honor fails with [`TransactionError::Unsupported`] before
+/// a connection is acquired. `work` runs once and nothing is retried; to run it again after
+/// a serialization failure or a deadlock, use `transaction_with_retry` (cargo feature
+/// `retry`), which takes the same closure. `E` needs no trait here.
+///
+/// A nested transaction inside `work` goes through sqlx's `tx.begin()` (from the
+/// re-exported `sqlx::Acquire`), which creates a savepoint: rolling it back undoes only
+/// what ran after it.
+///
+/// Where the returned future must be `Send`, as in a spawned task or a web handler,
+/// write `work` as an `async move` closure that owns what it uses (clone it in
+/// first). A closure that borrows from the surrounding async code makes the future
+/// not `Send`, because of a current limitation of the compiler with async closures
+/// (rust-lang/rust#110338); outside such contexts borrowing is fine.
+///
+/// # Errors
+///
+/// [`TransactionError::Unsupported`] for options the driver cannot honor,
+/// [`TransactionError::Begin`] when no connection is available or the begin statement
+/// fails, [`TransactionError::Inner`] with the error of `work`, and
+/// [`TransactionError::Commit`] when the commit fails. The driver errors of begin and
+/// commit are not kept, so that no SQL or server text reaches a log or a response.
+///
+/// # Examples
+///
+/// ```
+/// # #[cfg(feature = "sqlite")]
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// use oxbloom_data::sqlx::{self, sqlite::SqlitePoolOptions};
+/// use oxbloom_data::{RetryableError, TransactionError, TransactionOptions, transaction};
+///
+/// // The application's own error. `RetryableError` is needed only by
+/// // `transaction_with_retry`, which recognizes a serialization failure inside it.
+/// #[derive(Debug)]
+/// enum TransferError {
+///     Database(sqlx::Error),
+///     InsufficientFunds,
+/// }
+///
+/// impl From<sqlx::Error> for TransferError {
+///     fn from(error: sqlx::Error) -> Self {
+///         TransferError::Database(error)
+///     }
+/// }
+///
+/// impl RetryableError for TransferError {
+///     fn is_retryable(&self) -> bool {
+///         matches!(self, TransferError::Database(e) if e.is_retryable())
+///     }
+/// }
+///
+/// let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await?;
+/// sqlx::query("CREATE TABLE accounts (name TEXT PRIMARY KEY, balance INTEGER)")
+///     .execute(&pool)
+///     .await?;
+///
+/// // Both inserts commit together.
+/// let options = TransactionOptions::default();
+/// transaction(&pool, &options, async |tx| {
+///     sqlx::query("INSERT INTO accounts VALUES ('alice', 100)").execute(&mut **tx).await?;
+///     sqlx::query("INSERT INTO accounts VALUES ('bob', 0)").execute(&mut **tx).await?;
+///     Ok::<_, sqlx::Error>(())
+/// })
+/// .await?;
+///
+/// // An error rolls the transfer back and comes back as `Inner`.
+/// let result = transaction(&pool, &options, async |tx| {
+///     sqlx::query("UPDATE accounts SET balance = balance - 500 WHERE name = 'alice'")
+///         .execute(&mut **tx)
+///         .await?;
+///     let balance: i64 =
+///         sqlx::query_scalar("SELECT balance FROM accounts WHERE name = 'alice'")
+///             .fetch_one(&mut **tx)
+///             .await?;
+///     if balance < 0 {
+///         return Err(TransferError::InsufficientFunds);
+///     }
+///     Ok(())
+/// })
+/// .await;
+/// assert!(matches!(result, Err(TransactionError::Inner(TransferError::InsufficientFunds))));
+/// let balance: i64 = sqlx::query_scalar("SELECT balance FROM accounts WHERE name = 'alice'")
+///     .fetch_one(&pool)
+///     .await?;
+/// assert_eq!(balance, 100);
+/// # Ok(())
+/// # }
+/// # #[cfg(not(feature = "sqlite"))]
+/// # fn main() {}
+/// ```
+///
+/// In a spawned task, the closure owns its data:
+///
+/// ```
+/// # #[cfg(feature = "sqlite")]
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// use oxbloom_data::sqlx::{self, sqlite::SqlitePoolOptions};
+/// use oxbloom_data::{TransactionOptions, transaction};
+///
+/// let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await?;
+/// sqlx::query("CREATE TABLE users (name TEXT)").execute(&pool).await?;
+/// let task_pool = pool.clone();
+/// let name = String::from("alice");
+/// tokio::spawn(async move {
+///     transaction(&task_pool, &TransactionOptions::default(), async move |tx| {
+///         sqlx::query("INSERT INTO users VALUES (?)").bind(&name).execute(&mut **tx).await?;
+///         Ok::<_, sqlx::Error>(())
+///     })
+///     .await
+/// })
+/// .await??;
+/// let users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users").fetch_one(&pool).await?;
+/// assert_eq!(users, 1);
+/// # Ok(())
+/// # }
+/// # #[cfg(not(feature = "sqlite"))]
+/// # fn main() {}
+/// ```
+///
+/// A savepoint inside the transaction:
+///
+/// ```
+/// # #[cfg(feature = "sqlite")]
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// use oxbloom_data::sqlx::{self, Acquire, sqlite::SqlitePoolOptions};
+/// use oxbloom_data::{TransactionOptions, transaction};
+///
+/// let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await?;
+/// sqlx::query("CREATE TABLE log (line TEXT)").execute(&pool).await?;
+/// transaction(&pool, &TransactionOptions::default(), async |tx| {
+///     sqlx::query("INSERT INTO log VALUES ('kept')").execute(&mut **tx).await?;
+///     let mut savepoint = tx.begin().await?;
+///     sqlx::query("INSERT INTO log VALUES ('undone')").execute(&mut *savepoint).await?;
+///     savepoint.rollback().await?;
+///     Ok::<_, sqlx::Error>(())
+/// })
+/// .await?;
+/// let lines: Vec<String> = sqlx::query_scalar("SELECT line FROM log").fetch_all(&pool).await?;
+/// assert_eq!(lines, ["kept"]);
+/// # Ok(())
+/// # }
+/// # #[cfg(not(feature = "sqlite"))]
+/// # fn main() {}
+/// ```
+pub async fn transaction<DB, T, E, F>(
     pool: &sqlx::Pool<DB>,
     options: &TransactionOptions,
     mut work: F,
-    is_retryable: impl Fn(&E) -> bool,
 ) -> Result<T, TransactionError<E>>
 where
     DB: TransactionDatabase,
     F: for<'t, 'c> AsyncFnMut(&'t mut sqlx::Transaction<'c, DB>) -> Result<T, E>,
 {
-    let begin = <DB as private::Sealed>::begin_statement(options.isolation, options.read_only)
-        .map_err(|()| TransactionError::Unsupported)?;
-    #[cfg(not(feature = "retry"))]
-    {
-        attempt_once(pool, begin, &mut work, &is_retryable)
-            .await
-            .map_err(|failure| failure.error)
-    }
-    #[cfg(feature = "retry")]
-    {
-        let mut attempt: u32 = 1;
-        loop {
-            let failure = match attempt_once(pool, begin, &mut work, &is_retryable).await {
-                Ok(value) => return Ok(value),
-                Err(failure) => failure,
-            };
-            match options.retry.as_ref() {
-                Some(policy) if failure.retryable && attempt < policy.max_attempts => {
-                    tokio::time::sleep(policy.delay(attempt, fastrand::f64())).await;
-                    attempt += 1;
-                }
-                _ => return Err(failure.error),
-            }
+    let begin = begin_statement::<DB, E>(options)?;
+    attempt_once(pool, begin, &mut work, |_| false)
+        .await
+        .map_err(|failure| failure.error)
+}
+
+/// As [`transaction`], but runs `work` again, in a new transaction, after a serialization
+/// failure or a deadlock, following `policy`: at most `policy.max_attempts` runs (zero acts as
+/// one), sleeping the policy's delay with `tokio::time::sleep` before each new run. Needs the
+/// cargo feature `retry`.
+///
+/// An error counts as such a failure when its [`RetryableError::is_retryable`] says so:
+/// Postgres SQLSTATE `40001` and `40P01`, MySQL errors `1213` and `1205`, and SQLite
+/// `SQLITE_BUSY` and `SQLITE_LOCKED`, whether the work returns it or the commit fails with
+/// it. A failed begin and every other error, such as a constraint violation or a syntax
+/// error, are returned at once. When the attempts run out, the last error is returned. The
+/// work must be safe to run again: everything it did in the database is rolled back, but
+/// effects outside the database, such as a sent message, are not. The retries log nothing,
+/// so no driver error text reaches the logs.
+///
+/// # Errors
+///
+/// As [`transaction`], with the error of the last run.
+///
+/// # Examples
+///
+/// ```
+/// # #[cfg(feature = "sqlite")]
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// use std::time::Duration;
+/// use oxbloom_data::sqlx::{self, sqlite::SqlitePoolOptions};
+/// use oxbloom_data::{TransactionError, TransactionOptions, transaction_with_retry};
+/// use oxbloom_tasks::{Backoff, RetryPolicy};
+///
+/// let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await?;
+/// sqlx::query("CREATE TABLE counters (n INTEGER UNIQUE)").execute(&pool).await?;
+/// let policy = RetryPolicy {
+///     max_attempts: 5,
+///     backoff: Backoff::Fixed,
+///     initial: Duration::from_millis(10),
+///     ..RetryPolicy::default()
+/// };
+/// let options = TransactionOptions::default();
+/// let mut runs = 0;
+/// transaction_with_retry(&pool, &options, &policy, async |tx| {
+///     runs += 1;
+///     sqlx::query("INSERT INTO counters (n) VALUES (1)").execute(&mut **tx).await?;
+///     Ok::<_, sqlx::Error>(())
+/// })
+/// .await?;
+/// assert_eq!(runs, 1);
+///
+/// // A constraint violation is not a serialization failure: it runs once.
+/// let result = transaction_with_retry(&pool, &options, &policy, async |tx| {
+///     sqlx::query("INSERT INTO counters (n) VALUES (1)").execute(&mut **tx).await?;
+///     Ok::<_, sqlx::Error>(())
+/// })
+/// .await;
+/// assert!(matches!(result, Err(TransactionError::Inner(_))));
+/// # Ok(())
+/// # }
+/// # #[cfg(not(feature = "sqlite"))]
+/// # fn main() {}
+/// ```
+#[cfg(feature = "retry")]
+pub async fn transaction_with_retry<DB, T, E, F>(
+    pool: &sqlx::Pool<DB>,
+    options: &TransactionOptions,
+    policy: &oxbloom_tasks::RetryPolicy,
+    mut work: F,
+) -> Result<T, TransactionError<E>>
+where
+    DB: TransactionDatabase,
+    E: RetryableError,
+    F: for<'t, 'c> AsyncFnMut(&'t mut sqlx::Transaction<'c, DB>) -> Result<T, E>,
+{
+    let begin = begin_statement::<DB, E>(options)?;
+    let mut attempt: u32 = 1;
+    loop {
+        let failure = match attempt_once(pool, begin, &mut work, E::is_retryable).await {
+            Ok(value) => return Ok(value),
+            Err(failure) => failure,
+        };
+        if !failure.retryable || attempt >= policy.max_attempts {
+            return Err(failure.error);
         }
+        tokio::time::sleep(policy.delay(attempt, fastrand::f64())).await;
+        attempt += 1;
     }
+}
+
+/// The begin statement of `DB` for `options`, refused before any connection is acquired when
+/// the driver cannot honor them.
+fn begin_statement<DB: TransactionDatabase, E>(
+    options: &TransactionOptions,
+) -> Result<Option<&'static str>, TransactionError<E>> {
+    <DB as private::Sealed>::begin_statement(options.isolation, options.read_only)
+        .map_err(|()| TransactionError::Unsupported)
+}
+
+/// One failed run: the error to return and whether a new run may succeed.
+struct Failure<E> {
+    error: TransactionError<E>,
+    /// Read only by `transaction_with_retry`.
+    #[cfg_attr(not(feature = "retry"), allow(dead_code))]
+    retryable: bool,
 }
 
 /// One run of `work` in its own transaction.
@@ -827,7 +826,7 @@ async fn attempt_once<DB, T, E, F>(
     pool: &sqlx::Pool<DB>,
     begin: Option<&'static str>,
     work: &mut F,
-    is_retryable: &impl Fn(&E) -> bool,
+    is_retryable: fn(&E) -> bool,
 ) -> Result<T, Failure<E>>
 where
     DB: TransactionDatabase,

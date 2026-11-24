@@ -1,6 +1,6 @@
 //! `transaction`: commit, rollback on an error, a panic and a dropped future, savepoints, the
-//! options a driver cannot honor, the fixed error text and, with the feature `retry`, the
-//! retry of serialization failures and lock conflicts.
+//! options a driver cannot honor, the fixed error text and, with the feature `retry`,
+//! `transaction_with_retry` and the retry of serialization failures and lock conflicts.
 //!
 //! The tests use SQLite file databases in the temporary directory, because a file database
 //! survives the close of a pooled connection and can be opened by a second pool to provoke
@@ -8,45 +8,71 @@
 
 #![cfg(feature = "sqlite")]
 
+use std::ops::Deref;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use oxbloom_data::sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use oxbloom_data::sqlx::{self, Acquire};
-use oxbloom_data::{Isolation, RetryableError, TransactionError, TransactionOptions, transaction};
+use oxbloom_data::{Isolation, TransactionError, TransactionOptions, transaction};
 
-/// A business error of the work. It implements `RetryableError` because the cargo feature
-/// `retry` requires that of the work's error; it is never retryable.
+/// A business error of the work, a plain type that implements no trait of the crate.
 #[derive(Debug, PartialEq)]
 enum Rule {
     Violated,
     Database,
 }
 
-impl RetryableError for Rule {
-    fn is_retryable(&self) -> bool {
-        false
+/// The SQLite file of one test. Dropping it removes the file and its `-journal`, `-wal` and
+/// `-shm` siblings, so the tests leave nothing in the temporary directory.
+struct TempDb(PathBuf);
+
+impl TempDb {
+    /// A unique path for the test `name`; an old file of the same name is removed first.
+    fn new(name: &str) -> Self {
+        let path =
+            std::env::temp_dir().join(format!("oxbloom-data-tx-{name}-{}.db", std::process::id()));
+        let db = Self(path);
+        db.remove();
+        db
+    }
+
+    fn remove(&self) {
+        for suffix in ["", "-journal", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", self.0.display()));
+        }
     }
 }
 
-/// A unique SQLite file path for one test; an old file of the same name is removed first.
-fn db_path(name: &str) -> PathBuf {
-    let path =
-        std::env::temp_dir().join(format!("oxbloom-data-tx-{name}-{}.db", std::process::id()));
-    for suffix in ["", "-journal", "-wal", "-shm"] {
-        let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+impl Deref for TempDb {
+    type Target = PathBuf;
+
+    fn deref(&self) -> &PathBuf {
+        &self.0
     }
-    path
+}
+
+impl Drop for TempDb {
+    fn drop(&mut self) {
+        self.remove();
+    }
 }
 
 /// A pool of at most `max` connections on the file `path`. The busy timeout is zero, so a
 /// lock conflict fails at once with `SQLITE_BUSY` instead of waiting five seconds.
 async fn file_pool(path: &PathBuf, max: u32) -> SqlitePool {
+    file_pool_waiting(path, max, Duration::ZERO).await
+}
+
+/// As `file_pool`, but a lock conflict waits up to `busy_timeout` before it fails. The pools
+/// that hold or release locks in the tests use it, so they never fail on a lock that the
+/// connection under test holds for a moment.
+async fn file_pool_waiting(path: &PathBuf, max: u32, busy_timeout: Duration) -> SqlitePool {
     let options = SqliteConnectOptions::new()
         .filename(path)
         .create_if_missing(true)
-        .busy_timeout(Duration::ZERO);
+        .busy_timeout(busy_timeout);
     SqlitePoolOptions::new()
         .max_connections(max)
         .connect_with(options)
@@ -55,8 +81,8 @@ async fn file_pool(path: &PathBuf, max: u32) -> SqlitePool {
 }
 
 /// A one-connection pool on a fresh database with the table `items`.
-async fn setup(name: &str) -> (SqlitePool, PathBuf) {
-    let path = db_path(name);
+async fn setup(name: &str) -> (SqlitePool, TempDb) {
+    let path = TempDb::new(name);
     let pool = file_pool(&path, 1).await;
     sqlx::query("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE)")
         .execute(&pool)
@@ -80,7 +106,7 @@ async fn assert_no_leftover_transaction(pool: &SqlitePool, path: &PathBuf) {
     sqlx::query("ROLLBACK").execute(&mut *conn).await.unwrap();
     drop(conn);
 
-    let other = file_pool(path, 1).await;
+    let other = file_pool_waiting(path, 1, Duration::from_secs(5)).await;
     sqlx::query("INSERT INTO items (name) VALUES ('from another connection')")
         .execute(&other)
         .await
@@ -335,9 +361,34 @@ async fn error_display_is_fixed_text() {
     );
 }
 
+/// `transaction` has no bound on the work's error type in any configuration, so a plain
+/// `&str` error compiles with and without the cargo feature `retry`.
+#[tokio::test]
+async fn transaction_accepts_any_error_type() {
+    let (pool, _path) = setup("any-error").await;
+    let err = transaction(&pool, &TransactionOptions::default(), async |tx| {
+        sqlx::query("INSERT INTO items (name) VALUES ('a')")
+            .execute(&mut **tx)
+            .await
+            .map_err(|_| "insert failed")?;
+        Err::<(), &'static str>("not today")
+    })
+    .await
+    .unwrap_err();
+    assert_eq!(err.into_inner(), Some("not today"));
+    let value = transaction(&pool, &TransactionOptions::default(), async |_tx| {
+        Ok::<_, String>(5)
+    })
+    .await
+    .unwrap();
+    assert_eq!(value, 5);
+    assert_eq!(count(&pool).await, 0);
+}
+
 #[cfg(feature = "retry")]
 mod retry {
     use super::*;
+    use oxbloom_data::{RetryableError, transaction_with_retry};
     use oxbloom_tasks::{Backoff, Jitter, RetryPolicy};
 
     fn policy(max_attempts: u32, delay_ms: u64) -> RetryPolicy {
@@ -365,7 +416,9 @@ mod retry {
     async fn lock_for_writers(
         path: &PathBuf,
     ) -> (SqlitePool, sqlx::Transaction<'static, sqlx::Sqlite>) {
-        let holder = file_pool(path, 1).await;
+        // The holder waits for locks, so its commit never fails on the shared lock that a
+        // failed attempt of the retrying writer holds until its rollback.
+        let holder = file_pool_waiting(path, 1, Duration::from_secs(5)).await;
         let mut tx = holder.begin().await.unwrap();
         sqlx::query("INSERT INTO items (name) VALUES ('holder')")
             .execute(&mut *tx)
@@ -377,11 +430,12 @@ mod retry {
     #[tokio::test]
     async fn retry_runs_the_closure_again_only_for_retryable_errors() {
         let (pool, path) = setup("retry-stub").await;
-        let options = TransactionOptions::default().retry(policy(5, 1));
+        let options = TransactionOptions::default();
+        let retry = policy(5, 1);
 
         // The stub classifier: retryable errors run again, until the work succeeds.
         let calls = AtomicU32::new(0);
-        let value = transaction(&pool, &options, async |_tx| {
+        let value = transaction_with_retry(&pool, &options, &retry, async |_tx| {
             if calls.fetch_add(1, Ordering::SeqCst) < 2 {
                 Err(Stub(true))
             } else {
@@ -394,7 +448,7 @@ mod retry {
 
         // A non-retryable error runs once.
         let calls = AtomicU32::new(0);
-        let err = transaction(&pool, &options, async |_tx| {
+        let err = transaction_with_retry(&pool, &options, &retry, async |_tx| {
             calls.fetch_add(1, Ordering::SeqCst);
             Err::<(), _>(Stub(false))
         })
@@ -403,7 +457,7 @@ mod retry {
         assert_eq!(err.into_inner(), Some(Stub(false)));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
 
-        // Without a retry policy, nothing is retried.
+        // `transaction` itself never retries.
         let calls = AtomicU32::new(0);
         let _ = transaction(&pool, &TransactionOptions::default(), async |_tx| {
             calls.fetch_add(1, Ordering::SeqCst);
@@ -419,8 +473,8 @@ mod retry {
             tokio::time::sleep(Duration::from_millis(150)).await;
             held.commit().await.unwrap();
         };
-        let options = TransactionOptions::default().retry(policy(50, 20));
-        let work = transaction(&pool, &options, {
+        let retry = policy(50, 20);
+        let work = transaction_with_retry(&pool, &options, &retry, {
             async |tx| {
                 calls.fetch_add(1, Ordering::SeqCst);
                 sqlx::query("INSERT INTO items (name) VALUES ('retried')")
@@ -444,7 +498,8 @@ mod retry {
         let (pool, path) = setup("retry-max").await;
         let (holder, held) = lock_for_writers(&path).await;
         let calls = AtomicU32::new(0);
-        let err = transaction(&pool, &TransactionOptions::default().retry(policy(3, 5)), {
+        let options = TransactionOptions::default();
+        let err = transaction_with_retry(&pool, &options, &policy(3, 5), {
             async |tx| {
                 calls.fetch_add(1, Ordering::SeqCst);
                 sqlx::query("INSERT INTO items (name) VALUES ('never')")
@@ -459,8 +514,17 @@ mod retry {
         assert!(err.is_retryable(), "the last error is the busy error");
         let inner = err.into_inner().unwrap();
         assert!(inner.is_retryable());
-        let boxed: Box<dyn std::error::Error + Send + Sync> = Box::new(inner);
-        assert!(boxed.is_retryable(), "a boxed sqlx error is classified too");
+        // A boxed error is classified through its source chain.
+        let wrapped = Wrapped(inner);
+        let boxed: Box<dyn std::error::Error + Send + Sync> = Box::new(Wrapped(wrapped.0));
+        assert!(
+            boxed.is_retryable(),
+            "a wrapped sqlx error is classified too"
+        );
+        let plain: Box<dyn std::error::Error> = boxed;
+        assert!(plain.is_retryable());
+        let not_sqlx: Box<dyn std::error::Error> = Box::new(std::io::Error::other("busy"));
+        assert!(!not_sqlx.is_retryable());
         held.rollback().await.unwrap();
         holder.close().await;
         assert_no_leftover_transaction(&pool, &path).await;
@@ -475,7 +539,8 @@ mod retry {
             .await
             .unwrap();
         let calls = AtomicU32::new(0);
-        let err = transaction(&pool, &TransactionOptions::default().retry(policy(5, 1)), {
+        let options = TransactionOptions::default();
+        let err = transaction_with_retry(&pool, &options, &policy(5, 1), {
             async |tx| {
                 calls.fetch_add(1, Ordering::SeqCst);
                 sqlx::query("INSERT INTO items (name) VALUES ('taken')")
@@ -491,5 +556,61 @@ mod retry {
         let boxed: Box<dyn std::error::Error + Send + Sync> = Box::new(err.into_inner().unwrap());
         assert!(!boxed.is_retryable());
         assert!(!sqlx::Error::PoolTimedOut.is_retryable());
+    }
+
+    /// An application error that wraps a sqlx error and exposes it as its source.
+    #[derive(Debug)]
+    struct Wrapped(sqlx::Error);
+
+    impl std::fmt::Display for Wrapped {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("the order could not be stored")
+        }
+    }
+
+    impl std::error::Error for Wrapped {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    #[tokio::test]
+    async fn a_retryable_commit_failure_is_retried() {
+        let (pool, path) = setup("retry-commit").await;
+        // An open read transaction on another connection holds a shared lock, so the commit of
+        // the writer, which needs an exclusive lock, fails with `SQLITE_BUSY`.
+        let reader_pool = file_pool_waiting(&path, 1, Duration::from_secs(5)).await;
+        let mut reader = reader_pool.acquire().await.unwrap();
+        sqlx::query("BEGIN").execute(&mut *reader).await.unwrap();
+        let seen: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM items")
+            .fetch_one(&mut *reader)
+            .await
+            .unwrap();
+        assert_eq!(seen, 0);
+
+        let calls = AtomicU32::new(0);
+        let release = async {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            sqlx::query("COMMIT").execute(&mut *reader).await.unwrap();
+        };
+        let options = TransactionOptions::default();
+        let retry = policy(50, 20);
+        let work = transaction_with_retry(&pool, &options, &retry, async |tx| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            // The insert takes only the reserved lock, which the reader does not block.
+            sqlx::query("INSERT INTO items (name) VALUES ('committed')")
+                .execute(&mut **tx)
+                .await?;
+            Ok::<_, sqlx::Error>(())
+        });
+        let ((), result) = tokio::join!(release, work);
+        result.unwrap();
+        assert!(
+            calls.load(Ordering::SeqCst) >= 2,
+            "the busy commit was retried"
+        );
+        assert_eq!(count(&pool).await, 1);
+        drop(reader);
+        reader_pool.close().await;
     }
 }

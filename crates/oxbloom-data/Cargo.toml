@@ -11,9 +11,10 @@ default = []
 postgres = ["sqlx/postgres", "sqlx/tls-rustls-aws-lc-rs-native-roots"]
 mysql = ["sqlx/mysql", "sqlx/tls-rustls-aws-lc-rs-native-roots"]
 sqlite = ["sqlx/sqlite", "sqlx/tls-rustls-aws-lc-rs-native-roots"]
-# `TransactionOptions::retry`: runs the work of a transaction again after a serialization
-# failure or a deadlock, with the retry policy of `oxbloom-tasks`. Off by default, so a build
-# without it does not depend on `oxbloom-tasks`; `fastrand` draws the jitter of the delays.
+# `transaction_with_retry`: runs the work of a transaction again after a serialization
+# failure or a deadlock, with the retry policy of `oxbloom-tasks`. The feature only adds that
+# function (it is additive). Off by default, so a build without it does not depend on
+# `oxbloom-tasks`; `fastrand` draws the jitter of the delays.
 retry = ["dep:oxbloom-tasks", "dep:fastrand"]
 
 [dependencies]

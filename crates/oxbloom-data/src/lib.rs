@@ -5,8 +5,9 @@
 //! on the matching `sqlx` driver; the TLS stack is rustls with `aws-lc-rs` and the platform
 //! root certificates, never `ring`. [`transaction`] runs async work in a transaction of any
 //! enabled driver's pool. The cargo feature `retry` (off by default) adds
-//! `TransactionOptions::retry`, which runs that work again after a serialization failure or
-//! a deadlock.
+//! `transaction_with_retry`, which runs that work again after a serialization failure or a
+//! deadlock. The feature only adds that function, so turning it on never changes
+//! [`transaction`] or [`TransactionOptions`].
 //!
 //! # Examples
 //!
@@ -29,6 +30,8 @@ pub use pool::TlsMaterial;
 pub use settings::{DataSettings, Driver, PROPERTIES, SourceSettings, SslMode};
 pub use sources::DataSources;
 pub use sqlx;
+#[cfg(feature = "retry")]
+pub use transaction::transaction_with_retry;
 pub use transaction::{
     Isolation, RetryableError, TransactionDatabase, TransactionError, TransactionOptions,
     transaction,
