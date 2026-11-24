@@ -41,11 +41,11 @@ struct Slot {
     state: tokio::sync::Mutex<Option<Outcome>>,
 }
 
-/// Counts a caller as waiting for the slot lock until it has the lock or is dropped.
-struct Waiting<'a>(&'a AtomicUsize);
+/// Counts a caller as waiting for a lock until it has the lock or is dropped.
+pub(super) struct Waiting<'a>(&'a AtomicUsize);
 
 impl<'a> Waiting<'a> {
-    fn new(counter: &'a AtomicUsize) -> Waiting<'a> {
+    pub(super) fn new(counter: &'a AtomicUsize) -> Waiting<'a> {
         counter.fetch_add(1, Ordering::AcqRel);
         Waiting(counter)
     }
@@ -122,9 +122,12 @@ impl TokenCache {
         {
             return outcome.clone();
         }
-        let generation = slot.generation.load(Ordering::Acquire);
+        let generation;
         {
             let mut current = lock(&slot.current);
+            // Read with `current` locked, as the invalidations change it, so the generation
+            // and the token this caller looks at belong together.
+            generation = slot.generation.load(Ordering::Acquire);
             if let Some(cached) = &*current
                 && cached.generation == generation
                 && is_fresh(&cached.token, clock.now(), skew)

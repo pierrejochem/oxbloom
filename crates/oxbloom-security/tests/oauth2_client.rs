@@ -164,6 +164,13 @@ fn gate(inner: Arc<dyn HttpClient>) -> (Arc<dyn HttpClient>, GateHandles) {
     (Arc::new(gate), handles)
 }
 
+/// Waits for `future`, failing the test instead of hanging when a regression blocks it.
+async fn bounded<F: std::future::Future>(future: F) -> F::Output {
+    tokio::time::timeout(Duration::from_secs(10), future)
+        .await
+        .expect("the test did not finish within 10 seconds")
+}
+
 /// Waits until `count` callers of `svc` are queued behind a request in flight.
 async fn wait_for_waiters(client: &OAuth2Client, count: usize) {
     while client.__waiting_callers("svc") < count {
@@ -256,58 +263,64 @@ async fn concurrent_callers_at_expiry_cause_one_request() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_callers_share_the_failure_of_the_request_they_waited_for() {
-    let flaky = Arc::new(Flaky::new(FakeProvider::new(ISSUER).client(), 1));
-    let token_requests = flaky.token_requests.clone();
-    let (http, gate) = gate(flaky);
-    let client = OAuth2Client::new(
-        settings(vec![registration("svc", &[], ClientAuthentication::Basic)]),
-        http,
-    );
-    let leader = {
-        let client = client.clone();
-        tokio::spawn(async move { client.client_credentials("svc").await })
-    };
-    gate.entered.notified().await;
-    let others: Vec<_> = (0..7)
-        .map(|_| {
+    bounded(async {
+        let flaky = Arc::new(Flaky::new(FakeProvider::new(ISSUER).client(), 1));
+        let token_requests = flaky.token_requests.clone();
+        let (http, gate) = gate(flaky);
+        let client = OAuth2Client::new(
+            settings(vec![registration("svc", &[], ClientAuthentication::Basic)]),
+            http,
+        );
+        let leader = {
             let client = client.clone();
             tokio::spawn(async move { client.client_credentials("svc").await })
-        })
-        .collect();
-    wait_for_waiters(&client, 7).await;
-    gate.release.notify_one();
-    assert_eq!(leader.await.unwrap().unwrap_err(), TokenError::Http);
-    for task in others {
-        assert_eq!(task.await.unwrap().unwrap_err(), TokenError::Http);
-    }
-    assert_eq!(token_requests.load(Ordering::SeqCst), 1);
+        };
+        gate.entered.notified().await;
+        let others: Vec<_> = (0..7)
+            .map(|_| {
+                let client = client.clone();
+                tokio::spawn(async move { client.client_credentials("svc").await })
+            })
+            .collect();
+        wait_for_waiters(&client, 7).await;
+        gate.release.notify_one();
+        assert_eq!(leader.await.unwrap().unwrap_err(), TokenError::Http);
+        for task in others {
+            assert_eq!(task.await.unwrap().unwrap_err(), TokenError::Http);
+        }
+        assert_eq!(token_requests.load(Ordering::SeqCst), 1);
 
-    // The failure was not kept: the next caller tries again at once.
-    gate.armed.store(false, Ordering::SeqCst);
-    assert!(client.client_credentials("svc").await.is_ok());
-    assert_eq!(token_requests.load(Ordering::SeqCst), 2);
+        // The failure was not kept: the next caller tries again at once.
+        gate.armed.store(false, Ordering::SeqCst);
+        assert!(client.client_credentials("svc").await.is_ok());
+        assert_eq!(token_requests.load(Ordering::SeqCst), 2);
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_cancelled_leader_does_not_block_the_next_caller() {
-    let fake = FakeProvider::new(ISSUER);
-    let (http, gate) = gate(fake.client());
-    let client = OAuth2Client::new(
-        settings(vec![registration("svc", &[], ClientAuthentication::Basic)]),
-        http,
-    );
-    let leader = {
-        let client = client.clone();
-        tokio::spawn(async move { client.client_credentials("svc").await })
-    };
-    gate.entered.notified().await;
-    leader.abort();
-    assert!(leader.await.unwrap_err().is_cancelled());
-    // The request of the leader never reached the provider, and the slot is free again.
-    gate.armed.store(false, Ordering::SeqCst);
-    client.client_credentials("svc").await.unwrap();
-    assert_eq!(fake.token_requests().len(), 1);
-    assert_eq!(client.__waiting_callers("svc"), 0);
+    bounded(async {
+        let fake = FakeProvider::new(ISSUER);
+        let (http, gate) = gate(fake.client());
+        let client = OAuth2Client::new(
+            settings(vec![registration("svc", &[], ClientAuthentication::Basic)]),
+            http,
+        );
+        let leader = {
+            let client = client.clone();
+            tokio::spawn(async move { client.client_credentials("svc").await })
+        };
+        gate.entered.notified().await;
+        leader.abort();
+        assert!(leader.await.unwrap_err().is_cancelled());
+        // The request of the leader never reached the provider, and the slot is free again.
+        gate.armed.store(false, Ordering::SeqCst);
+        client.client_credentials("svc").await.unwrap();
+        assert_eq!(fake.token_requests().len(), 1);
+        assert_eq!(client.__waiting_callers("svc"), 0);
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -589,26 +602,29 @@ fn the_client_and_the_errors_are_send_sync_and_cheap_to_clone() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_token_invalidated_while_its_request_is_in_flight_is_not_kept() {
-    let fake = FakeProvider::new(ISSUER);
-    let (http, gate) = gate(fake.client());
-    let client = OAuth2Client::new(
-        settings(vec![registration("svc", &[], ClientAuthentication::Basic)]),
-        http,
-    );
-    let call = {
-        let client = client.clone();
-        tokio::spawn(async move { client.client_credentials("svc").await })
-    };
-    gate.entered.notified().await;
-    client.invalidate("svc");
-    gate.release.notify_one();
-    // The caller that was already waiting still gets its answer.
-    call.await.unwrap().unwrap();
-    assert_eq!(fake.token_requests().len(), 1);
-    // But the token was not stored, so the next call asks again.
-    gate.armed.store(false, Ordering::SeqCst);
-    client.client_credentials("svc").await.unwrap();
-    assert_eq!(fake.token_requests().len(), 2);
+    bounded(async {
+        let fake = FakeProvider::new(ISSUER);
+        let (http, gate) = gate(fake.client());
+        let client = OAuth2Client::new(
+            settings(vec![registration("svc", &[], ClientAuthentication::Basic)]),
+            http,
+        );
+        let call = {
+            let client = client.clone();
+            tokio::spawn(async move { client.client_credentials("svc").await })
+        };
+        gate.entered.notified().await;
+        client.invalidate("svc");
+        gate.release.notify_one();
+        // The caller that was already waiting still gets its answer.
+        call.await.unwrap().unwrap();
+        assert_eq!(fake.token_requests().len(), 1);
+        // But the token was not stored, so the next call asks again.
+        gate.armed.store(false, Ordering::SeqCst);
+        client.client_credentials("svc").await.unwrap();
+        assert_eq!(fake.token_requests().len(), 2);
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -641,35 +657,81 @@ async fn invalidate_token_for_a_stale_token_is_a_no_op() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn callers_holding_the_same_refused_token_cause_one_refetch() {
-    let fake = FakeProvider::new(ISSUER);
-    let (http, gate) = gate(fake.client());
-    gate.armed.store(false, Ordering::SeqCst);
-    let client = OAuth2Client::new(
-        settings(vec![registration("svc", &[], ClientAuthentication::Basic)]),
-        http,
-    );
-    let refused = client.client_credentials("svc").await.unwrap();
-    assert_eq!(fake.token_requests().len(), 1);
+    bounded(async {
+        let fake = FakeProvider::new(ISSUER);
+        let (http, gate) = gate(fake.client());
+        gate.armed.store(false, Ordering::SeqCst);
+        let client = OAuth2Client::new(
+            settings(vec![registration("svc", &[], ClientAuthentication::Basic)]),
+            http,
+        );
+        let refused = client.client_credentials("svc").await.unwrap();
+        assert_eq!(fake.token_requests().len(), 1);
 
-    // Eight callers all got a 401 for `refused`. The first refetch is held at the gate.
-    gate.armed.store(true, Ordering::SeqCst);
-    let callers: Vec<_> = (0..8)
-        .map(|_| {
-            let client = client.clone();
-            let refused = refused.clone();
-            tokio::spawn(async move {
-                client.invalidate_token("svc", &refused);
-                client.client_credentials("svc").await
+        // Eight callers all got a 401 for `refused`. The first refetch is held at the gate.
+        gate.armed.store(true, Ordering::SeqCst);
+        let callers: Vec<_> = (0..8)
+            .map(|_| {
+                let client = client.clone();
+                let refused = refused.clone();
+                tokio::spawn(async move {
+                    client.invalidate_token("svc", &refused);
+                    client.client_credentials("svc").await
+                })
             })
-        })
-        .collect();
-    gate.entered.notified().await;
-    gate.release.notify_one();
-    let mut values = Vec::new();
-    for caller in callers {
-        values.push(caller.await.unwrap().unwrap().value.expose().clone());
-    }
-    assert!(values.iter().all(|v| v != refused.value.expose()));
-    assert!(values.windows(2).all(|pair| pair[0] == pair[1]));
-    assert_eq!(fake.token_requests().len(), 2);
+            .collect();
+        gate.entered.notified().await;
+        gate.release.notify_one();
+        let mut values = Vec::new();
+        for caller in callers {
+            values.push(caller.await.unwrap().unwrap().value.expose().clone());
+        }
+        assert!(values.iter().all(|v| v != refused.value.expose()));
+        assert!(values.windows(2).all(|pair| pair[0] == pair[1]));
+        assert_eq!(fake.token_requests().len(), 2);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_waiter_of_an_aborted_leader_fetches_a_new_token_instead_of_the_old_outcome() {
+    bounded(async {
+        let fake = FakeProvider::new(ISSUER);
+        fake.access_token_lifetime(Some(100));
+        let clock = ManualClock::at(SystemTime::now());
+        let (http, gate) = gate(fake.client());
+        gate.armed.store(false, Ordering::SeqCst);
+        let client = OAuth2Client::new(
+            settings(vec![registration("svc", &[], ClientAuthentication::Basic)]),
+            http,
+        )
+        .clock(Arc::new(clock.clone()));
+        // The slot remembers the outcome of this request.
+        let old = client.client_credentials("svc").await.unwrap();
+        clock.advance(Duration::from_secs(70));
+
+        // The token is due: a leader asks for a new one and is held at the gate, and a waiter
+        // queues behind it.
+        gate.armed.store(true, Ordering::SeqCst);
+        let leader = {
+            let client = client.clone();
+            tokio::spawn(async move { client.client_credentials("svc").await })
+        };
+        gate.entered.notified().await;
+        let waiter = {
+            let client = client.clone();
+            tokio::spawn(async move { client.client_credentials("svc").await })
+        };
+        wait_for_waiters(&client, 1).await;
+        gate.armed.store(false, Ordering::SeqCst);
+        leader.abort();
+        assert!(leader.await.unwrap_err().is_cancelled());
+
+        // The aborted leader finished no request, so the waiter does not take the old outcome:
+        // it asks for a token of its own.
+        let fresh = waiter.await.unwrap().unwrap();
+        assert_ne!(fresh.value.expose(), old.value.expose());
+        assert_eq!(fake.token_requests().len(), 2);
+    })
+    .await;
 }
