@@ -9,7 +9,7 @@ oxbloom-security = { version = "0.1", features = ["oauth2"] }           # OAuth2
 oxbloom-test = { version = "0.1", features = ["oauth2"] }               # FakeProvider and MockHttpClient (dev-dependency)
 ```
 
-The decisions are in [ADR 0095](../adr/0095-oauth2-client-credentials.md) and the public items are in the [API reference](../API.md#415-oauth2-login). The design is a local file under `docs/superpowers`, so this page names it without a link.
+The decisions are in [ADR 0095](../adr/0095-oauth2-client-credentials.md) and the public items are in the [API reference](../API.md#415-oauth2-login-and-client). The design is a local file under `docs/superpowers`, so this page names it without a link.
 
 ## Registrations
 
@@ -17,12 +17,12 @@ The client reads the same `security.oauth2.client.*` keys as the login (see [Con
 
 ```toml
 [security.form-login]
-enabled = true                       # needed while SecurityAutoConfiguration runs (see Limits)
+enabled = true                       # OAuth2 login uses the form login session
 
 [security.session]
 
 [security.oauth2]
-base-url = "https://app.example"     # needed while SecurityAutoConfiguration runs (see Limits)
+base-url = "https://app.example"     # needed for OAuth2 login
 
 # The users log in with `corp`; the client refreshes their tokens.
 [security.oauth2.client.registration.corp]
@@ -31,6 +31,22 @@ client-secret = "${CORP_CLIENT_SECRET}"
 scope         = ["email", "orders.read"]
 
 # The application calls the orders service as itself with `billing`.
+[security.oauth2.client.registration.billing]
+client-id     = "billing-service"
+client-secret = "${BILLING_CLIENT_SECRET}"
+scope         = ["orders.read"]
+provider      = "corp"
+
+[security.oauth2.client.provider.corp]
+issuer-uri = "https://login.corp.example"
+```
+
+An application that only calls services with client credentials, and has no OAuth2 login, turns the login off; then it needs neither form login nor a base URL:
+
+```toml
+[security.oauth2.login]
+enabled = false                      # default true; the registrations do not turn on OAuth2 login
+
 [security.oauth2.client.registration.billing]
 client-id     = "billing-service"
 client-secret = "${BILLING_CLIENT_SECRET}"
@@ -84,7 +100,7 @@ impl Orders {
 }
 ```
 
-When no token can be had, the wrappers do not send the request and return `HttpClientError::InvalidRequest`; the reason is logged at debug level on the target `oxbloom::security`. Call `client_credentials` yourself first when you need the `TokenError`.
+When no token can be had, the wrappers do not send the request and return `HttpClientError::InvalidRequest`; the reason is logged at debug level on the target `oxbloom::security`. Call `client_credentials` yourself first when you need the `TokenError`. This also holds after a 401: when `BearerRetryClient` cannot get a new token for the retry, the caller gets `InvalidRequest` and never sees the 401. `BearerRetryClient` clones every request before the first send, so a request with a large body costs a copy of it.
 
 ## The logged-in user's tokens
 
@@ -187,16 +203,17 @@ For the user's tokens, log in through the fake as in [Testing with `FakeProvider
 
 ## Limits
 
-- **A client-credentials-only registration still needs login fields.** The configuration checks treat every registration like a login registration: a plain provider needs `authorization-uri`, `user-info-uri` and `user-name-attribute`, and a discovered provider must announce an authorization endpoint. For a provider that you only use for client credentials, supply the login fields anyway, even though no login will use them. A per-registration grant types key is parked for a later slice (ruling R24).
-- **The registrations also turn on OAuth2 login.** With `SecurityAutoConfiguration` in the list (as in `auto_configurations()`), every registration is also offered for login, so form login, the `security.session` table and `security.oauth2.base-url` are required even in an application that only uses the client, and `/oauth2/authorization/<id>` starts a login for a client-credentials registration too. An application without a login can register its own `SecurityFilterChain` bean (then boot does not configure OAuth2 login) or exclude `SecurityAutoConfiguration`.
+- **The registrations turn on OAuth2 login by default.** With `SecurityAutoConfiguration` in the list (as in `auto_configurations()`), every registration is also offered for login, so form login, the `security.session` table and `security.oauth2.base-url` are required, and `/oauth2/authorization/<id>` starts a login for a client-credentials registration too. An application that only uses the client sets `security.oauth2.login.enabled = false` (then there are no login endpoints and neither form login nor the base URL is needed), registers its own `SecurityFilterChain` bean, or excludes `SecurityAutoConfiguration`. The startup failures for a missing base URL or form login name these three opt-outs.
+- **A client-credentials-only registration still needs login fields.** The configuration checks treat every registration like a login registration, also with the login turned off: a plain provider needs `authorization-uri`, `user-info-uri` and `user-name-attribute`, and a discovered provider must announce an authorization endpoint. For a provider that you only use for client credentials, supply the login fields anyway, even though no login will use them. A per-registration grant types key is parked for a later slice (ruling R24).
 - **Provider calls use the shared HTTP client.** Every token and discovery request goes through the `dyn HttpClient` bean, so `http.client.*` applies (redirects, body limit, proxy, SSL bundle), and each request has its own timeout of 10 seconds, which replaces `http.client.timeout`. With `http.client.retry.max-attempts` above 1, the discovery GET can be retried; the token request is a POST and is not.
 - **The skew.** A token is replaced 30 seconds before it expires. A token whose lifetime is no longer than the skew is never reused, so every call asks the provider again; keep the skew (`OAuth2Client::skew` on your own bean) below the lifetime the provider issues. Clamping the skew to the lifetime is parked.
-- **Backoff.** A failed discovery is remembered for 5 seconds, so calls within that window fail without a request. A failed token request has no backoff: callers that waited for it get its failure, and the next caller asks again at once.
-- **The rotation record is per process and in memory.** It keeps at most 256 records for 10 minutes; an older record is no longer used but stays in memory until the next refresh after the 10 minutes. Each record holds copies of the renewed tokens (access, refresh and id token), so a memory dump can show them for that long. Instances behind a load balancer do not share it: use sticky sessions, or a provider that does not rotate refresh tokens, or overlapping requests on two instances can spend a refresh token twice and log the user out. A logout does not purge the records.
+- **Backoff and the outage worst case.** A failed discovery is remembered for 5 seconds, so calls within that window fail without a request. A failed token request has no backoff: callers that waited for it get its failure, and the next caller asks again at once. During an outage of a provider that fails fast, client credentials therefore send up to one request per round trip per registration (one in flight at a time, about 1/latency requests per second). User refreshes are serialized per refresh token only, so the provider sees up to one refresh for each incoming request that needs a user token, with at most one in flight per user and registration, each bounded by the 10 second timeout. A short backoff for transient failures is parked.
+- **The rotation record is per process, in memory, and shared by all users.** It keeps at most 256 records, the least recently used dropped first, for at most 10 minutes; an older record is no longer used but stays in memory until the next refresh after the 10 minutes. The 256 records are one pool for every user and registration, so at N refreshes per second a record lives about 256/N seconds: with 10,000 active users and 5-minute tokens (about 33 refreshes per second) that is about 8 seconds, not 10 minutes, and one user who causes refreshes from many sessions can push out the records of others. When the record of a stale session copy is gone, the spent refresh token goes to the provider again; a provider with reuse detection then revokes the whole token family and the user has to log in again. Making the limit configurable is parked. Each record holds copies of the renewed tokens (access, refresh and id token), so a memory dump can show them while the record lives. Instances behind a load balancer do not share it: use sticky sessions, or a provider that does not rotate refresh tokens, or overlapping requests on two instances can spend a refresh token twice and log the user out. A logout does not purge the records.
 - **The binding check.** `access_token_for` works only for a request whose authentication has `oauth2.principal = true` and `oauth2.registration` equal to the requested registration. A user who logged in with another registration, or with a password, gets `ReauthenticationRequired`.
 - **Tokens without `expires_in`.** A login token stored without an expiry is reported to expire 60 seconds from now and is never refreshed early; it is used until the downstream service answers 401.
 - **`UserTokenInterceptor` is per request.** It takes the session and the authentication of one request when it is built; kept past its request it fails every call. It maps every token error to `HttpClientError::InvalidRequest`; call `access_token_for` first to tell `ReauthenticationRequired` apart, as in the example above.
-- **One retry after a 401, and only for client credentials.** `BearerRetryClient` retries once, also a `POST`, because a 401 means the service refused the request before processing it; do not put a service that processes a request and then answers 401 behind it. `UserTokenInterceptor` and `ClientCredentialsInterceptor` never retry.
+- **One retry after a 401, and only for client credentials.** `BearerRetryClient` retries once, also a `POST`, because a 401 means the service refused the request before processing it; do not put a service that processes a request and then answers 401 behind it. If the new token request fails, the caller gets `InvalidRequest`, not the 401. The request is cloned up front, so a large body is copied. `UserTokenInterceptor` and `ClientCredentialsInterceptor` never retry.
+- **Test hooks are not API.** `oxbloom_security::__test_support` and the `__*` methods of `OAuth2Client` (`__waiting_callers`, `__refresh_waiters`, `__refresh_locks`, `__rotation_records`) are hidden, unstable test hooks. The closure of `MockHttpClient::on_fn` runs while the mock's state lock is held, so it must not call the same mock.
 - **Not supported:** the device code grant, token exchange (RFC 8693), token revocation, and a persistent token store. Client credentials tokens live in memory per process; the user's tokens live in the session and end with it.
 - **Two metadata caches.** The login and the client each keep their own discovery cache, so an application with both fetches the discovery document of each provider twice per hour. Sharing one cache is parked.
 - **`TokenError` is `Copy`.** Its variants carry no data beyond a fixed error code, so adding a variant with a message or a source would be a breaking change.

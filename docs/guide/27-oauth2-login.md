@@ -9,7 +9,7 @@ oxbloom-security = { version = "0.1", features = ["oauth2"] }           # HttpSe
 oxbloom-test = { version = "0.1", features = ["oauth2"] }               # FakeProvider (dev-dependency)
 ```
 
-The boot feature `oauth2` turns on `security` and `http-client`, so the provider requests go through the `dyn HttpClient` bean of `HttpClientAutoConfiguration` (see [Configuration and the bean](26-http-client.md#configuration-and-the-bean)). Without the feature, boot does not read `security.oauth2`; when the configuration has that section anyway, `SecurityAutoConfiguration` logs one warning at startup (target `oxbloom::boot`) that names the key and the feature. The decisions are in [ADR 0094](../adr/0094-oauth2-login.md) and the public items are in the [API reference](../API.md#415-oauth2-login). The design is a local file under `docs/superpowers`, so this page names it without a link.
+The boot feature `oauth2` turns on `security` and `http-client`, so the provider requests go through the `dyn HttpClient` bean of `HttpClientAutoConfiguration` (see [Configuration and the bean](26-http-client.md#configuration-and-the-bean)). Without the feature, boot does not read `security.oauth2`; when the configuration has that section anyway, `SecurityAutoConfiguration` logs one warning at startup (target `oxbloom::boot`) that names the key and the feature. The decisions are in [ADR 0094](../adr/0094-oauth2-login.md) and the public items are in the [API reference](../API.md#415-oauth2-login-and-client). The design is a local file under `docs/superpowers`, so this page names it without a link.
 
 ## How a login runs
 
@@ -23,7 +23,7 @@ Every failure redirects to the failure URL (by default the failure URL of form l
 
 ## Configuration
 
-Boot turns OAuth2 login on when `security.oauth2.client.registration` has at least one entry. Form login and the session table must be configured too, and form login needs no password provider then.
+Boot turns OAuth2 login on when `security.oauth2.client.registration` has at least one entry, unless `security.oauth2.login.enabled` is `false` (for an application that only uses the [OAuth2 client](28-oauth2-client.md#oauth2-client)). Form login and the session table must be configured too, and form login needs no password provider then.
 
 ```toml
 [security.form-login]
@@ -66,6 +66,7 @@ The keys:
 |---|---|
 | `security.oauth2.base-url` | The external URL of the application: an absolute `https` URL (`http` only for `localhost`, a `127.0.0.0/8` address or `::1`) with no path beyond an optional `/`, no query and no fragment. Required when a registration exists. |
 | `security.oauth2.failure-url` | Where a failed login goes: a local path outside `/oauth2/authorization/` and `/login/oauth2/code/`. Optional. |
+| `security.oauth2.login.enabled` | Whether the registrations turn on OAuth2 login; default `true`. With `false` there are no login endpoints and neither form login nor `base-url` is needed; the OAuth2 client still works. |
 | `security.oauth2.client.registration.<id>.client-id` | The client id. Required. |
 | `security.oauth2.client.registration.<id>.client-secret` | The client secret, required unless `client-authentication` is `none`. Never printed. |
 | `security.oauth2.client.registration.<id>.scope` | The scopes to ask for. |
