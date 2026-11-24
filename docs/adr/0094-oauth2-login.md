@@ -59,7 +59,7 @@ Good:
 Bad:
 
 - Form login must be on, even in an application without passwords.
-- The callback path cannot be changed, and an application behind a proxy that adds a path prefix must have the proxy strip it.
+- The callback path cannot be changed, and deployments under a path prefix are not supported for OAuth2 login; behind a reverse proxy, the proxy must route `/oauth2/authorization/` and `/login/oauth2/code/` at the root of the external host to the application, and `base-url` is that external origin.
 - A provider that signs only with PS256 cannot be used yet.
 - Tokens in a cookie-backed session can make the cookie too large.
 - `SCOPE_*` from different providers look the same; rules must check the registration when that matters.

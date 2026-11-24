@@ -1012,12 +1012,12 @@ Delivered:
 
 Usage pointers: configure `security.form-login.enabled = true`, the `security.session` table, `security.oauth2.base-url` and one registration with its provider, then link to `/oauth2/authorization/<id>`; see the guide chapter for an OpenID Connect and a GitHub-like sample, and `FakeProvider` for tests.
 
-Limits that users must know (also in the guide): tokens in a cookie-backed session can be too large (use a server-side store); a `SameSite=Strict` session cookie loses the login; no RP-initiated logout; form login is required; the callback path is fixed and the base URL has no path (a proxy must strip a prefix); `SCOPE_*` authorities are not tied to a registration; providers without an issuer are accepted with a warning; GitHub's 200 answer with an `error` field becomes a generic token error; an id token without `kid` is refused; fractional `exp` and `iat` are refused; HEAD on the endpoints is 405; the default login page does not list the registrations; `invalidate_all` for an OAuth2 user needs `oauth2:<registration>:<principal>`, and usernames that start with `oauth2:` are reserved.
+Limits that users must know (also in the guide): tokens in a cookie-backed session can be too large (use a server-side store); a `SameSite=Strict` session cookie loses the login; no RP-initiated logout; form login is required; the callback path is fixed and the base URL has no path, so deployments under a path prefix are not supported (behind a reverse proxy, route `/oauth2/authorization/` and `/login/oauth2/code/` at the root of the external host to the application, and `base-url` is that external origin); `SCOPE_*` authorities are not tied to a registration; providers without an issuer are accepted with a warning; GitHub's 200 answer with an `error` field becomes a generic token error; an id token without `kid` is refused; fractional `exp` and `iat` are refused; HEAD on the endpoints is 405; the default login page does not list the registrations; `invalidate_all` for an OAuth2 user needs `oauth2:<registration>:<principal>`, and usernames that start with `oauth2:` are reserved.
 
 Parked, not yet scheduled:
 - RP-initiated (provider) logout.
 - Provider presets (GitHub, Google and others).
-- A configurable callback path.
+- A configurable callback path, and deployments under a path prefix (a base URL with a path).
 - A default login page that lists the registrations.
 - HEAD support on the two endpoints.
 - PS256 in the JWKS key lookup (and so in the id token algorithms).

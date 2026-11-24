@@ -163,7 +163,7 @@ In a boot application, a `SecurityCustomizer` that calls `oauth2_login` wins: `S
 ```rust
 use std::sync::Arc;
 use oxbloom_http_client::HttpClient;
-use oxbloom_test::{FakeProvider, FakeUser, MockHttpClient, TestApp};
+use oxbloom_test::{FakeProvider, MockHttpClient, TestApp};
 
 #[tokio::test]
 async fn logs_in_through_the_provider() {
@@ -184,9 +184,9 @@ async fn logs_in_through_the_provider() {
         .start()
         .await;
     let start = app.client().get("/oauth2/authorization/idp").send().await;
-    let location = start.header("location").unwrap().to_owned();
-    let cookie = start.header("set-cookie").unwrap().split(';').next().unwrap().to_owned();
-    // Read `state` and `nonce` from `location`, then:
+    assert_eq!(start.status(), 302);
+    assert!(start.header("set-cookie").is_some()); // the session that holds the pending login
+    // Read `state` and `nonce` from the `location` header, keep the session cookie, then:
     // fake.expect_nonce(nonce);
     // let code = fake.issue_code(FakeUser::new("alice").scope("openid email"));
     // app.client().get(&format!("/login/oauth2/code/idp?code={code}&state={state}"))
@@ -204,12 +204,12 @@ The boot tests in `crates/oxbloom-boot/tests/oauth2_login.rs` run the whole flow
 - **No RP-initiated logout.** Logout ends the local session only; the user stays logged in at the provider.
 - **Form login is required**, also in an application without passwords.
 - **The callback path is fixed** at `/login/oauth2/code/{id}`. A `redirect-uri` must resolve to `{base-url}/login/oauth2/code/{id}`; anything else fails the start on that registration's `redirect-uri` key.
-- **The base URL has no path.** An application behind a proxy that serves it under a path prefix (`https://example.com/app/`) cannot express that prefix; the proxy must strip it before the request reaches the application, and the provider must be registered with the external URL.
+- **No path prefix.** `security.oauth2.base-url` has no path, so the redirect URI is always `https://<host>/login/oauth2/code/{id}` and the two endpoints live at the root of the external host. Deploying the application under a path prefix (`https://example.com/app/`) is not supported for OAuth2 login in this slice (ruling R15 keeps the base URL free of a path and the callback path fixed). Behind a reverse proxy, the proxy must route `/oauth2/authorization/` and `/login/oauth2/code/` at the root of the external host to the application, and `base-url` is that external origin.
 - **`SCOPE_*` authorities are not tied to a registration.** A provider of low trust that grants a scope named `admin` produces `SCOPE_admin`. Check `oauth2.registration` when it matters.
 - **A provider without an issuer.** A provider with `jwk-set-uri` and no `issuer-uri` is accepted; its id token `iss` is only required to be non-empty. The startup logs a warning for each such registration. Configure `issuer-uri` when the provider has one.
 - **Numeric principals.** A JSON integer in `user-name-attribute` becomes a string principal (`4242`). A boolean, a float, an array, an object, `null` or an empty string fails the login.
 - **GitHub's 200 answer with an `error` field.** GitHub answers some token endpoint failures with status 200 and an `error` field instead of a token. Oxbloom treats such an answer as a generic token error, without the provider's description.
-- **A token without `kid`.** An id token must carry a `kid` header, even when the provider has only one key; a provider with several keys that omits it is refused.
+- **A token without `kid` is refused**, even from a provider that has a single key (a documented gap).
 - **Fractional times are refused.** An id token whose `exp` or `iat` is not a whole number of seconds fails.
 - **HEAD is 405.** The two endpoints answer only GET; any other method, HEAD included, is a 405.
 - **The default login page does not list the registrations.** Add the links yourself.

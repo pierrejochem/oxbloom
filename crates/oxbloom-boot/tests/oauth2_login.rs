@@ -557,8 +557,15 @@ async fn the_failure_analyzer_names_the_key() {
         base_url()
     ));
     fails(toml, key, &[]).await;
-    // An unknown key of the section.
-    let toml = config(&format!("{}\nbase-path = \"/x\"", base_url()));
-    let (description, _) = fails(toml, "security.oauth2", &[]).await;
-    assert!(description.contains("security.oauth2"), "{description}");
+    // An unknown key of the section: the report names it and still shows no value.
+    let toml = config(&format!("{}\nbase-path = \"/hidden-value\"", base_url()));
+    let (description, _) = fails(toml, "security.oauth2", &["hidden-value"]).await;
+    assert!(description.contains("`base-path`"), "{description}");
+    let toml = config(&base_url()).replace(
+        "[security.oauth2.client.registration.idp]",
+        "[security.oauth2.client.registrations.idp]\nclient-id = \"hidden-id\"\n\
+         [security.oauth2.client.registration.idp]",
+    );
+    let (description, _) = fails(toml, "security.oauth2.client", &["hidden-id"]).await;
+    assert!(description.contains("`registrations`"), "{description}");
 }

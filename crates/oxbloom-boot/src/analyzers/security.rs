@@ -203,8 +203,10 @@ impl FailureAnalyzer for RememberMeAnalyzer {
 
 /// Recognises an `OAuth2LoginError` of `SecurityAutoConfiguration`, or a `ConfigError::Invalid`
 /// for a key in the `security.oauth2` section, anywhere in the cause chain. The report names
-/// the key with a fixed text and leaves out the configuration error's message, so no value
-/// (a URL, a secret given with the wrong type) can reach it.
+/// the key with a fixed text. Of the configuration error's message it shows only the name of an
+/// unknown key (the lenient deserializer writes `unknown field `name`, ...`); every other
+/// message is left out. The messages of the deserializer never echo a value, but the messages
+/// written by the readers are free text, so leaving them out keeps the report fixed.
 #[cfg(feature = "oauth2")]
 pub(crate) struct OAuth2Analyzer;
 
@@ -232,17 +234,19 @@ impl FailureAnalyzer for OAuth2Analyzer {
             };
             return Some(FailureAnalysis::new(description, action));
         }
-        let ConfigError::Invalid { key, .. } = failure.find_cause::<ConfigError>()? else {
+        let ConfigError::Invalid { key, message, .. } = failure.find_cause::<ConfigError>()? else {
             return None;
         };
         if key != "security.oauth2" && !key.starts_with("security.oauth2.") {
             return None;
         }
+        let unknown = unknown_field(message);
         let action = if key == crate::autoconfigure::OAUTH2_BASE_URL {
             "Set `security.oauth2.base-url` to the external URL of the application: an absolute \
              `https` URL (`http` only for a loopback host) with no path, query or fragment, such \
-             as `https://app.example`. The callback path is fixed at \
-             `/login/oauth2/code/{id}`; a proxy that adds a path prefix must strip it."
+             as `https://app.example`. A path prefix is not supported: behind a reverse proxy, \
+             route `/oauth2/authorization/` and `/login/oauth2/code/` at the root of the \
+             external host to the application, and set `base-url` to that external origin."
         } else if key == crate::autoconfigure::OAUTH2_FAILURE_URL {
             "Set `security.oauth2.failure-url` to a local path such as `/login?error`, outside \
              `/oauth2/authorization/` and `/login/oauth2/code/`, or remove it to use the \
@@ -262,11 +266,27 @@ impl FailureAnalyzer for OAuth2Analyzer {
              `token-uri`; endpoints are absolute `https` URLs (`http` only for a loopback \
              host); ids hold only `a` to `z`, `0` to `9` and `-`."
         };
-        Some(FailureAnalysis::new(
-            format!("The OAuth2 configuration key `{key}` is not valid."),
-            action,
-        ))
+        let description = match unknown {
+            Some(field) => {
+                format!("The OAuth2 configuration section `{key}` has an unknown key `{field}`.")
+            }
+            None => format!("The OAuth2 configuration key `{key}` is not valid."),
+        };
+        Some(FailureAnalysis::new(description, action))
     }
+}
+
+/// The key name of an `unknown field `name`, ...` message, when it is a plain key name.
+#[cfg(feature = "oauth2")]
+fn unknown_field(message: &str) -> Option<&str> {
+    let rest = message.strip_prefix("unknown field `")?;
+    let name = &rest[..rest.find('`')?];
+    let plain = !name.is_empty()
+        && name.len() <= 64
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    plain.then_some(name)
 }
 
 /// Recognises a `ConfigError::Invalid` for a key in the `security.jwt` section anywhere in the
@@ -665,6 +685,22 @@ mod tests {
             assert!(a.action().unwrap().contains(expected), "{key}: {a}");
             assert!(!a.to_string().contains("hunter2"), "{a}");
         }
+        // An unknown key is named; any other message stays out.
+        let di: DiError = ConfigError::invalid(
+            "security.oauth2.client",
+            "unknown field `registrations`, expected one of [\"registration\", \"provider\"]",
+        )
+        .into();
+        let a = analyze_oauth2(di).unwrap();
+        assert_eq!(
+            a.description(),
+            "The OAuth2 configuration section `security.oauth2.client` has an unknown key `registrations`."
+        );
+        let di: DiError =
+            ConfigError::invalid("security.oauth2", "unknown field `a b=hunter2`, expected x")
+                .into();
+        let a = analyze_oauth2(di).unwrap();
+        assert!(!a.to_string().contains("hunter2"), "{a}");
         assert!(analyze_oauth2(ConfigError::invalid("security.oauth2x", "bad")).is_none());
         assert!(analyze_oauth2(ConfigError::invalid("security.jwt.secret", "bad")).is_none());
         assert!(
