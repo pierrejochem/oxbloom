@@ -11,7 +11,9 @@ use serde_json::{Map, Value};
 
 use super::metadata::ASYMMETRIC;
 use super::settings::is_acceptable_endpoint;
-use super::{ClientRegistration, OAuth2Error, ProviderMetadata, constant_time_eq};
+use super::{
+    ClientRegistration, OAuth2Error, PROVIDER_REQUEST_TIMEOUT, ProviderMetadata, constant_time_eq,
+};
 use crate::{JwksSource, ReqwestJwksFetcher};
 
 /// The tolerance for `exp`, `iat` and `nbf`, in seconds.
@@ -119,7 +121,9 @@ impl fmt::Debug for IdTokenClaims {
 }
 
 /// Validates id tokens, with the signing keys loaded from the provider's JWKS through an
-/// [`HttpClient`] and cached per key set URI (see [`JwksSource`]).
+/// [`HttpClient`] and cached per provider (see [`JwksSource`]): one source per provider of the
+/// registration, replaced when the provider's key set URI changes. A key set fetch ends after
+/// 10 seconds.
 ///
 /// # Examples
 ///
@@ -133,7 +137,9 @@ impl fmt::Debug for IdTokenClaims {
 /// ```
 pub struct IdTokenValidator {
     client: Arc<dyn HttpClient>,
-    sources: Mutex<HashMap<String, Arc<JwksSource>>>,
+    /// One key source per provider, with the key set URI it was built for. A new URI from a
+    /// metadata refresh replaces the entry, so the map never grows past the providers.
+    sources: Mutex<HashMap<String, (String, Arc<JwksSource>)>>,
 }
 
 impl IdTokenValidator {
@@ -243,7 +249,7 @@ impl IdTokenValidator {
         }
         let kid = header.kid.as_deref().ok_or(INVALID)?;
         let jwks_uri = metadata.jwks_uri.as_deref().ok_or(INVALID)?;
-        let source = self.source(jwks_uri)?;
+        let source = self.source(&registration.provider, jwks_uri)?;
         let jwk = source
             .key_for(kid, &[header.alg])
             .await
@@ -268,10 +274,13 @@ impl IdTokenValidator {
         Ok(IdTokenClaims { subject, claims })
     }
 
-    /// The cached key source for `jwks_uri`, built on first use.
-    fn source(&self, jwks_uri: &str) -> Result<Arc<JwksSource>, OAuth2Error> {
+    /// The cached key source of `provider` for `jwks_uri`, built on first use and rebuilt when
+    /// the provider names another key set URI.
+    fn source(&self, provider: &str, jwks_uri: &str) -> Result<Arc<JwksSource>, OAuth2Error> {
         let mut sources = self.sources.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(source) = sources.get(jwks_uri) {
+        if let Some((uri, source)) = sources.get(provider)
+            && uri == jwks_uri
+        {
             return Ok(source.clone());
         }
         // The metadata checks this too; a hand-built `ProviderMetadata` must not skip it.
@@ -279,7 +288,10 @@ impl IdTokenValidator {
             return Err(OAuth2Error::InvalidIdToken);
         }
         let fetcher = Arc::new(ReqwestJwksFetcher::with_client(self.client.clone()));
-        let mut builder = JwksSource::builder(fetcher, jwks_uri);
+        // The fetcher sends the request through the shared client without a per-request
+        // timeout, so the source bounds each fetch instead.
+        let mut builder =
+            JwksSource::builder(fetcher, jwks_uri).fetch_timeout(PROVIDER_REQUEST_TIMEOUT);
         // `is_acceptable_endpoint` only lets `http` through for a loopback host.
         if jwks_uri
             .get(..7)
@@ -288,7 +300,7 @@ impl IdTokenValidator {
             builder = builder.allow_insecure_http();
         }
         let source = builder.build().map_err(|_| OAuth2Error::InvalidIdToken)?;
-        sources.insert(jwks_uri.to_owned(), source.clone());
+        sources.insert(provider.to_owned(), (jwks_uri.to_owned(), source.clone()));
         Ok(source)
     }
 }
@@ -632,5 +644,73 @@ mod tests {
             validate_header(json!({"alg": "ES256", "kid": "k"}), &meta).await,
             (INVALID, 1)
         );
+    }
+    /// Never answers, so only a timeout ends a fetch.
+    struct Hanging;
+
+    #[async_trait]
+    impl HttpClient for Hanging {
+        async fn execute(&self, _request: Request) -> Result<Response, HttpClientError> {
+            std::future::pending().await
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_key_set_fetch_that_never_answers_ends_after_the_provider_timeout() {
+        let validator = IdTokenValidator::new(Arc::new(Hanging));
+        let started = tokio::time::Instant::now();
+        let result = validator
+            .validate(
+                &token_with_header(json!({"alg": "ES256", "kid": "k"})),
+                &registration(),
+                &metadata(ISSUER),
+                "n-1",
+                UNIX_EPOCH + Duration::from_secs(NOW),
+            )
+            .await
+            .map(|_| ());
+        assert_eq!(result, INVALID);
+        let waited = started.elapsed();
+        assert!(
+            waited >= Duration::from_secs(10) && waited < Duration::from_secs(11),
+            "{waited:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_key_sources_hold_one_entry_per_provider() {
+        let client = Arc::new(Counting::default());
+        let validator = IdTokenValidator::new(client.clone());
+        let token = token_with_header(json!({"alg": "ES256", "kid": "k"}));
+        let now = UNIX_EPOCH + Duration::from_secs(NOW);
+        // A provider whose discovery names a new key set URI on every refresh.
+        for i in 0..20 {
+            let mut meta = metadata(ISSUER);
+            meta.jwks_uri = Some(format!("https://idp.example.test/jwks/{i}"));
+            let _ = validator
+                .validate(&token, &registration(), &meta, "n-1", now)
+                .await;
+        }
+        assert!(
+            format!("{validator:?}").contains("key_sets: 1"),
+            "{validator:?}"
+        );
+        // Another provider has its own entry.
+        let mut other = registration();
+        other.provider = "other".into();
+        let _ = validator
+            .validate(&token, &other, &metadata(ISSUER), "n-1", now)
+            .await;
+        assert!(
+            format!("{validator:?}").contains("key_sets: 2"),
+            "{validator:?}"
+        );
+        // The same URI again reuses the entry, so its key set is not fetched again within the
+        // rate limit of the source.
+        let before = client.0.load(Ordering::SeqCst);
+        let _ = validator
+            .validate(&token, &other, &metadata(ISSUER), "n-1", now)
+            .await;
+        assert_eq!(client.0.load(Ordering::SeqCst), before);
     }
 }

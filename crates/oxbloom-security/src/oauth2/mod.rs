@@ -35,6 +35,11 @@ pub use user::{UserInfo, authentication_from};
 /// The largest provider answer read: 1 MiB, as for a JWKS.
 pub(crate) const MAX_BODY_BYTES: usize = 1_048_576;
 
+/// The timeout of every provider call: discovery, the key set, the token exchange and the user
+/// info. It is set on each request, so it caps the timeout of the shared `HttpClient` bean
+/// (`http.client.timeout`) for these calls.
+pub(crate) const PROVIDER_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Compares two secrets (a nonce, a state) in constant time with respect to their content.
 pub(crate) fn constant_time_eq(a: &str, b: &str) -> bool {
     aws_lc_rs::constant_time::verify_slices_are_equal(a.as_bytes(), b.as_bytes()).is_ok()
