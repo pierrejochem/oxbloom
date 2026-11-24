@@ -75,12 +75,15 @@ struct Records {
 }
 
 impl Records {
+    /// Drops the records older than 10 minutes, and those created after `now`: a clock that
+    /// stepped backwards must not keep a record longer than its lifetime.
     fn purge(&mut self, now: SystemTime) {
         self.map.retain(|_, record| {
-            record
-                .created
-                .checked_add(RECORD_LIFETIME)
-                .is_some_and(|end| now < end)
+            record.created <= now
+                && record
+                    .created
+                    .checked_add(RECORD_LIFETIME)
+                    .is_some_and(|end| now < end)
         });
     }
 }
@@ -275,5 +278,47 @@ mod tests {
             thread.join().unwrap();
         }
         assert_eq!(rotations.locks(), 0);
+    }
+
+    fn tokens() -> StoredTokens {
+        StoredTokens {
+            v: 1,
+            access_token: "renewed-access".into(),
+            token_type: "Bearer".into(),
+            expires_at: None,
+            refresh_token: Some("renewed-refresh".into()),
+            id_token: None,
+            scope: None,
+        }
+    }
+
+    /// A record created "after" now (the clock stepped backwards) is treated as expired, so a
+    /// backward step cannot keep a record beyond its 10 minutes.
+    #[test]
+    fn a_record_from_the_future_is_expired() {
+        let rotations = Rotations::default();
+        let t = SystemTime::UNIX_EPOCH + Duration::from_secs(1_800_000_000);
+        rotations.remember("idp", "spent", tokens(), t);
+        assert!(rotations.record("idp", "spent", t).is_some());
+        let earlier = t - Duration::from_secs(1);
+        assert!(rotations.record("idp", "spent", earlier).is_none());
+        assert_eq!(rotations.records(t), 0);
+    }
+
+    #[test]
+    fn a_record_is_used_for_ten_minutes() {
+        let rotations = Rotations::default();
+        let t = SystemTime::UNIX_EPOCH + Duration::from_secs(1_800_000_000);
+        rotations.remember("idp", "spent", tokens(), t);
+        assert!(
+            rotations
+                .record("idp", "spent", t + Duration::from_secs(599))
+                .is_some()
+        );
+        assert!(
+            rotations
+                .record("idp", "spent", t + Duration::from_secs(600))
+                .is_none()
+        );
     }
 }

@@ -157,7 +157,10 @@ impl fmt::Debug for ClientCredentialsInterceptor {
 ///
 /// When no token can be had, the request is not sent and the error is
 /// [`HttpClientError::InvalidRequest`] with its fixed text; the reason is logged at debug
-/// level. An invalid request is refused with the same error before a token is fetched.
+/// level. This also holds for the retry: when the new token request after a 401 fails, the
+/// caller gets `InvalidRequest` and never sees the 401. An invalid request is refused with the
+/// same error before a token is fetched. The request is cloned before the first send, so a
+/// request with a large body costs a copy of it.
 ///
 /// `Debug` shows the registration id only.
 ///
