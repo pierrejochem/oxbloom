@@ -8,6 +8,7 @@
 #[allow(dead_code)]
 mod authorization;
 mod error;
+mod id_token;
 mod metadata;
 #[allow(dead_code)]
 mod pending;
@@ -16,18 +17,20 @@ mod pkce;
 mod registration;
 mod settings;
 mod token;
+mod user;
 
 pub use error::OAuth2Error;
+pub use id_token::{IdTokenClaims, IdTokenValidator};
 pub use metadata::{MetadataCache, ProviderMetadata};
 pub use registration::{ClientAuthentication, ClientRegistration, ProviderConfig};
 pub use settings::OAuth2Settings;
 pub use token::{TokenEndpoint, TokenResponse};
+pub use user::{UserInfo, authentication_from};
 
 /// The largest provider answer read: 1 MiB, as for a JWKS.
 pub(crate) const MAX_BODY_BYTES: usize = 1_048_576;
 
 /// Compares two secrets (a nonce, a state) in constant time with respect to their content.
-#[allow(dead_code)]
 pub(crate) fn constant_time_eq(a: &str, b: &str) -> bool {
     aws_lc_rs::constant_time::verify_slices_are_equal(a.as_bytes(), b.as_bytes()).is_ok()
 }

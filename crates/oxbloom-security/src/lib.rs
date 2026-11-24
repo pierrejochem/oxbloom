@@ -151,7 +151,8 @@ pub use oauth2::{ClientAuthentication, ClientRegistration, OAuth2Settings, Provi
 #[doc(hidden)]
 pub mod __test_support {
     pub use crate::oauth2::{
-        MetadataCache, OAuth2Error, ProviderMetadata, TokenEndpoint, TokenResponse,
+        IdTokenClaims, IdTokenValidator, MetadataCache, OAuth2Error, ProviderMetadata,
+        TokenEndpoint, TokenResponse, UserInfo, authentication_from,
     };
 }
 pub use oxbloom_macros::{method_security, post_authorize, post_filter, pre_authorize, pre_filter};
