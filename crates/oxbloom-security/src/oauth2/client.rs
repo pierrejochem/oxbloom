@@ -523,18 +523,22 @@ impl OAuth2Client {
     /// - Refreshes of one refresh token are serialized, keyed by the registration and the
     ///   SHA-256 digest of the token, not by the session id (with the cookie session backend
     ///   every request has a new one). Each successful refresh is remembered for 10 minutes
-    ///   (at most 256 records, least recently used out first): a call that holds a refresh
+    ///   (at most 256 records, least recently used out first; an older record is no longer
+    ///   used and stays in memory until the next refresh after the 10 minutes, which purges
+    ///   it; a logout does not remove records): a call that holds a refresh
     ///   token that was already spent, by a concurrent request or before a stale copy of the
     ///   session was written back, adopts the tokens that refresh produced instead of sending
-    ///   the token again, following up to four records of later rotations. So under normal
+    ///   the token again, following up to four records of later rotations; once it holds the
+    ///   lock of a refresh token it checks the record of that token again. So under normal
     ///   operation a rotated refresh token is sent to the provider at most once. Adoption
     ///   needs the exact spent refresh token of the same registration and the authentication
     ///   check above, so it never crosses users.
     /// - The refresh runs in a task of its own that writes the record even when the calling
     ///   request is dropped (a client that disconnects), so a token the provider has already
-    ///   rotated is never lost; the next request adopts it. A session that cannot be written
-    ///   does not lose it either: the call still returns the new token, and the record serves
-    ///   the next request.
+    ///   rotated is not lost unless the record is evicted or expired first; the next request
+    ///   adopts it. A session that cannot be written does not lose it either, on the same
+    ///   condition: the call still returns the new token, and the record serves the next
+    ///   request.
     /// - Calls that waited for a refresh that failed get its failure. There is no backoff
     ///   after a failed refresh: each later request tries once more.
     ///
@@ -549,8 +553,11 @@ impl OAuth2Client {
     /// useless token is removed), or when the provider answers the refresh with
     /// `invalid_grant` for a token that no recorded refresh spent (the tokens are removed from
     /// the session): the user has to log in again. An `invalid_grant` for a token that a
-    /// recorded refresh rotated is no failure: the call adopts the recorded tokens. [`TokenError::UnknownRegistration`] for an id that is not configured. Any other
-    /// failure of the refresh leaves the stored tokens as they are and is reported as for
+    /// recorded refresh rotated is no failure: the call adopts the recorded tokens. A record
+    /// of a provider that does not rotate refresh tokens (the renewed refresh token is the
+    /// spent one) is no rotation: such an `invalid_grant` is genuine, and the record is
+    /// dropped. [`TokenError::UnknownRegistration`] for an id that is not configured. Any
+    /// other failure of the refresh leaves the stored tokens as they are and is reported as for
     /// [`client_credentials`](Self::client_credentials): [`TokenError::Provider`],
     /// [`TokenError::Http`], [`TokenError::Discovery`] or [`TokenError::Invalid`].
     ///
@@ -694,6 +701,19 @@ impl OAuth2Client {
         let entry = self.rotations.entry(registration_id, &refresh_token);
         let seen = entry.attempts();
         let last = entry.lock().await;
+        let now = self.clock.now();
+        let record = self.rotations.record(registration_id, &refresh_token, now);
+        // A rotation of this token recorded since the lookup above (a refresh that finished
+        // between the lookup and the lock, or a record beyond the links followed) is adopted
+        // whatever `attempts` says, so the spent token is not sent again: a provider with reuse
+        // detection would revoke the whole token family.
+        if let Some(done) = record
+            .as_ref()
+            .filter(|done| done.refresh_token.as_deref() != Some(refresh_token.as_str()))
+        {
+            keep(session, registration_id, done);
+            return Ok(stored_access_token(done, now));
+        }
         if entry.attempts() != seen {
             // A refresh of this very token ran while this call waited: take its outcome.
             match *last {
@@ -703,20 +723,26 @@ impl OAuth2Client {
                 }
                 Some(error) => return Err(error),
                 None => {
-                    if let Some(done) =
-                        self.rotations
-                            .record(registration_id, &refresh_token, self.clock.now())
-                    {
-                        keep(session, registration_id, &done);
-                        return Ok(stored_access_token(&done, self.clock.now()));
+                    if let Some(done) = &record {
+                        keep(session, registration_id, done);
+                        return Ok(stored_access_token(done, now));
                     }
                 }
             }
         }
+        // A provider that does not rotate refresh tokens: a recorded refresh whose access token
+        // is still usable serves this call.
+        if let Some(done) = &record
+            && let Some(token) = self.usable(done)
+        {
+            keep(session, registration_id, done);
+            return Ok(token);
+        }
 
         // The refresh runs in its own task, which holds the lock and writes the rotation record
         // even when this call is dropped (a client that disconnects), so a refresh token the
-        // provider has already rotated is never lost.
+        // provider has already rotated is not lost unless its record is evicted or expires
+        // before the next request.
         let task = tokio::spawn(self.clone().refresh_task(
             registration_id.to_owned(),
             current,

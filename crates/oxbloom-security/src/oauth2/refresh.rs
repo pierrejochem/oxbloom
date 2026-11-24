@@ -15,7 +15,9 @@
 //!   concurrent request, or a stale session copy written back after the refresh) adopts the
 //!   recorded tokens instead of spending the token again. Records are created only from
 //!   successful refreshes, so a client cannot grow the map; it keeps at most 256 records
-//!   (least recently used out first) for at most 10 minutes on the client's clock.
+//!   (least recently used out first). A record is used for 10 minutes on the client's clock;
+//!   the purge runs on access, so an older record stays in memory until the next refresh
+//!   after the 10 minutes. A logout does not remove records.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -107,7 +109,7 @@ impl Rotations {
         Entry {
             rotations: self.clone(),
             key,
-            shared,
+            shared: Some(shared),
         }
     }
 
@@ -198,34 +200,80 @@ impl fmt::Debug for Rotations {
 pub(crate) struct Entry {
     rotations: Arc<Rotations>,
     key: Key,
-    shared: Arc<RefreshLock>,
+    /// Always `Some` until the entry is dropped; `drop` releases it with the map locked.
+    shared: Option<Arc<RefreshLock>>,
 }
 
 impl Entry {
+    fn shared(&self) -> &RefreshLock {
+        self.shared
+            .as_deref()
+            .expect("the lock of an entry is released only when the entry is dropped")
+    }
+
     /// The number of refreshes finished under this lock.
     pub(crate) fn attempts(&self) -> u64 {
-        self.shared.attempts.load(Ordering::Acquire)
+        self.shared().attempts.load(Ordering::Acquire)
     }
 
     /// Waits for the lock; the guard holds the failure of the last refresh.
     pub(crate) async fn lock(&self) -> tokio::sync::OwnedMutexGuard<LastFailure> {
         let _waiting = Waiting::new(&self.rotations.waiting);
-        self.shared.last.clone().lock_owned().await
+        self.shared().last.clone().lock_owned().await
     }
 
     /// Counts a finished refresh; called with the lock held.
     pub(crate) fn finished(&self) {
-        self.shared.attempts.fetch_add(1, Ordering::AcqRel);
+        self.shared().attempts.fetch_add(1, Ordering::AcqRel);
     }
 }
 
 impl Drop for Entry {
     fn drop(&mut self) {
         let mut locks = lock(&self.rotations.locks);
-        // Every clone of `shared` is made with the map locked, so with the map locked a count
-        // of one means that no other call holds this entry or can get it.
-        if Arc::strong_count(&self.shared) == 1 {
+        // The hold is released with the map locked, and every new hold is made with the map
+        // locked, so whoever finds no live hold left removes the entry, even when two holders
+        // drop at the same moment.
+        drop(self.shared.take());
+        if locks
+            .get(&self.key)
+            .is_some_and(|weak| weak.strong_count() == 0)
+        {
             locks.remove(&self.key);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Barrier;
+
+    /// Holders of one key that let go at the same moment leave no lock entry behind: the last
+    /// one to let go removes it, even when two drop together.
+    #[test]
+    fn holders_that_drop_together_leave_no_lock_entry() {
+        const THREADS: usize = 4;
+        const KEYS: usize = 2000;
+        let rotations = Arc::new(Rotations::default());
+        let barrier = Arc::new(Barrier::new(THREADS));
+        let threads: Vec<_> = (0..THREADS)
+            .map(|_| {
+                let rotations = rotations.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    for i in 0..KEYS {
+                        let entry = rotations.entry("idp", &format!("refresh-{i}"));
+                        // Every thread holds the entry of key `i` here; they drop together.
+                        barrier.wait();
+                        drop(entry);
+                    }
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        assert_eq!(rotations.locks(), 0);
     }
 }

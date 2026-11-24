@@ -885,7 +885,7 @@ async fn a_stale_session_copy_with_a_spent_token_adopts_the_rotated_one() {
 }
 
 #[tokio::test]
-async fn invalid_grant_for_a_token_with_a_rotation_record_adopts_instead_of_removing() {
+async fn a_rotation_the_chain_lookup_did_not_take_is_adopted_at_the_lock_without_a_request() {
     let s = setup();
     s.fake.access_token_lifetime(Some(0));
     let (driver, _) = s.session_with_tokens(FakeUser::new("alice"), 0).await;
@@ -902,24 +902,19 @@ async fn invalid_grant_for_a_token_with_a_rotation_record_adopts_instead_of_remo
     }
     assert_eq!(s.refresh_requests(), 5);
     assert_eq!(s.client.__rotation_records(), 5);
-    // The stale copy follows four records, then spends R5 at the provider, which refuses it
-    // as spent; the record of R5 turns the refusal into an adoption of the newest tokens.
+    // The stale copy follows four records before it takes the lock of R5. The record of R5
+    // is there when the lock is held, as if a concurrent refresh had written it between the
+    // lookup and the lock: the call adopts it and never sends the spent R5 (a provider with
+    // reuse detection would revoke the whole token family).
     let adopted = s
         .client
         .access_token_for(&alice_request(&stale), "idp")
         .await
         .unwrap();
-    assert_eq!(s.refresh_requests(), 6);
-    assert_eq!(
-        s.fake
-            .token_requests()
-            .last()
-            .unwrap()
-            .field("refresh_token"),
-        Some(s.fake.token_requests()[5].field("refresh_token").unwrap())
-    );
+    assert_eq!(s.refresh_requests(), 5);
     assert_eq!(adopted.value.expose(), last.unwrap().value.expose());
     assert_eq!(stored(&stale), stored(&driver));
+    assert_eq!(s.client.__refresh_locks(), 0);
 }
 
 #[tokio::test]
