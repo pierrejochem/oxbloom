@@ -1843,3 +1843,33 @@ fn the_missing_session_filter_is_logged_once_per_login_not_per_request() {
         .count();
     assert_eq!(errors, 1, "{text}");
 }
+
+#[tokio::test]
+async fn every_provider_request_of_a_login_has_a_10_second_timeout() {
+    let env = Env::new();
+    let b = env.browser();
+    let user = alice().attr("login", "alice-gh");
+    assert_eq!(location(&b.log_in("idp", user.clone()).await), "/");
+    let other = env.browser();
+    assert_eq!(location(&other.log_in("plain", user).await), "/");
+    let requests = env.fake.client().requests();
+    let mut seen = Vec::new();
+    for request in &requests {
+        let url = request.url();
+        // The key set goes through the JWKS fetcher, whose source bounds the whole fetch.
+        if url.ends_with("/jwks") {
+            continue;
+        }
+        assert_eq!(
+            request.timeout_value(),
+            Some(Duration::from_secs(10)),
+            "{} {url}",
+            request.method()
+        );
+        seen.push(url.rsplit('/').next().unwrap_or_default().to_owned());
+    }
+    // Discovery, the token exchange of both logins and the user info of the plain one.
+    for kind in ["openid-configuration", "token", "userinfo"] {
+        assert!(seen.iter().any(|s| s == kind), "{kind}: {seen:?}");
+    }
+}

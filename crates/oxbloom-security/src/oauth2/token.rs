@@ -13,7 +13,8 @@ use serde_json::Value;
 
 use super::error::allowed_code;
 use super::{
-    ClientAuthentication, ClientRegistration, MAX_BODY_BYTES, OAuth2Error, ProviderMetadata,
+    ClientAuthentication, ClientRegistration, MAX_BODY_BYTES, OAuth2Error,
+    PROVIDER_REQUEST_TIMEOUT, ProviderMetadata,
 };
 
 /// A successful answer of the token endpoint. `Debug` shows the token type, the expiry and
@@ -185,7 +186,8 @@ impl TokenEndpoint {
     /// Exchanges an authorization code for tokens.
     ///
     /// Sends `POST` to the token endpoint with the form fields `grant_type=authorization_code`,
-    /// `code`, `redirect_uri` and `code_verifier`, and `Accept: application/json`. The client
+    /// `code`, `redirect_uri` and `code_verifier`, and `Accept: application/json`, with a 10
+    /// second timeout on the request. The client
     /// authenticates as its registration says: [`ClientAuthentication::Basic`] sends
     /// `Authorization: Basic` with the form-URL-encoded id and secret (RFC 6749 section
     /// 2.3.1), [`ClientAuthentication::Post`] sends `client_id` and `client_secret` as form
@@ -260,7 +262,9 @@ impl TokenEndpoint {
         token_endpoint: &str,
         mut form: Vec<(String, String)>,
     ) -> Result<TokenResponse, OAuth2Error> {
-        let mut request = Request::post(token_endpoint).header("accept", "application/json");
+        let mut request = Request::post(token_endpoint)
+            .header("accept", "application/json")
+            .timeout(PROVIDER_REQUEST_TIMEOUT);
         match registration.client_authentication {
             ClientAuthentication::Basic => {
                 let secret = registration

@@ -11,7 +11,7 @@ use oxbloom_http_client::{HttpClient, Request};
 use serde::Deserialize;
 
 use super::settings::is_acceptable_endpoint;
-use super::{MAX_BODY_BYTES, OAuth2Error, ProviderConfig};
+use super::{MAX_BODY_BYTES, OAuth2Error, PROVIDER_REQUEST_TIMEOUT, ProviderConfig};
 
 /// The suffix of the discovery document, appended to the issuer without its trailing slash.
 const DISCOVERY_PATH: &str = "/.well-known/openid-configuration";
@@ -90,7 +90,8 @@ impl ProviderMetadata {
     /// Resolves the metadata of `provider` at the time `now`.
     ///
     /// For a provider with `issuer-uri` it fetches `<issuer>/.well-known/openid-configuration`
-    /// (the issuer without its trailing slash, then the path) through `client`. The `issuer`
+    /// (the issuer without its trailing slash, then the path) through `client`, with a 10
+    /// second timeout on the request. The `issuer`
     /// of the document must equal `issuer-uri` exactly: a trailing slash is significant. An
     /// explicit URI in the configuration overrides the discovered one. Every endpoint must be
     /// an absolute `https` URL (`http` only for a loopback host). A provider without
@@ -224,7 +225,9 @@ impl fmt::Debug for ProviderMetadata {
 /// Fetches and checks the discovery document of `issuer`.
 async fn discover(issuer: &str, client: &dyn HttpClient) -> Result<Discovery, OAuth2Error> {
     let url = format!("{}{DISCOVERY_PATH}", issuer.trim_end_matches('/'));
-    let request = Request::get(url).header("accept", "application/json");
+    let request = Request::get(url)
+        .header("accept", "application/json")
+        .timeout(PROVIDER_REQUEST_TIMEOUT);
     let response = client
         .execute(request)
         .await

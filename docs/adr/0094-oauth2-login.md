@@ -44,7 +44,11 @@ A login of this kind crosses several trust boundaries: the browser comes back fr
 
 **`SCOPE_*` authorities are not tied to a registration.** The authorities are `OIDC_USER` or `OAUTH2_USER` plus `SCOPE_<scope>` for each granted scope that is a valid RFC 6749 scope token. A provider of low trust that grants a scope named `admin` produces `SCOPE_admin`, the same authority a trusted provider would give. Rules that must trust one provider should also check the `oauth2.registration` detail.
 
-**Nothing secret is printed.** No error text, log line or `Debug` output holds a token, a code, a state, a nonce, a verifier, a client secret, a URL or a provider response body. Provider error codes are logged only when they are one of the RFC 6749 codes; `error_description` is never used. Boot configuration errors name the full key and never the value.
+**Provider calls go through the shared client with a 10 second timeout (ruling R18).** Discovery, the key set, the token exchange and the user info are sent through the one `dyn HttpClient` bean, so the `http.client.*` keys govern them too: `follow-redirects` (default 0, so a 3xx answer of a provider endpoint is a failed login), `max-body-bytes`, and the proxy and SSL bundle settings. Each discovery, token and user-info request carries a per-request timeout of 10 seconds, which replaces `http.client.timeout` for these calls, and each key set fetch is bounded to 10 seconds by its key source, because the JWKS fetcher sends its request without a per-request timeout. When an application enables redirects for other calls, provider calls follow them too, within the hop rules of [ADR 0093](0093-http-client.md). A dedicated client for provider calls was rejected: it would duplicate the SSL bundle and proxy wiring of the bean.
+
+**One shape check for configuration and code.** The `security.oauth2.client.*` keys and a login built in code with `OAuth2Login` go through the same shape validator: a registration id and provider name of `a` to `z`, `0` to `9` and `-`; a non-empty client id; scopes of RFC 6749 characters; a non-empty secret unless the client authentication is `none`; a provider with an issuer or both an authorization and a token endpoint; only `https` endpoints (`http` for a loopback host); and for a plain OAuth2 provider (no issuer, no key set) both a user-info endpoint and a user name attribute, because its login cannot name the user without them. The configuration reports a failure as a `ConfigError::Invalid` that names the full key; the builder fails with `SecurityBuildError::OAuth2LoginWithoutRegistration`. Either way the shape fails at startup, not after the code exchange of every login. The builder also refuses a base URL with a path, as boot does.
+
+**Nothing secret is printed.** No error text, log line or `Debug` output holds a token, a code, a state, a nonce, a verifier, a client secret or a provider response body. The `Debug` output of `ProviderConfig`, `ClientRegistration`, `OAuth2Login` and the pending login shows non-secret configuration (endpoints, the redirect URI, the failure URL and the saved request path) and never a secret, a token, a code, the state, the nonce or the verifier; error texts and log lines hold no URL. Provider error codes are logged only when they are one of the RFC 6749 codes; `error_description` is never used. Boot configuration errors name the full key and never the value. Provider attributes whose names start with `oxbloom.` or `oauth2.` are dropped from the details, so a provider cannot set a framework detail such as `oxbloom.remembered`.
 
 ## Consequences
 
@@ -53,7 +57,8 @@ Good:
 - An OAuth2 user is a normal session user: logout, the saved request, the CSRF token, the session limit and the session registry work as for a password user.
 - Login CSRF, replayed states, code injection across browsers, provider mix-up, token substitution with `alg: none` or an HMAC on the public key, and open redirects after login are refused, and tests pin each case.
 - Two tabs can log in at the same time.
-- A provider outage does not pile up discovery requests.
+- A provider outage does not pile up discovery requests, and no provider call waits longer than 10 seconds.
+- A registration that could never log anyone in fails the start, whether it comes from the configuration or from code.
 - The redirect URI can never drift from the path the chain answers.
 
 Bad:
@@ -65,6 +70,7 @@ Bad:
 - `SCOPE_*` from different providers look the same; rules must check the registration when that matters.
 - Usernames that start with `oauth2:` are reserved (a password or remember-me login of such a user fails), and `invalidate_all` for an OAuth2 user needs the qualified key.
 - HEAD on the two endpoints is a 405.
+- Provider calls share the `http.client.*` settings of the application; an application that enables redirects for other calls also lets provider calls follow them, within the ADR 0093 hop rules.
 - A `SameSite=Strict` session cookie is not sent on the provider's redirect back, so the login fails; the default `Lax` works.
 
 ## Alternatives considered

@@ -199,6 +199,7 @@ The boot tests in `crates/oxbloom-boot/tests/oauth2_login.rs` run the whole flow
 
 ## Limits
 
+- **Provider calls use the shared HTTP client.** Discovery, the key set, the token exchange and the user info go through the application's one `HttpClient` bean, so the `http.client.*` keys apply to them: `follow-redirects` (default 0, so a provider endpoint that answers with a redirect fails the login), `max-body-bytes`, the proxy and the SSL bundle. Every provider call has a hard timeout of 10 seconds, also when `http.client.timeout` is longer. If you enable `follow-redirects` for other calls, provider calls follow redirects too, within the hop rules of [ADR 0093](../adr/0093-http-client.md).
 - **Tokens in the session.** The access token, the refresh token and the id token are kept in the session. A cookie-backed session (`store = "cookie"`) works, but the tokens can make the cookie larger than browsers accept; use a server-side store.
 - **`SameSite=Strict` loses the login.** The browser does not send a `Strict` session cookie on the provider's redirect back, so the pending login is not found and the login fails. Keep the default `Lax`.
 - **No RP-initiated logout.** Logout ends the local session only; the user stays logged in at the provider.

@@ -4,7 +4,9 @@ use oxbloom_config::Secret;
 use oxbloom_http_client::{HttpClient, Request};
 use serde_json::{Map, Value};
 
-use super::{ClientRegistration, MAX_BODY_BYTES, OAuth2Error, ProviderConfig};
+use super::{
+    ClientRegistration, MAX_BODY_BYTES, OAuth2Error, PROVIDER_REQUEST_TIMEOUT, ProviderConfig,
+};
 use crate::{Authentication, GrantedAuthority};
 
 /// The `details` key that holds the registration id of an OAuth2 login.
@@ -42,7 +44,8 @@ pub struct UserInfo;
 
 impl UserInfo {
     /// Sends `GET endpoint` with `Authorization: Bearer <access token>` and
-    /// `Accept: application/json`, and returns the JSON object of the answer.
+    /// `Accept: application/json`, with a 10 second timeout on the request, and returns the
+    /// JSON object of the answer.
     ///
     /// # Errors
     ///
@@ -76,6 +79,7 @@ impl UserInfo {
         client: &dyn HttpClient,
     ) -> Result<Map<String, Value>, OAuth2Error> {
         let request = Request::get(endpoint)
+            .timeout(PROVIDER_REQUEST_TIMEOUT)
             .header("accept", "application/json")
             .header(
                 "authorization",
