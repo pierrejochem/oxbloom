@@ -565,6 +565,28 @@ impl HttpSecurity {
         self
     }
 
+    /// Whether [`oauth2_login`](Self::oauth2_login) was called on this builder (feature
+    /// `oauth2`). Boot's security auto-configuration reads it to step aside when a
+    /// `SecurityCustomizer` has already configured OAuth2 login.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use oxbloom_security::{HttpSecurity, OAuth2Login};
+    /// use oxbloom_test::MockHttpClient;
+    ///
+    /// let http = HttpSecurity::new();
+    /// assert!(!http.has_oauth2_login());
+    /// let http = http.oauth2_login(|_| OAuth2Login::new(Arc::new(MockHttpClient::new())));
+    /// assert!(http.has_oauth2_login());
+    /// ```
+    #[cfg(feature = "oauth2")]
+    #[must_use]
+    pub fn has_oauth2_login(&self) -> bool {
+        self.oauth2_login.is_some()
+    }
+
     /// Tunes or turns off the CSRF check of form login. See [`CsrfConfig`] for the settings and
     /// their defaults. With [`form_login`](Self::form_login) on and this method never called,
     /// the check is on with the defaults.

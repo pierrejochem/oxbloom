@@ -22,8 +22,9 @@ tasks = ["dep:oxbloom-tasks"]
 # `HttpClientAutoConfiguration`: the `dyn HttpClient` bean of the `http.client` keys. The client
 # crate's `config` feature brings `reqwest` and `retry`, so `http.client.retry.*` works.
 http-client = ["dep:oxbloom-http-client", "oxbloom-http-client/config"]
-# `security.oauth2.client.*` metadata, and the OAuth2 client of `oxbloom-security`.
-oauth2 = ["security", "http-client", "oxbloom-security/oauth2"]
+# `security.oauth2.*` metadata, OAuth2 login in `SecurityAutoConfiguration` over the
+# `dyn HttpClient` bean, and the OAuth2 client of `oxbloom-security`.
+oauth2 = ["security", "http-client", "oxbloom-security/oauth2", "dep:serde"]
 
 [dependencies]
 oxbloom-actuator = { version = "0.1.0", path = "../oxbloom-actuator", optional = true }
@@ -55,8 +56,10 @@ jsonwebtoken = { version = "12.0.0", features = ["rust_crypto"] }
 # without `ssl`. Feature-off coverage is the compile-only `cargo build -p oxbloom-boot
 # --no-default-features` (also with `--features logging`, `web`, `security` or `ssl`) and
 # `cargo test -p oxbloom-test --features web`, which runs `TestApp` against boot built with
-# `web` and without `security` or `ssl`.
-oxbloom-test = { path = "../oxbloom-test", features = ["web", "security", "tls"] }
+# `web` and without `security` or `ssl`. `oauth2` brings `FakeProvider` and `MockHttpClient`
+# for `tests/oauth2_login.rs`; it turns boot's `http-client` on (not boot's `oauth2`) in every
+# test build, so the `http-client`-off case is covered by the compile-only builds as well.
+oxbloom-test = { path = "../oxbloom-test", features = ["web", "security", "tls", "oauth2"] }
 oxbloom-web = { version = "0.1.0", path = "../oxbloom-web" }
 # Test certificates for `tests/autoconfigure_ssl.rs` are generated at test time; `aws-lc-rs`
 # only, no `ring`. HTTPS requests go through `RunningApp::client_tls`; a handshake-only rustls

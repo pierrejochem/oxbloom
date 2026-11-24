@@ -101,8 +101,9 @@ impl FailureAnalyzer for SecurityAnalyzer {
             ),
             SecurityBuildError::OAuth2LoginWithoutFormLogin => (
                 "OAuth2 login is configured but form login is not.",
-                "Configure `form_login` as well; it gives OAuth2 login the session, the logout, \
-                 the saved request and the success URL, and needs no password provider then.",
+                "Configure `form_login` as well (in boot, set `security.form-login.enabled = \
+                 true`); it gives OAuth2 login the session, the logout, the saved request and \
+                 the success URL, and needs no password provider then.",
             ),
             SecurityBuildError::OAuth2LoginWithoutRegistration => (
                 "OAuth2 login has no usable registration: none was added, an id has a character \
@@ -197,6 +198,74 @@ impl FailureAnalyzer for RememberMeAnalyzer {
             ),
         };
         Some(FailureAnalysis::new(description, action))
+    }
+}
+
+/// Recognises an `OAuth2LoginError` of `SecurityAutoConfiguration`, or a `ConfigError::Invalid`
+/// for a key in the `security.oauth2` section, anywhere in the cause chain. The report names
+/// the key with a fixed text and leaves out the configuration error's message, so no value
+/// (a URL, a secret given with the wrong type) can reach it.
+#[cfg(feature = "oauth2")]
+pub(crate) struct OAuth2Analyzer;
+
+#[cfg(feature = "oauth2")]
+impl FailureAnalyzer for OAuth2Analyzer {
+    fn analyze(&self, failure: &StartupError) -> Option<FailureAnalysis> {
+        use crate::autoconfigure::OAuth2LoginError;
+
+        if let Some(error) = failure.find_cause::<OAuth2LoginError>() {
+            // Exhaustive on purpose: a new variant must get its own text here.
+            let (description, action) = match error {
+                OAuth2LoginError::WithoutFormLogin => (
+                    "`security.oauth2.client.registration` is set, but form login is off. \
+                     OAuth2 login keeps the user in the form login session.",
+                    "Set `security.form-login.enabled = true` (OAuth2 login needs no password \
+                     provider then), or remove the registrations.",
+                ),
+                OAuth2LoginError::WithoutHttpClient => (
+                    "`security.oauth2.client.registration` is set, but there is no `HttpClient` \
+                     bean for the requests to the provider.",
+                    "Keep `HttpClientAutoConfiguration` in the auto-configurations (it comes with \
+                     the `http-client` feature, which `oauth2` turns on), or register a \
+                     `dyn HttpClient` bean.",
+                ),
+            };
+            return Some(FailureAnalysis::new(description, action));
+        }
+        let ConfigError::Invalid { key, .. } = failure.find_cause::<ConfigError>()? else {
+            return None;
+        };
+        if key != "security.oauth2" && !key.starts_with("security.oauth2.") {
+            return None;
+        }
+        let action = if key == crate::autoconfigure::OAUTH2_BASE_URL {
+            "Set `security.oauth2.base-url` to the external URL of the application: an absolute \
+             `https` URL (`http` only for a loopback host) with no path, query or fragment, such \
+             as `https://app.example`. The callback path is fixed at \
+             `/login/oauth2/code/{id}`; a proxy that adds a path prefix must strip it."
+        } else if key == crate::autoconfigure::OAUTH2_FAILURE_URL {
+            "Set `security.oauth2.failure-url` to a local path such as `/login?error`, outside \
+             `/oauth2/authorization/` and `/login/oauth2/code/`, or remove it to use the \
+             failure URL of form login."
+        } else if key.ends_with(".redirect-uri") {
+            "The callback path is fixed: leave `redirect-uri` unset, or set it to \
+             `{base-url}/login/oauth2/code/{id}`."
+        } else if key.ends_with(".client-secret") {
+            "Set the client secret of the registration in a file or an environment variable, \
+             never on the command line, or set `client-authentication = \"none\"` for a public \
+             client."
+        } else {
+            "Fix the `security.oauth2` section: it holds `base-url`, `failure-url` and \
+             `client`; each registration under `client.registration.<id>` needs `client-id`, a \
+             `client-secret` (unless `client-authentication` is `none`) and a provider under \
+             `client.provider.<id>` with an `issuer-uri`, or an `authorization-uri` and a \
+             `token-uri`; endpoints are absolute `https` URLs (`http` only for a loopback \
+             host); ids hold only `a` to `z`, `0` to `9` and `-`."
+        };
+        Some(FailureAnalysis::new(
+            format!("The OAuth2 configuration key `{key}` is not valid."),
+            action,
+        ))
     }
 }
 
@@ -438,7 +507,7 @@ mod tests {
         check(
             SecurityBuildError::OAuth2LoginWithoutFormLogin,
             "OAuth2 login is configured but form login is not.",
-            "Configure `form_login` as well; it gives OAuth2 login the session, the logout, the saved request and the success URL, and needs no password provider then.",
+            "Configure `form_login` as well (in boot, set `security.form-login.enabled = true`); it gives OAuth2 login the session, the logout, the saved request and the success URL, and needs no password provider then.",
         );
         check(
             SecurityBuildError::OAuth2LoginWithoutRegistration,
@@ -542,6 +611,69 @@ mod tests {
                 .analyze(&StartupError::new(StartupPhase::Container, std::fmt::Error))
                 .is_none()
         );
+    }
+
+    #[cfg(feature = "oauth2")]
+    fn analyze_oauth2(
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> Option<FailureAnalysis> {
+        OAuth2Analyzer.analyze(&StartupError::new(StartupPhase::Container, source))
+    }
+
+    #[cfg(feature = "oauth2")]
+    #[test]
+    fn oauth2_texts_name_the_key_and_never_the_message() {
+        use crate::autoconfigure::OAuth2LoginError;
+
+        let di = DiError::creation_from::<u8>(OAuth2LoginError::WithoutFormLogin);
+        let a = analyze_oauth2(di).unwrap();
+        assert!(a.description().contains("form login is off"));
+        assert_eq!(
+            a.action(),
+            Some(
+                "Set `security.form-login.enabled = true` (OAuth2 login needs no password provider then), or remove the registrations."
+            )
+        );
+        let di = DiError::creation_from::<u8>(OAuth2LoginError::WithoutHttpClient);
+        let a = analyze_oauth2(di).unwrap();
+        assert!(a.description().contains("`HttpClient`"));
+        assert!(a.action().unwrap().contains("HttpClientAutoConfiguration"));
+
+        for (key, expected) in [
+            ("security.oauth2.base-url", "no path, query or fragment"),
+            ("security.oauth2.failure-url", "local path"),
+            (
+                "security.oauth2.client.registration.idp.redirect-uri",
+                "`{base-url}/login/oauth2/code/{id}`",
+            ),
+            (
+                "security.oauth2.client.registration.idp.client-secret",
+                "never on the command line",
+            ),
+            (
+                "security.oauth2.client.provider.idp.issuer-uri",
+                "issuer-uri",
+            ),
+            ("security.oauth2", "base-url"),
+        ] {
+            let di: DiError = ConfigError::invalid(key, "hunter2-value").into();
+            let a = analyze_oauth2(di).unwrap();
+            assert_eq!(
+                a.description(),
+                format!("The OAuth2 configuration key `{key}` is not valid.")
+            );
+            assert!(a.action().unwrap().contains(expected), "{key}: {a}");
+            assert!(!a.to_string().contains("hunter2"), "{a}");
+        }
+        assert!(analyze_oauth2(ConfigError::invalid("security.oauth2x", "bad")).is_none());
+        assert!(analyze_oauth2(ConfigError::invalid("security.jwt.secret", "bad")).is_none());
+        assert!(
+            analyze_oauth2(ConfigError::Missing {
+                key: "security.oauth2.base-url".into()
+            })
+            .is_none()
+        );
+        assert!(analyze_oauth2(std::fmt::Error).is_none());
     }
 
     #[test]

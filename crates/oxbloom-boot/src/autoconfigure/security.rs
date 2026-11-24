@@ -171,6 +171,28 @@ pub trait SecurityCustomizer: Send + Sync {
 /// still change them; a customizer that calls `headers` receives the configured headers and
 /// changes only what it touches.
 ///
+/// With the feature `oauth2`, OAuth2 login follows `security.oauth2`. When
+/// `security.oauth2.client.registration` has at least one entry, the chain calls
+/// `oauth2_login` after the customizers with the registrations and providers of
+/// `oxbloom_security::OAuth2Settings::from_config`, the `dyn HttpClient` bean (from
+/// [`HttpClientAutoConfiguration`](crate::HttpClientAutoConfiguration) or the application),
+/// `security.oauth2.base-url`, the optional `security.oauth2.failure-url` and the `dyn Clock`
+/// bean when there is one. It steps aside when a `SecurityCustomizer` already called
+/// `oauth2_login`: then the customizer wins and the base URL is not required. The keys are
+/// checked either way: an unknown key under `security.oauth2` or a bad registration fails the
+/// startup with a `ConfigError` that names the full key and never holds the value or the
+/// client secret. With registrations:
+///
+/// - `security.oauth2.base-url` is required (a `ConfigError::Missing`), and must be an absolute
+///   `https` URL (`http` only for a loopback host) with no path beyond an optional `/`, no
+///   query and no fragment, because the callback path `/login/oauth2/code/{id}` is fixed.
+/// - A `redirect-uri` that does not resolve to `{base-url}/login/oauth2/code/{id}` fails with
+///   a `ConfigError` on `security.oauth2.client.registration.<id>.redirect-uri`.
+/// - `security.oauth2.failure-url` must be a local path outside the two OAuth2 endpoints.
+/// - Form login must be on (`security.form-login.enabled = true`); it needs no password
+///   provider then. Without it, or without an `HttpClient` bean, the startup fails with an
+///   error that says so.
+///
 /// A `SessionRegistry` bean is registered, unless the application has one, when there is a
 /// `SessionFilter` bean and `security.session.store` is `memory` (or missing). It is lazy: it is
 /// built from `SessionFilter::principal_sessions` when first asked for, and a store without the
@@ -269,7 +291,10 @@ impl AutoConfiguration for SecurityAutoConfiguration {
 /// and HTTP Basic over the provider beans when `security.http-basic.enabled` is `true`. The
 /// headers, the session limit, the revalidation, remember-me and the clock are set before the
 /// customizers, so a customizer can still change them; form login and CSRF are set after them,
-/// so there the configuration wins.
+/// so there the configuration wins. With `oauth2`, OAuth2 login follows the customizers too,
+/// and steps aside when one of them configured it.
+// Each parameter is an injected bean; the container needs them as separate arguments.
+#[cfg_attr(feature = "oauth2", allow(clippy::too_many_arguments))]
 fn security_filter_chain(
     config: Arc<Config>,
     customizers: Vec<Arc<dyn SecurityCustomizer>>,
@@ -278,8 +303,13 @@ fn security_filter_chain(
     session: Option<Arc<SessionFilter>>,
     users: Option<Arc<dyn UserDetailsService>>,
     clock: Option<Arc<dyn Clock>>,
+    #[cfg(feature = "oauth2")] client: Option<Arc<dyn oxbloom_http_client::HttpClient>>,
 ) -> Result<SecurityFilterChain, DiError> {
     let creation = DiError::creation_from::<SecurityFilterChain>;
+    #[cfg(feature = "oauth2")]
+    let oauth2 = super::oauth2::OAuth2Properties::from_config(&config).map_err(creation)?;
+    #[cfg(feature = "oauth2")]
+    let oauth2_clock = clock.clone();
     let basic = HttpBasicSettings::from_config(&config).map_err(creation)?;
     let form = FormLoginConfig::from_config(&config).map_err(creation)?;
     if form.is_some() && session.is_none() {
@@ -350,6 +380,16 @@ fn security_filter_chain(
     if let Some(decoder) = decoder {
         http = http.oauth2_resource_server(|r| r.jwt(decoder));
     }
+    // OAuth2 login from the configuration, unless a customizer configured it: then the
+    // customizer wins and boot steps aside.
+    #[cfg(feature = "oauth2")]
+    let boot_oauth2 = oauth2.has_registrations() && !http.has_oauth2_login();
+    #[cfg(feature = "oauth2")]
+    if boot_oauth2 {
+        http = oauth2
+            .apply(http, client, oauth2_clock)
+            .map_err(oauth2_creation)?;
+    }
     if basic.enabled {
         let realm = basic.realm;
         http = http.http_basic(|b| b.realm(realm));
@@ -366,8 +406,28 @@ fn security_filter_chain(
             http = http.password_provider(provider);
         }
     }
-    http.build()
-        .map_err(DiError::creation_from::<SecurityFilterChain>)
+    http.build().map_err(|error| {
+        // With boot's OAuth2 login, the errors that only the configuration can cause name
+        // their key.
+        #[cfg(feature = "oauth2")]
+        if boot_oauth2 && let Some(failure) = super::oauth2::config_failure(&error) {
+            return oauth2_creation(failure);
+        }
+        DiError::creation_from::<SecurityFilterChain>(error)
+    })
+}
+
+/// The startup failure of an OAuth2 configuration problem, with the typed error as source.
+#[cfg(feature = "oauth2")]
+fn oauth2_creation(failure: super::oauth2::OAuth2Failure) -> DiError {
+    match failure {
+        super::oauth2::OAuth2Failure::Config(error) => {
+            DiError::creation_from::<SecurityFilterChain>(error)
+        }
+        super::oauth2::OAuth2Failure::Login(error) => {
+            DiError::creation_from::<SecurityFilterChain>(error)
+        }
+    }
 }
 
 /// The checked remember-me settings and the user service, or the startup failure that names
@@ -504,9 +564,18 @@ static MERGED: std::sync::LazyLock<Vec<PropertyMetadata>> = std::sync::LazyLock:
     all
 });
 
-/// Exactly the keys `OAuth2Settings::from_config` reads (pinned by tests), sorted by key.
+/// Exactly the keys `OAuth2Settings::from_config` reads (pinned by tests) and the two boot
+/// keys `security.oauth2.base-url` and `security.oauth2.failure-url`, sorted by key.
 #[cfg(feature = "oauth2")]
-static OAUTH2: [PropertyMetadata; 12] = [
+static OAUTH2: [PropertyMetadata; 14] = [
+    PropertyMetadata::new(
+        "security.oauth2.base-url",
+        "String",
+        None,
+        "The external base URL of the application, the `{base-url}` of every redirect URI: an \
+         absolute `https` URL (`http` only for a loopback host) with no path, query or \
+         fragment, such as `https://app.example`. Required when a registration is configured.",
+    ),
     PropertyMetadata::new(
         "security.oauth2.client.provider.<id>.authorization-uri",
         "String",
@@ -577,13 +646,21 @@ static OAUTH2: [PropertyMetadata; 12] = [
         "security.oauth2.client.registration.<id>.redirect-uri",
         "String",
         Some("{base-url}/login/oauth2/code/{id}"),
-        "The redirect URI template; `{base-url}` and `{id}` are resolved.",
+        "The redirect URI template; `{base-url}` and `{id}` are resolved. The callback path is \
+         fixed, so it must resolve to `{base-url}/login/oauth2/code/{id}`.",
     ),
     PropertyMetadata::new(
         "security.oauth2.client.registration.<id>.scope",
         "Vec<String>",
         None,
         "The scopes to request.",
+    ),
+    PropertyMetadata::new(
+        "security.oauth2.failure-url",
+        "String",
+        None,
+        "Where a failed OAuth2 login goes: a local path outside `/oauth2/authorization/` and \
+         `/login/oauth2/code/`. Unset means the failure URL of form login.",
     ),
 ];
 

@@ -12,6 +12,8 @@ mod actuator;
 mod http_client;
 #[cfg(feature = "security")]
 mod jwt;
+#[cfg(feature = "oauth2")]
+mod oauth2;
 #[cfg(feature = "security")]
 mod password;
 #[cfg(feature = "web")]
@@ -33,6 +35,10 @@ pub use actuator::ActuatorAutoConfiguration;
 pub use http_client::HttpClientAutoConfiguration;
 #[cfg(feature = "security")]
 pub use jwt::JwtDecoderAutoConfiguration;
+#[cfg(feature = "oauth2")]
+pub(crate) use oauth2::{
+    BASE_URL as OAUTH2_BASE_URL, FAILURE_URL as OAUTH2_FAILURE_URL, OAuth2LoginError,
+};
 #[cfg(feature = "security")]
 pub use password::PasswordEncoderAutoConfiguration;
 #[cfg(feature = "web")]
@@ -106,8 +112,8 @@ use crate::autoconfig::AutoConfigurations;
 ///     // 4 `security.users` keys, 12 `security.session` keys, 10 `security.form-login` keys,
 ///     // 4 `security.csrf` keys, 9 `security.headers` keys and 6 `security.remember-me` keys
 ///     // (the last four listed by `SecurityAutoConfiguration`, so excluding it hides them).
-///     // The `oauth2` feature adds 12 `security.oauth2.client` keys to the same list.
-///     let oauth2 = if cfg!(feature = "oauth2") { 12 } else { 0 };
+///     // The `oauth2` feature adds 14 `security.oauth2` keys to the same list.
+///     let oauth2 = if cfg!(feature = "oauth2") { 14 } else { 0 };
 ///     assert_eq!(keys(all(), "security."), 59 + oauth2);
 ///     assert_eq!(keys(all().exclude::<PasswordEncoderAutoConfiguration>(), "security."), 49 + oauth2);
 ///     assert_eq!(keys(all(), "security.session."), 12);
