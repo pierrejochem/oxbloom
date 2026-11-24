@@ -1179,6 +1179,113 @@ async fn the_build_fails_without_a_usable_registration() {
 }
 
 #[tokio::test]
+async fn the_build_checks_the_shape_of_code_built_registrations_and_providers() {
+    let fake = FakeProvider::new(ISSUER);
+    let build = |registration: ClientRegistration, provider: ProviderConfig| {
+        let name = registration.provider.clone();
+        HttpSecurity::new()
+            .form_login(|f| f)
+            .oauth2_login(|_| {
+                OAuth2Login::new(fake.client())
+                    .registration(registration)
+                    .provider(&name, provider)
+                    .base_url(BASE)
+            })
+            .authorize(|a| a.any_request().authenticated())
+            .build()
+            .err()
+    };
+    let refused = Some(SecurityBuildError::OAuth2LoginWithoutRegistration);
+    let plain = || registration("plain", "plain", &[]);
+    // The valid shapes build.
+    assert_eq!(build(plain(), plain_provider()), None);
+    assert_eq!(
+        build(registration("idp", "idp", &[]), oidc_provider()),
+        None
+    );
+    // A plain provider needs both the user info and the user name attribute.
+    let mut no_info = plain_provider();
+    no_info.user_info_uri = None;
+    assert_eq!(build(plain(), no_info), refused, "no user-info-uri");
+    let mut no_name = plain_provider();
+    no_name.user_name_attribute = None;
+    assert_eq!(build(plain(), no_name), refused, "no user-name-attribute");
+    // An empty client id.
+    let mut empty_id = plain();
+    empty_id.client_id = String::new();
+    assert_eq!(
+        build(empty_id, plain_provider()),
+        refused,
+        "empty client id"
+    );
+    // Basic or post authentication without a secret, or with an empty one.
+    for auth in [ClientAuthentication::Basic, ClientAuthentication::Post] {
+        let mut no_secret = plain();
+        no_secret.client_authentication = auth;
+        no_secret.client_secret = None;
+        assert_eq!(build(no_secret, plain_provider()), refused, "{auth:?}");
+        let mut empty_secret = plain();
+        empty_secret.client_authentication = auth;
+        empty_secret.client_secret = Some(Secret::new(String::new()));
+        assert_eq!(build(empty_secret, plain_provider()), refused, "{auth:?}");
+    }
+    // A public client needs no secret.
+    let mut public = plain();
+    public.client_authentication = ClientAuthentication::None;
+    public.client_secret = None;
+    assert_eq!(build(public, plain_provider()), None);
+    // A provider without an issuer needs both the authorization and the token endpoint.
+    let mut no_token = plain_provider();
+    no_token.token_uri = None;
+    assert_eq!(build(plain(), no_token), refused, "no token-uri");
+    let mut no_authorization = plain_provider();
+    no_authorization.authorization_uri = None;
+    assert_eq!(
+        build(plain(), no_authorization),
+        refused,
+        "no authorization-uri"
+    );
+    // Every endpoint must be acceptable: https, or http for a loopback host only.
+    for field in 0..4 {
+        let mut provider = plain_provider();
+        let slot = match field {
+            0 => &mut provider.authorization_uri,
+            1 => &mut provider.token_uri,
+            2 => &mut provider.user_info_uri,
+            _ => &mut provider.jwk_set_uri,
+        };
+        *slot = Some("http://idp.example.test/endpoint".into());
+        assert_eq!(build(plain(), provider), refused, "endpoint {field}");
+    }
+    let http_issuer = ProviderConfig {
+        issuer_uri: Some("http://idp.example.test".into()),
+        ..ProviderConfig::default()
+    };
+    assert_eq!(build(registration("idp", "idp", &[]), http_issuer), refused);
+    let issuer_with_query = ProviderConfig {
+        issuer_uri: Some(format!("{ISSUER}?tenant=1")),
+        ..ProviderConfig::default()
+    };
+    assert_eq!(
+        build(registration("idp", "idp", &[]), issuer_with_query),
+        refused
+    );
+    // A scope with a character outside RFC 6749 section 3.3.
+    assert_eq!(
+        build(
+            registration("plain", "plain", &["bad scope"]),
+            plain_provider()
+        ),
+        refused
+    );
+    // A provider name outside a to z, 0 to 9 and -.
+    assert_eq!(
+        build(registration("plain", "Bad_Provider", &[]), plain_provider()),
+        refused
+    );
+}
+
+#[tokio::test]
 async fn the_build_fails_without_a_client() {
     let err = HttpSecurity::new()
         .form_login(|f| f)

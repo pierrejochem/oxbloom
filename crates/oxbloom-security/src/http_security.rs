@@ -93,8 +93,15 @@ pub enum SecurityBuildError {
     /// assert_eq!(err.to_string(), "oauth2 login configured without form login");
     /// ```
     OAuth2LoginWithoutFormLogin,
-    /// OAuth2 login has no registration, or a registration has an id outside `a` to `z`, `0`
-    /// to `9` and `-`, or names a provider that was not added.
+    /// OAuth2 login has no registration, or a registration or its provider has the wrong
+    /// shape: the same checks as the `security.oauth2.client.*` keys. A registration needs an
+    /// id of `a` to `z`, `0` to `9` and `-`, a non-empty client id, scopes of RFC 6749
+    /// characters, a non-empty secret unless its authentication is
+    /// [`ClientAuthentication::None`](crate::ClientAuthentication::None), and a provider that was
+    /// added. That provider needs a name of the same characters, an issuer or both an
+    /// authorization and a token endpoint, only `https` endpoints (`http` for a loopback host),
+    /// and, as a plain OAuth2 provider (no issuer, no key set), both a user-info endpoint and a
+    /// user name attribute.
     ///
     /// # Examples
     ///

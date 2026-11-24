@@ -149,14 +149,40 @@ fn a_provider_without_issuer_or_authorization_and_token_is_refused() {
 }
 
 #[test]
-fn a_plain_oauth2_provider_needs_user_info_or_a_user_name_attribute() {
+fn a_plain_oauth2_provider_needs_user_info_and_a_user_name_attribute() {
     let toml = format!(
         "[{PROV}.p]\nauthorization-uri = \"https://x.example/a\"\ntoken-uri = \"https://x.example/t\"\n"
     );
     assert_eq!(invalid_key(&toml), format!("{PROV}.p.user-info-uri"));
-    // A user name attribute alone is enough, and so is a jwk-set-uri (the id token).
-    assert!(read(&format!("{toml}user-name-attribute = \"id\"\n")).is_ok());
+    // One of the two is not enough: the login needs the user info and the attribute.
+    let name_only = format!("{toml}user-name-attribute = \"id\"\n");
+    assert_eq!(invalid_key(&name_only), format!("{PROV}.p.user-info-uri"));
+    let info_only = format!("{toml}user-info-uri = \"https://x.example/u\"\n");
+    assert_eq!(
+        invalid_key(&info_only),
+        format!("{PROV}.p.user-name-attribute")
+    );
+    // Both are enough, and so is a jwk-set-uri (the id token) alone.
+    assert!(
+        read(&format!(
+            "{name_only}user-info-uri = \"https://x.example/u\"\n"
+        ))
+        .is_ok()
+    );
     assert!(read(&format!("{toml}jwk-set-uri = \"https://x.example/k\"\n")).is_ok());
+}
+
+#[test]
+fn a_shape_error_never_holds_a_value() {
+    let toml = format!(
+        "[{PROV}.p]\nauthorization-uri = \"https://x.example/SECRET-PATH\"\ntoken-uri = \"https://x.example/t\"\nuser-name-attribute = \"VALUE-OF-ATTR\"\n"
+    );
+    let text = read(&toml).unwrap_err().to_string();
+    assert!(text.contains(&format!("{PROV}.p.user-info-uri")), "{text}");
+    assert!(
+        !text.contains("SECRET-PATH") && !text.contains("VALUE-OF-ATTR"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -345,12 +371,12 @@ fn endpoints_refuse_fragments_issuer_queries_and_bad_ports() {
     );
     assert_eq!(
         invalid_key(&provider_with(
-            "authorization-uri = \"https://i.example/a\"\ntoken-uri = \"https://i.example/t#f\"\nuser-name-attribute = \"sub\""
+            "authorization-uri = \"https://i.example/a\"\ntoken-uri = \"https://i.example/t#f\"\nuser-info-uri = \"https://i.example/u\"\nuser-name-attribute = \"sub\""
         )),
         format!("{PROV}.idp.token-uri")
     );
     read(&provider_with(
-        "authorization-uri = \"https://i.example/a?prompt=consent\"\ntoken-uri = \"https://i.example:8443/t\"\nuser-name-attribute = \"sub\"",
+        "authorization-uri = \"https://i.example/a?prompt=consent\"\ntoken-uri = \"https://i.example:8443/t\"\nuser-info-uri = \"https://i.example/u\"\nuser-name-attribute = \"sub\"",
     ))
     .unwrap();
 }

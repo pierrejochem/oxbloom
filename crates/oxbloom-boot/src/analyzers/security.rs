@@ -263,7 +263,8 @@ impl FailureAnalyzer for OAuth2Analyzer {
              `client`; each registration under `client.registration.<id>` needs `client-id`, a \
              `client-secret` (unless `client-authentication` is `none`) and a provider under \
              `client.provider.<id>` with an `issuer-uri`, or an `authorization-uri` and a \
-             `token-uri`; endpoints are absolute `https` URLs (`http` only for a loopback \
+             `token-uri`; a plain provider (no `issuer-uri`, no `jwk-set-uri`) also needs \
+             `user-info-uri` and `user-name-attribute`; endpoints are absolute `https` URLs (`http` only for a loopback \
              host); ids hold only `a` to `z`, `0` to `9` and `-`."
         };
         let description = match unknown {

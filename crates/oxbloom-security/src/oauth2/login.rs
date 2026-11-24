@@ -22,7 +22,9 @@ use super::authorization::authorization_url;
 use super::error::allowed_authorization_code;
 use super::pending::Pending;
 use super::pkce::{Verifier, random_token};
-use super::settings::{is_acceptable_endpoint, is_scope_token, is_valid_id};
+use super::settings::{
+    is_acceptable_endpoint, is_scope_token, validate_provider, validate_registration,
+};
 use super::stored::StoredTokens;
 use super::{
     ClientRegistration, IdTokenValidator, MetadataCache, OAuth2Error, ProviderConfig,
@@ -327,8 +329,15 @@ impl OAuth2Login {
         let client = self
             .client
             .ok_or(SecurityBuildError::OAuth2LoginWithoutClient)?;
-        let usable =
-            |r: &ClientRegistration| is_valid_id(&r.id) && self.providers.contains_key(&r.provider);
+        // The same shape checks as the configuration keys, so a registration built in code
+        // cannot pass a shape that fails every login after the code exchange.
+        let usable = |r: &ClientRegistration| {
+            validate_registration(r).is_ok()
+                && self
+                    .providers
+                    .get(&r.provider)
+                    .is_some_and(|p| validate_provider(&r.provider, p).is_ok())
+        };
         if self.registrations.is_empty() || !self.registrations.iter().all(usable) {
             return Err(SecurityBuildError::OAuth2LoginWithoutRegistration);
         }

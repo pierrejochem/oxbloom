@@ -608,14 +608,15 @@ static OAUTH2: [PropertyMetadata; 14] = [
         "String",
         None,
         "The user info endpoint (absolute `https` URL; `http` only for a loopback host). A \
-         plain OAuth2 provider needs this or `user-name-attribute`.",
+         plain OAuth2 provider (no `issuer-uri`, no `jwk-set-uri`) needs this and \
+         `user-name-attribute`.",
     ),
     PropertyMetadata::new(
         "security.oauth2.client.provider.<id>.user-name-attribute",
         "String",
         None,
-        "The attribute that names the user. A plain OAuth2 provider needs this or \
-         `user-info-uri`.",
+        "The attribute that names the user. A plain OAuth2 provider (no `issuer-uri`, no \
+         `jwk-set-uri`) needs this and `user-info-uri`.",
     ),
     PropertyMetadata::new(
         "security.oauth2.client.registration.<id>.client-authentication",
