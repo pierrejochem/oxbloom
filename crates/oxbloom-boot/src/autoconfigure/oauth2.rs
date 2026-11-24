@@ -17,6 +17,7 @@ use serde::de::IgnoredAny;
 pub(crate) const BASE_URL: &str = "security.oauth2.base-url";
 /// Where a failed OAuth2 login goes; the failure URL of form login when unset.
 pub(crate) const FAILURE_URL: &str = "security.oauth2.failure-url";
+
 const SECTION: &str = "security.oauth2";
 pub(crate) const REGISTRATIONS: &str = "security.oauth2.client.registration";
 /// The fixed path prefixes of the two OAuth2 login endpoints.
@@ -31,9 +32,17 @@ struct RawSection {
     base_url: Option<String>,
     #[serde(rename = "failure-url")]
     failure_url: Option<String>,
+    login: Option<RawLogin>,
     // Read only for its unknown-key check.
     #[allow(dead_code)]
     client: Option<RawClient>,
+}
+
+/// `security.oauth2.login`: the switch of OAuth2 login.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawLogin {
+    enabled: Option<bool>,
 }
 
 /// The two tables under `security.oauth2.client`; anything else is an unknown key.
@@ -56,6 +65,7 @@ pub(crate) struct OAuth2Properties {
     settings: OAuth2Settings,
     base_url: Option<String>,
     failure_url: Option<String>,
+    login_enabled: bool,
 }
 
 impl OAuth2Properties {
@@ -69,7 +79,10 @@ impl OAuth2Properties {
             Err(error) => return Err(error),
         };
         let settings = OAuth2Settings::from_config(config)?;
-        let (base_url, failure_url) = raw.map_or((None, None), |r| (r.base_url, r.failure_url));
+        let (base_url, failure_url, login_enabled) = raw.map_or((None, None, true), |r| {
+            let enabled = r.login.and_then(|login| login.enabled).unwrap_or(true);
+            (r.base_url, r.failure_url, enabled)
+        });
         if let Some(url) = &base_url {
             check_base_url(url)?;
         }
@@ -80,12 +93,19 @@ impl OAuth2Properties {
             settings,
             base_url,
             failure_url,
+            login_enabled,
         })
     }
 
     /// Whether the configuration has at least one registration.
     pub(crate) fn has_registrations(&self) -> bool {
         !self.settings.registrations.is_empty()
+    }
+
+    /// Whether the registrations turn on OAuth2 login: `security.oauth2.login.enabled`, default
+    /// `true`. The client does not depend on it.
+    pub(crate) fn login_enabled(&self) -> bool {
+        self.login_enabled
     }
 
     /// The registrations and providers of `security.oauth2.client`.
@@ -102,11 +122,10 @@ impl OAuth2Properties {
         client: Option<Arc<dyn HttpClient>>,
         clock: Option<Arc<dyn Clock>>,
     ) -> Result<HttpSecurity, OAuth2Failure> {
-        let base_url = self.base_url.clone().ok_or_else(|| {
-            OAuth2Failure::Config(ConfigError::Missing {
-                key: BASE_URL.to_owned(),
-            })
-        })?;
+        let base_url = self
+            .base_url
+            .clone()
+            .ok_or(OAuth2Failure::Login(OAuth2LoginError::WithoutBaseUrl))?;
         let client = client.ok_or(OAuth2Failure::Login(OAuth2LoginError::WithoutHttpClient))?;
         // The callback path is fixed, so a redirect URI must be exactly the callback URL of its
         // own registration. Checked here to name the registration's key.
@@ -217,11 +236,16 @@ fn check_failure_url(url: &str) -> Result<(), ConfigError> {
 /// The startup failures of `security.oauth2.client.registration` that are not a bad value.
 /// The texts are fixed and name the key or the bean.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// Each variant names what the registrations are without, like the `OAuth2LoginWithout*`
+// build errors of `SecurityBuildError`.
+#[allow(clippy::enum_variant_names)]
 pub(crate) enum OAuth2LoginError {
     /// Registrations without form login.
     WithoutFormLogin,
     /// Registrations without a `dyn HttpClient` bean.
     WithoutHttpClient,
+    /// Registrations, with OAuth2 login on, without `security.oauth2.base-url`.
+    WithoutBaseUrl,
 }
 
 impl std::fmt::Display for OAuth2LoginError {
@@ -234,6 +258,11 @@ impl std::fmt::Display for OAuth2LoginError {
             Self::WithoutHttpClient => {
                 "security.oauth2.client.registration needs an `HttpClient` bean for the provider \
                  requests, such as the one of `HttpClientAutoConfiguration`"
+            }
+            Self::WithoutBaseUrl => {
+                "security.oauth2.base-url is needed for OAuth2 login, which the registrations of \
+                 security.oauth2.client.registration turn on unless security.oauth2.login.enabled \
+                 is false"
             }
         })
     }
@@ -265,6 +294,30 @@ mod tests {
         let props = read("[security.oauth2]\nbase-url = \"https://app.example\"\n").unwrap();
         assert!(!props.has_registrations());
         assert_eq!(props.base_url.as_deref(), Some("https://app.example"));
+    }
+
+    #[test]
+    fn the_login_switch_defaults_to_on() {
+        assert!(read("").unwrap().login_enabled());
+        assert!(
+            read("[security.oauth2]\nbase-url = \"https://app.example\"\n")
+                .unwrap()
+                .login_enabled()
+        );
+        assert!(
+            read("[security.oauth2.login]\nenabled = true\n")
+                .unwrap()
+                .login_enabled()
+        );
+        assert!(
+            !read("[security.oauth2.login]\nenabled = false\n")
+                .unwrap()
+                .login_enabled()
+        );
+        let key = key_of(read("[security.oauth2.login]\nenable = false\n"));
+        assert!(key.starts_with(SECTION), "{key}");
+        let key = key_of(read("[security.oauth2.login]\nenabled = \"maybe\"\n"));
+        assert!(key.starts_with(SECTION), "{key}");
     }
 
     #[test]

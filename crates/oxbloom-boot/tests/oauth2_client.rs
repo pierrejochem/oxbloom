@@ -325,6 +325,128 @@ fn the_client_runs_after_the_http_client_and_security() {
     );
 }
 
+const LOGIN_OFF: &str = "[security.oauth2.login]\nenabled = false\n";
+
+/// The sentence that the startup failures of OAuth2 login show for a client-only application.
+const OPT_OUT: &str = "If you only use the OAuth2 client (client credentials, refresh), set \
+                       `security.oauth2.login.enabled = false`, supply your own \
+                       `SecurityFilterChain` bean, or exclude `SecurityAutoConfiguration`.";
+
+#[tokio::test]
+async fn login_can_be_turned_off_for_a_client_only_application() {
+    // No form login, no session, no base URL, every auto-configuration.
+    let toml = format!("{}{LOGIN_OFF}", client_only());
+    ContextRunner::new()
+        .config_str(toml.clone())
+        .auto_configurations(auto_configurations())
+        .run(|context| {
+            assert!(context.contains::<OAuth2Client>());
+            assert!(context.contains::<SecurityFilterChain>());
+        })
+        .await;
+    // The login endpoints are not served: the closed default chain answers 401 as for any
+    // other path.
+    let fake = FakeProvider::new(ISSUER);
+    let app = TestApp::full()
+        .config_str(toml)
+        .configure(wiring(fake.client(), downstream()))
+        .start()
+        .await;
+    let res = app
+        .client()
+        .get("/oauth2/authorization/billing")
+        .send()
+        .await;
+    assert_eq!(res.status(), 401);
+    let res = app.client().get("/no-such-path").send().await;
+    assert_eq!(res.status(), 401);
+    app.stop().await;
+}
+
+#[tokio::test]
+async fn login_enabled_true_keeps_the_login() {
+    let fake = FakeProvider::new(ISSUER);
+    let toml = format!("{}[security.oauth2.login]\nenabled = true\n", config());
+    let app = secured()
+        .config_str(toml)
+        .configure(wiring(fake.client(), downstream()))
+        .start()
+        .await;
+    let res = app.client().get("/oauth2/authorization/idp").send().await;
+    assert_eq!(res.status(), 302);
+    assert!(
+        res.header("location")
+            .unwrap_or_default()
+            .starts_with(&format!("{ISSUER}/authorize?"))
+    );
+    app.stop().await;
+}
+
+#[tokio::test]
+async fn an_unknown_key_under_login_fails_the_boot_with_the_key() {
+    let toml = format!("{}[security.oauth2.login]\nenable = false\n", client_only());
+    ContextRunner::new()
+        .config_str(toml)
+        .auto_configurations(auto_configurations())
+        .run_failing(|failure| {
+            let error = failure.error();
+            assert!(error.to_string().contains("security.oauth2"), "{error}");
+            let analysis = error.analysis().expect("an analysis");
+            assert!(
+                analysis.description().contains("`enable`"),
+                "{}",
+                analysis.description()
+            );
+        })
+        .await;
+}
+
+/// The analysis of the startup failure of `toml` with every auto-configuration.
+async fn analysis_of(toml: String) -> (String, String) {
+    let seen = Arc::new(Mutex::new((String::new(), String::new())));
+    let out = seen.clone();
+    ContextRunner::new()
+        .config_str(toml)
+        .auto_configurations(auto_configurations())
+        .run_failing(move |failure| {
+            let error = failure.error();
+            assert!(!format!("{error} {error:?}").contains(SECRET));
+            let analysis = error.analysis().expect("an analysis");
+            *out.lock().unwrap() = (
+                analysis.description().to_owned(),
+                analysis.action().unwrap_or_default().to_owned(),
+            );
+        })
+        .await;
+    let guard = seen.lock().unwrap();
+    guard.clone()
+}
+
+#[tokio::test]
+async fn the_first_try_of_a_client_only_application_names_the_opt_outs() {
+    // No base URL: the report says that the login needs it, and how to turn the login off.
+    let (description, action) = analysis_of(client_only()).await;
+    assert!(
+        description.contains("security.oauth2.base-url"),
+        "{description}"
+    );
+    assert!(description.contains("OAuth2 login"), "{description}");
+    assert!(action.contains(OPT_OUT), "{action}");
+    // With a base URL but no form login: the same opt-outs, and the advice for login users.
+    let toml = format!(
+        "[security.oauth2]\nbase-url = \"{BASE}\"\n{}",
+        client_only()
+    );
+    let (description, action) = analysis_of(toml).await;
+    assert!(description.contains("form login"), "{description}");
+    assert!(
+        action.contains("security.form-login.enabled = true"),
+        "{action}"
+    );
+    assert!(action.contains(OPT_OUT), "{action}");
+    assert!(!action.contains("remove the registrations"), "{action}");
+}
+
 // ---- Tokens through the bean ---------------------------------------------------------------
 
 /// Permits `/downstream`; everything else stays authenticated.
@@ -432,18 +554,34 @@ fn encode(text: &str) -> String {
         .collect()
 }
 
-/// One browser with its own session cookie.
+/// One browser with its own cookies (the session cookie and the remember-me cookie).
 struct Browser<'a> {
     app: &'a RunningApp,
-    jar: Mutex<Option<String>>,
+    jar: Mutex<HashMap<String, String>>,
 }
 
 impl<'a> Browser<'a> {
     fn new(app: &'a RunningApp) -> Self {
         Self {
             app,
-            jar: Mutex::new(None),
+            jar: Mutex::new(HashMap::new()),
         }
+    }
+
+    fn drop_session(&self) {
+        self.jar.lock().unwrap().remove(COOKIE);
+    }
+
+    fn has(&self, name: &str) -> bool {
+        self.jar.lock().unwrap().contains_key(name)
+    }
+
+    fn take(&self, name: &str) -> Option<String> {
+        self.jar.lock().unwrap().remove(name)
+    }
+
+    fn put(&self, name: &str, value: String) {
+        self.jar.lock().unwrap().insert(name.to_owned(), value);
     }
 
     async fn send(&self, method: HttpMethod, path: &str, form: &str) -> TestResponse {
@@ -456,16 +594,28 @@ impl<'a> Browser<'a> {
             _ => client.get(path),
         }
         .header("accept", "text/html");
-        if let Some(id) = self.jar.lock().unwrap().clone() {
-            req = req.header("cookie", format!("{COOKIE}={id}"));
+        let cookies: Vec<String> = self
+            .jar
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(name, value)| format!("{name}={value}"))
+            .collect();
+        if !cookies.is_empty() {
+            req = req.header("cookie", cookies.join("; "));
         }
         let res = req.send().await;
         for value in res.header_all("set-cookie") {
-            if let Some(rest) = value.strip_prefix(&format!("{COOKIE}=")) {
-                let mut parts = rest.split("; ");
-                let id = parts.next().unwrap().to_owned();
-                let expired = parts.any(|p| p == "Max-Age=0");
-                *self.jar.lock().unwrap() = (!expired).then_some(id);
+            let mut parts = value.split("; ");
+            let Some((name, id)) = parts.next().unwrap().split_once('=') else {
+                continue;
+            };
+            let expired = parts.any(|p| p == "Max-Age=0");
+            let mut jar = self.jar.lock().unwrap();
+            if expired {
+                jar.remove(name);
+            } else {
+                jar.insert(name.to_owned(), id.to_owned());
             }
         }
         res
@@ -616,6 +766,119 @@ async fn a_password_user_cannot_get_the_oauth2_tokens_in_the_session() {
     );
     // Only the code exchange of the OAuth2 login reached the token endpoint.
     assert_eq!(fake.token_requests().len(), 1);
+    app.stop().await;
+}
+
+/// The configuration with the `github`-like plain registration `gh` next to `idp` and
+/// `billing`.
+fn config_with_second_login() -> String {
+    format!(
+        "{}\n[security.oauth2.client.registration.gh]\nclient-id = \"gh-app\"\n\
+         client-secret = \"{SECRET}\"\nscope = [\"read:user\"]\n\
+         [security.oauth2.client.provider.gh]\nauthorization-uri = \"{ISSUER}/authorize\"\n\
+         token-uri = \"{ISSUER}/token\"\nuser-info-uri = \"{ISSUER}/userinfo\"\n\
+         user-name-attribute = \"sub\"\n",
+        config()
+    )
+}
+
+#[tokio::test]
+async fn an_oauth2_login_of_another_registration_removes_the_tokens_of_the_first() {
+    let fake = FakeProvider::new(ISSUER);
+    let app = secured()
+        .config_str(config_with_second_login())
+        .configure(wiring(fake.client(), downstream()))
+        .start()
+        .await;
+    let b = Browser::new(&app);
+    b.log_in(&fake, alice()).await;
+    assert!(b.tokens().await.is_object());
+    // A login with `gh` in the same browser.
+    let res = b.get("/oauth2/authorization/gh").await;
+    assert_eq!(res.status(), 302, "{}", res.text());
+    let params = query(res.header("location").unwrap());
+    fake.expect_pkce(&params["code_challenge"]);
+    fake.expect_redirect_uri(&format!("{BASE}/login/oauth2/code/gh"));
+    let code = fake.issue_code(FakeUser::new("alice-gh").scope("read:user"));
+    let res = b
+        .get(&format!(
+            "/login/oauth2/code/gh?code={}&state={}",
+            encode(&code),
+            encode(&params["state"])
+        ))
+        .await;
+    assert_eq!(res.status(), 302, "{}", res.text());
+    assert_eq!(res.header("location"), Some("/"));
+    // `/tokens` shows the tokens of `idp`: gone.
+    assert_eq!(b.tokens().await, Value::Null);
+    assert_eq!(
+        b.text("/user-token").await,
+        format!("error: {}", TokenError::ReauthenticationRequired)
+    );
+    app.stop().await;
+}
+
+/// Permits `/plant-tokens` and `/tokens`, so an anonymous session can hold tokens.
+struct OpenTokens;
+
+impl SecurityCustomizer for OpenTokens {
+    fn customize(&self, http: HttpSecurity) -> HttpSecurity {
+        http.authorize(|a| {
+            a.path("/plant-tokens")
+                .permit_all()
+                .path("/tokens")
+                .permit_all()
+                .any_request()
+                .authenticated()
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_remember_me_auto_login_clears_the_oauth2_tokens_of_the_session() {
+    let fake = FakeProvider::new(ISSUER);
+    let hash = DelegatingPasswordEncoder::argon2(Argon2PasswordEncoder::new(8, 1, 1).unwrap())
+        .encode(PASSWORD);
+    let toml = format!(
+        "{}[security.csrf]\nenabled = false\n\
+         [security.remember-me]\nenabled = true\nsecret = \"a-remember-me-secret-of-32-bytes\"\n\
+         [security.users.bob]\npassword = \"{hash}\"\nroles = [\"USER\"]\n",
+        config()
+    );
+    let app = secured()
+        .config_str(toml)
+        .configure(wiring(fake.client(), downstream()))
+        .configure(|b| {
+            b.instance(OpenTokens)
+                .provides(|c: Arc<OpenTokens>| -> Arc<dyn SecurityCustomizer> { c })
+        })
+        .start()
+        .await;
+    let b = Browser::new(&app);
+    let res = b
+        .send(
+            HttpMethod::Post,
+            "/login",
+            &format!("username=bob&password={}&remember-me=on", encode(PASSWORD)),
+        )
+        .await;
+    assert_eq!(res.status(), 302, "{}", res.text());
+    assert!(b.has("OXBLOOM_REMEMBER_ME"));
+    // A new anonymous session that holds tokens of `idp`, made without the remember-me cookie
+    // so that no auto login happens yet.
+    b.drop_session();
+    let remember = b.take("OXBLOOM_REMEMBER_ME").unwrap();
+    assert_eq!(b.text("/plant-tokens").await, "planted");
+    assert_eq!(b.tokens().await["access_token"], PLANTED_ACCESS_TOKEN);
+    b.put("OXBLOOM_REMEMBER_ME", remember);
+    // A protected request logs bob in again from the cookie; his session holds no OAuth2 tokens.
+    let res = b.get("/user-token").await;
+    assert_eq!(res.status(), 200, "{}", res.text());
+    assert_eq!(
+        res.text(),
+        format!("error: {}", TokenError::ReauthenticationRequired)
+    );
+    assert_eq!(b.tokens().await, Value::Null);
     app.stop().await;
 }
 

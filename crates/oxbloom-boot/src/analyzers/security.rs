@@ -219,10 +219,27 @@ impl FailureAnalyzer for OAuth2Analyzer {
             // Exhaustive on purpose: a new variant must get its own text here.
             let (description, action) = match error {
                 OAuth2LoginError::WithoutFormLogin => (
-                    "`security.oauth2.client.registration` is set, but form login is off. \
-                     OAuth2 login keeps the user in the form login session.",
-                    "Set `security.form-login.enabled = true` (OAuth2 login needs no password \
-                     provider then), or remove the registrations.",
+                    "`security.oauth2.client.registration` is set, which turns on OAuth2 login, \
+                     but form login is off. OAuth2 login keeps the user in the form login \
+                     session.",
+                    concat!(
+                        "For OAuth2 login, set `security.form-login.enabled = true` (OAuth2 login \
+                         needs no password provider then). ",
+                        "If you only use the OAuth2 client (client credentials, refresh), set \
+                         `security.oauth2.login.enabled = false`, supply your own \
+                         `SecurityFilterChain` bean, or exclude `SecurityAutoConfiguration`."
+                    ),
+                ),
+                OAuth2LoginError::WithoutBaseUrl => (
+                    "`security.oauth2.base-url` is needed for OAuth2 login, which the \
+                     registrations under `security.oauth2.client.registration` turn on.",
+                    concat!(
+                        "For OAuth2 login, set `security.oauth2.base-url` to the external URL of \
+                         the application, such as `https://app.example`. ",
+                        "If you only use the OAuth2 client (client credentials, refresh), set \
+                         `security.oauth2.login.enabled = false`, supply your own \
+                         `SecurityFilterChain` bean, or exclude `SecurityAutoConfiguration`."
+                    ),
                 ),
                 OAuth2LoginError::WithoutHttpClient => (
                     "`security.oauth2.client.registration` is set, but there is no `HttpClient` \
@@ -652,8 +669,19 @@ mod tests {
         assert_eq!(
             a.action(),
             Some(
-                "Set `security.form-login.enabled = true` (OAuth2 login needs no password provider then), or remove the registrations."
+                "For OAuth2 login, set `security.form-login.enabled = true` (OAuth2 login needs no password provider then). If you only use the OAuth2 client (client credentials, refresh), set `security.oauth2.login.enabled = false`, supply your own `SecurityFilterChain` bean, or exclude `SecurityAutoConfiguration`."
             )
+        );
+        let di = DiError::creation_from::<u8>(OAuth2LoginError::WithoutBaseUrl);
+        let a = analyze_oauth2(di).unwrap();
+        assert!(
+            a.description()
+                .contains("`security.oauth2.base-url` is needed for OAuth2 login")
+        );
+        assert!(
+            a.action()
+                .unwrap()
+                .contains("set `security.oauth2.login.enabled = false`")
         );
         let di = DiError::creation_from::<u8>(OAuth2LoginError::WithoutHttpClient);
         let a = analyze_oauth2(di).unwrap();

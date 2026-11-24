@@ -12,7 +12,7 @@ use std::time::{Duration, SystemTime};
 use oxbloom_boot::{
     HttpClientAutoConfiguration, SecurityCustomizer, StartupPhase, auto_configurations,
 };
-use oxbloom_config::{ConfigError, Secret};
+use oxbloom_config::Secret;
 use oxbloom_di::{ContainerBuilder, DiError};
 use oxbloom_http_client::HttpClient;
 use oxbloom_security::{
@@ -445,17 +445,18 @@ async fn fails_with(
 
 #[tokio::test]
 async fn a_missing_base_url_fails_the_boot_with_the_key() {
-    let (description, _) = fails(config(""), BASE_URL_KEY, &[]).await;
+    let (description, action) = fails(config(""), BASE_URL_KEY, &[]).await;
     assert!(description.contains(BASE_URL_KEY), "{description}");
-    // The typed source is a missing key.
-    ContextRunner::new()
-        .config_str(config(""))
-        .auto_configurations(auto_configurations())
-        .run_failing(|failure| {
-            let cause = failure.error().find_cause::<ConfigError>().unwrap();
-            assert!(matches!(cause, ConfigError::Missing { key } if key == BASE_URL_KEY));
-        })
-        .await;
+    assert!(description.contains("OAuth2 login"), "{description}");
+    // The action names the key for login users and the opt-outs of a client-only application.
+    assert!(
+        action.contains("set `security.oauth2.base-url`"),
+        "{action}"
+    );
+    assert!(
+        action.contains("`security.oauth2.login.enabled = false`"),
+        "{action}"
+    );
 }
 
 #[tokio::test]

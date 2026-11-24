@@ -37,8 +37,10 @@ use crate::autoconfig::{AutoConfiguration, ConfigRef};
 ///
 /// The client itself needs neither form login nor `security.oauth2.base-url`. But with
 /// `SecurityAutoConfiguration` in the list (as in `auto_configurations()`), every registration
-/// also turns on OAuth2 login, which needs both: an application that only uses the client
-/// registers its own `SecurityFilterChain` bean or excludes `SecurityAutoConfiguration`.
+/// also turns on OAuth2 login, which needs both, unless `security.oauth2.login.enabled` is
+/// `false`: an application that only uses the client sets that key, registers its own
+/// `SecurityFilterChain` bean or excludes `SecurityAutoConfiguration`. The client does not
+/// depend on the key.
 ///
 /// # Examples
 ///

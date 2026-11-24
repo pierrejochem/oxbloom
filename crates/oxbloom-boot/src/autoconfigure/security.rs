@@ -172,7 +172,8 @@ pub trait SecurityCustomizer: Send + Sync {
 /// changes only what it touches.
 ///
 /// With the feature `oauth2`, OAuth2 login follows `security.oauth2`. When
-/// `security.oauth2.client.registration` has at least one entry, the chain calls
+/// `security.oauth2.client.registration` has at least one entry and
+/// `security.oauth2.login.enabled` is not `false` (it defaults to `true`), the chain calls
 /// `oauth2_login` after the customizers with the registrations and providers of
 /// `oxbloom_security::OAuth2Settings::from_config`, the `dyn HttpClient` bean (from
 /// [`HttpClientAutoConfiguration`](crate::HttpClientAutoConfiguration) or the application),
@@ -183,9 +184,12 @@ pub trait SecurityCustomizer: Send + Sync {
 /// startup with a `ConfigError` that names the full key and never holds the value or the
 /// client secret. The section is parsed once, into a lazy bean that the OAuth2 client of
 /// `OAuth2ClientAutoConfiguration` reads too, so the login and the client see the same
-/// registrations. With registrations:
+/// registrations. An application that only uses the OAuth2 client sets
+/// `security.oauth2.login.enabled = false`: then no login endpoints exist and neither form
+/// login nor the base URL is needed. With registrations and the login on:
 ///
-/// - `security.oauth2.base-url` is required (a `ConfigError::Missing`), and must be an absolute
+/// - `security.oauth2.base-url` is required (the startup failure says that OAuth2 login needs
+///   it and names the opt-outs of a client-only application), and must be an absolute
 ///   `https` URL (`http` only for a loopback host) with no path beyond an optional `/`, no
 ///   query and no fragment, because the callback path `/login/oauth2/code/{id}` is fixed.
 /// - A `redirect-uri` that does not resolve to `{base-url}/login/oauth2/code/{id}` fails with
@@ -406,7 +410,8 @@ fn security_filter_chain(
     // OAuth2 login from the configuration, unless a customizer configured it: then the
     // customizer wins and boot steps aside.
     #[cfg(feature = "oauth2")]
-    let boot_oauth2 = oauth2.has_registrations() && !http.has_oauth2_login();
+    let boot_oauth2 =
+        oauth2.has_registrations() && oauth2.login_enabled() && !http.has_oauth2_login();
     #[cfg(feature = "oauth2")]
     if boot_oauth2 {
         http = oauth2
@@ -587,10 +592,11 @@ static MERGED: std::sync::LazyLock<Vec<PropertyMetadata>> = std::sync::LazyLock:
     all
 });
 
-/// Exactly the keys `OAuth2Settings::from_config` reads (pinned by tests) and the two boot
-/// keys `security.oauth2.base-url` and `security.oauth2.failure-url`, sorted by key.
+/// Exactly the keys `OAuth2Settings::from_config` reads (pinned by tests) and the three boot
+/// keys `security.oauth2.base-url`, `security.oauth2.failure-url` and
+/// `security.oauth2.login.enabled`, sorted by key.
 #[cfg(feature = "oauth2")]
-static OAUTH2: [PropertyMetadata; 14] = [
+static OAUTH2: [PropertyMetadata; 15] = [
     PropertyMetadata::new(
         "security.oauth2.base-url",
         "String",
@@ -685,6 +691,14 @@ static OAUTH2: [PropertyMetadata; 14] = [
         None,
         "Where a failed OAuth2 login goes: a local path outside `/oauth2/authorization/` and \
          `/login/oauth2/code/`. Unset means the failure URL of form login.",
+    ),
+    PropertyMetadata::new(
+        "security.oauth2.login.enabled",
+        "bool",
+        Some("true"),
+        "Whether the registrations turn on OAuth2 login. Set it to `false` in an application \
+         that only uses the OAuth2 client: then no login endpoints exist and neither form login \
+         nor `security.oauth2.base-url` is needed. The `OAuth2Client` bean does not depend on it.",
     ),
 ];
 
