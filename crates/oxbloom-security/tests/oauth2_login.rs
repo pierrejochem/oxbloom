@@ -1132,6 +1132,10 @@ async fn the_build_fails_without_a_base_url() {
         "ftp://app.example.test",
         "https://app.example.test/?a=1",
         "https://app.example.test/#x",
+        // A path prefix could never reach the fixed callback path.
+        "https://app.example.test/app",
+        "https://app.example.test/app/",
+        "https://app.example.test//",
     ] {
         assert_eq!(
             build(Some(bad)),

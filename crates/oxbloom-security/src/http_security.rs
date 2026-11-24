@@ -113,7 +113,8 @@ pub enum SecurityBuildError {
     /// ```
     OAuth2LoginWithoutRegistration,
     /// OAuth2 login has no base URL, or one that is not an absolute `https` URL (`http` only
-    /// for a loopback host) without a query and a fragment. The redirect URI is built from it.
+    /// for a loopback host) without a path beyond an optional `/`, a query and a fragment. The
+    /// redirect URI is built from it, and the callback path is fixed.
     ///
     /// # Examples
     ///

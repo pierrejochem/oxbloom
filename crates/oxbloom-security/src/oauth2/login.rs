@@ -239,7 +239,8 @@ impl OAuth2Login {
 
     /// The external base URL of the application, such as `https://app.example`: the
     /// `{base-url}` of the redirect URI. It must be an absolute `https` URL (`http` only for a
-    /// loopback host) without a query or a fragment; a trailing slash is dropped.
+    /// loopback host) without a path beyond an optional `/`, a query or a fragment, because the
+    /// callback path is fixed; a trailing slash is dropped.
     ///
     /// # Examples
     ///
@@ -343,7 +344,7 @@ impl OAuth2Login {
         }
         let base_url = self
             .base_url
-            .filter(|url| is_acceptable_endpoint(url, false))
+            .filter(|url| is_acceptable_endpoint(url, false) && has_no_path(url))
             .ok_or(SecurityBuildError::OAuth2LoginWithoutBaseUrl)?;
         let base_url = base_url.trim_end_matches('/').to_owned();
         // The callback path is fixed, so the redirect URI must lead to it exactly. With unique
@@ -395,6 +396,16 @@ impl OAuth2Login {
             client,
         })
     }
+}
+
+/// Whether `url` has nothing after its authority but an optional `/`: the callback path is
+/// fixed, so a base URL with a path prefix could never be reached (ruling R17).
+fn has_no_path(url: &str) -> bool {
+    let Some((_, rest)) = url.split_once("://") else {
+        return false;
+    };
+    let tail = rest.find(['/', '?', '#']).map_or("", |i| &rest[i..]);
+    tail.is_empty() || tail == "/"
 }
 
 /// The OAuth2 login part of a chain.
