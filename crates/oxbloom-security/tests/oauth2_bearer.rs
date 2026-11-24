@@ -4,22 +4,26 @@
 
 #![cfg(feature = "oauth2")]
 
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
+
+use async_trait::async_trait;
 
 use http::{Method, header};
 use oxbloom_config::Secret;
 use oxbloom_core::Clock;
-use oxbloom_http_client::Request as OutRequest;
 use oxbloom_http_client::{Body, HttpClient, HttpClientError, InterceptedClient, Interceptor};
+use oxbloom_http_client::{Request as OutRequest, Response as OutResponse};
 use oxbloom_security::{
-    Authentication, BearerRetryClient, ClientAuthentication, ClientCredentialsInterceptor,
-    ClientRegistration, OAuth2Client, OAuth2Settings, ProviderConfig, SecurityContext, Session,
-    UserTokenInterceptor,
+    AccessToken, Authentication, BearerRetryClient, ClientAuthentication,
+    ClientCredentialsInterceptor, ClientRegistration, OAuth2Client, OAuth2Settings, ProviderConfig,
+    SecurityContext, Session, UserTokenInterceptor,
 };
 use oxbloom_test::{FakeProvider, FakeUser, ManualClock, MockHttpClient, MockResponse};
 use oxbloom_web::{HttpMethod, Request};
 use serde_json::{Value, json};
+use tokio::sync::Notify;
 
 const ISSUER: &str = "https://idp.example.test";
 const API: &str = "https://api.example.test/orders";
@@ -190,24 +194,129 @@ async fn bearer_retry_client_does_not_retry_a_non_401() {
     }
 }
 
+/// While armed, holds every client credentials request at a gate: it signals `entered` and
+/// waits for `release`.
+struct TokenGate {
+    inner: Arc<dyn HttpClient>,
+    armed: Arc<AtomicBool>,
+    entered: Arc<Notify>,
+    release: Arc<Notify>,
+}
+
+#[async_trait]
+impl HttpClient for TokenGate {
+    async fn execute(&self, request: OutRequest) -> Result<OutResponse, HttpClientError> {
+        let grant = matches!(request.body_ref(), Body::Form(fields)
+            if fields.iter().any(|(k, v)| k == "grant_type" && v == "client_credentials"));
+        if grant && self.armed.load(Ordering::SeqCst) {
+            self.entered.notify_one();
+            self.release.notified().await;
+        }
+        self.inner.execute(request).await
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_bearer_retry_calls_refused_with_the_same_token_cause_one_refetch() {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let fake = FakeProvider::new(ISSUER);
+        let armed = Arc::new(AtomicBool::new(false));
+        let entered = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let gate = TokenGate {
+            inner: fake.client(),
+            armed: armed.clone(),
+            entered: entered.clone(),
+            release: release.clone(),
+        };
+        let client = Arc::new(OAuth2Client::new(settings(), Arc::new(gate)));
+        let old = client.client_credentials("svc").await.unwrap();
+        // The service refuses the old token (revoked early) and accepts any other.
+        let refused = format!("Bearer {}", old.value.expose());
+        let api = Arc::new(MockHttpClient::new());
+        api.on_fn(move |request| {
+            let status = if bearer(request) == refused { 401 } else { 200 };
+            Some(OutResponse::new(
+                http::StatusCode::from_u16(status).unwrap(),
+                http::HeaderMap::new(),
+                Vec::new(),
+            ))
+        });
+        armed.store(true, Ordering::SeqCst);
+        let calls: Vec<_> = (0..8)
+            .map(|_| {
+                let http = BearerRetryClient::new(api.clone(), client.clone(), "svc");
+                tokio::spawn(async move { http.execute(OutRequest::get(API)).await })
+            })
+            .collect();
+        entered.notified().await;
+        while client.__waiting_callers("svc") < 7 {
+            tokio::task::yield_now().await;
+        }
+        armed.store(false, Ordering::SeqCst);
+        release.notify_one();
+        for call in calls {
+            assert_eq!(call.await.unwrap().unwrap().status(), 200);
+        }
+        assert_eq!(client_credentials_requests(&fake), 2);
+    })
+    .await
+    .expect("the test did not finish within 10 seconds");
+}
+
+/// A service that, before it refuses the old token, lets another caller replace the cached
+/// token: its 401 arrives when the cache already holds a newer token.
+struct LateRefusal {
+    client: Arc<OAuth2Client>,
+    old: AccessToken,
+    seen: Mutex<Vec<String>>,
+}
+
+#[async_trait]
+impl HttpClient for LateRefusal {
+    async fn execute(&self, request: OutRequest) -> Result<OutResponse, HttpClientError> {
+        let value = bearer(&request);
+        self.seen.lock().unwrap().push(value.clone());
+        let status = if value == format!("Bearer {}", self.old.value.expose()) {
+            self.client.invalidate_token("svc", &self.old);
+            self.client.client_credentials("svc").await.unwrap();
+            401
+        } else {
+            200
+        };
+        Ok(OutResponse::new(
+            http::StatusCode::from_u16(status).unwrap(),
+            http::HeaderMap::new(),
+            Vec::new(),
+        ))
+    }
+}
+
 #[tokio::test]
-async fn bearer_retry_client_does_not_discard_a_token_another_caller_already_replaced() {
+async fn a_late_401_makes_the_retry_use_the_newer_token_without_invalidating_it() {
     let s = setup();
     let old = s.client.client_credentials("svc").await.unwrap();
-    // Another caller replaced the token meanwhile.
-    s.client.invalidate_token("svc", &old);
-    let fresh = s.client.client_credentials("svc").await.unwrap();
+    let api = Arc::new(LateRefusal {
+        client: s.client.clone(),
+        old: old.clone(),
+        seen: Mutex::new(Vec::new()),
+    });
+    let http = BearerRetryClient::new(api.clone(), s.client.clone(), "svc");
+    let response = http.execute(OutRequest::get(API)).await.unwrap();
+    assert_eq!(response.status(), 200);
+    // Two token requests: the old token and the one the other caller fetched; the retry made
+    // none of its own and kept the newer token in the cache.
     assert_eq!(client_credentials_requests(&s.fake), 2);
-    // A 401 for the fresh token makes one refetch; a late one for `old` would not.
-    s.client.invalidate_token("svc", &old);
-    s.api.on(Method::GET, API, MockResponse::status(200));
-    let http = BearerRetryClient::new(s.api.clone(), s.client.clone(), "svc");
-    http.execute(OutRequest::get(API)).await.unwrap();
+    let newer = s.client.client_credentials("svc").await.unwrap();
+    assert_eq!(client_credentials_requests(&s.fake), 2);
+    let seen = api.seen.lock().unwrap().clone();
     assert_eq!(
-        bearer(&s.api.requests()[0]),
-        format!("Bearer {}", fresh.value.expose())
+        seen,
+        vec![
+            format!("Bearer {}", old.value.expose()),
+            format!("Bearer {}", newer.value.expose()),
+        ]
     );
-    assert_eq!(client_credentials_requests(&s.fake), 2);
 }
 
 #[tokio::test]

@@ -11,10 +11,10 @@ use oxbloom_http_client::HttpClient;
 use serde_json::Value;
 
 use super::cache::TokenCache;
-use super::refresh::{RefreshLocks, Refreshed};
+use super::refresh::{Entry, LastFailure, Rotations};
 use super::stored::StoredTokens;
 use super::{ClientAuthentication, ClientRegistration, MetadataCache, OAuth2Error, OAuth2Settings};
-use super::{OAUTH2_PRINCIPAL_KEY, OAUTH2_REGISTRATION_KEY, constant_time_eq};
+use super::{OAUTH2_PRINCIPAL_KEY, OAUTH2_REGISTRATION_KEY};
 use super::{ProviderMetadata, TokenEndpoint, TokenResponse};
 use crate::form_login::epoch_seconds;
 use crate::{Authentication, RequestSecurityExt, RequestSessionExt, Session};
@@ -178,6 +178,22 @@ fn is_oauth2_login_of(authentication: Option<&Authentication>, registration_id: 
     })
 }
 
+/// How many rotation records a call follows from the refresh token in its session before it
+/// asks the provider.
+const MAX_RECORD_LINKS: usize = 4;
+
+/// Writes `tokens` to the session. A failure is logged with fixed text only: the rotation
+/// record still holds the tokens, so the next request adopts them.
+fn keep(session: &Session, registration_id: &str, tokens: &StoredTokens) {
+    if tokens.store(session, registration_id).is_err() {
+        tracing::debug!(
+            target: "oxbloom::security",
+            registration = %registration_id,
+            "the refreshed OAuth2 tokens could not be written to the session"
+        );
+    }
+}
+
 /// The expiry of a stored access token, when the login or the refresh recorded one.
 fn stored_expiry(stored: &StoredTokens) -> Option<SystemTime> {
     stored
@@ -258,7 +274,7 @@ pub struct OAuth2Client {
     skew: Duration,
     metadata: Arc<MetadataCache>,
     cache: Arc<TokenCache>,
-    refresh_locks: Arc<RefreshLocks>,
+    rotations: Arc<Rotations>,
 }
 
 impl OAuth2Client {
@@ -286,7 +302,7 @@ impl OAuth2Client {
             skew: DEFAULT_SKEW,
             metadata: Arc::new(MetadataCache::new()),
             cache: Arc::new(TokenCache::default()),
-            refresh_locks: Arc::new(RefreshLocks::default()),
+            rotations: Arc::new(Rotations::default()),
         }
     }
 
@@ -493,8 +509,9 @@ impl OAuth2Client {
     ///   session, so tokens never reach a principal they were not issued to.
     /// - The stored access token is returned while its expiry minus the skew (30 seconds by
     ///   default, see [`skew`](Self::skew)) is in the future. A token stored without an expiry,
-    ///   because the provider sent no `expires_in` at the login, is used as it is and reported
-    ///   with an expiry 60 seconds from now.
+    ///   because the provider sent no `expires_in` at the login (GitHub OAuth apps, for
+    ///   example), is used as it is, reported with an expiry 60 seconds from now, and never
+    ///   refreshed early: it is used until the service it is sent to answers 401.
     /// - A due token is refreshed: `grant_type=refresh_token` with the stored refresh token and
     ///   no `scope` (the provider grants the scope of the login), with the client
     ///   authentication of the registration (a public client sends its `client_id` only) and a
@@ -503,10 +520,23 @@ impl OAuth2Client {
     ///   the scope of the login are kept. A new token without `expires_in` counts as valid for
     ///   60 seconds; one that is already due when it arrives (`expires_in = 0`) is returned once,
     ///   and the next call refreshes again, so one call makes at most one request.
-    /// - Refreshes of one session and registration are serialized. A call that waited while
-    ///   another call of the same session refreshed does not refresh again: it takes the new
-    ///   tokens, also when it runs in another request with its own copy of the session. So a
-    ///   provider that rotates refresh tokens never sees one used twice.
+    /// - Refreshes of one refresh token are serialized, keyed by the registration and the
+    ///   SHA-256 digest of the token, not by the session id (with the cookie session backend
+    ///   every request has a new one). Each successful refresh is remembered for 10 minutes
+    ///   (at most 256 records, least recently used out first): a call that holds a refresh
+    ///   token that was already spent, by a concurrent request or before a stale copy of the
+    ///   session was written back, adopts the tokens that refresh produced instead of sending
+    ///   the token again, following up to four records of later rotations. So under normal
+    ///   operation a rotated refresh token is sent to the provider at most once. Adoption
+    ///   needs the exact spent refresh token of the same registration and the authentication
+    ///   check above, so it never crosses users.
+    /// - The refresh runs in a task of its own that writes the record even when the calling
+    ///   request is dropped (a client that disconnects), so a token the provider has already
+    ///   rotated is never lost; the next request adopts it. A session that cannot be written
+    ///   does not lose it either: the call still returns the new token, and the record serves
+    ///   the next request.
+    /// - Calls that waited for a refresh that failed get its failure. There is no backoff
+    ///   after a failed refresh: each later request tries once more.
     ///
     /// The session filter writes the session back at the end of the request, so the refreshed
     /// tokens are stored when the request that refreshed them ends.
@@ -517,8 +547,9 @@ impl OAuth2Client {
     /// OAuth2 login of the registration, when the request has no session, when the session
     /// holds no tokens of the registration, when a due token has no refresh token (the
     /// useless token is removed), or when the provider answers the refresh with
-    /// `invalid_grant` (the tokens are removed from the session): the user has to log in
-    /// again. [`TokenError::UnknownRegistration`] for an id that is not configured. Any other
+    /// `invalid_grant` for a token that no recorded refresh spent (the tokens are removed from
+    /// the session): the user has to log in again. An `invalid_grant` for a token that a
+    /// recorded refresh rotated is no failure: the call adopts the recorded tokens. [`TokenError::UnknownRegistration`] for an id that is not configured. Any other
     /// failure of the refresh leaves the stored tokens as they are and is reported as for
     /// [`client_credentials`](Self::client_credentials): [`TokenError::Provider`],
     /// [`TokenError::Http`], [`TokenError::Discovery`] or [`TokenError::Invalid`].
@@ -598,15 +629,22 @@ impl OAuth2Client {
     #[doc(hidden)]
     #[must_use]
     pub fn __refresh_waiters(&self) -> usize {
-        self.refresh_locks.waiting()
+        self.rotations.waiting()
     }
 
-    /// The number of refresh lock entries, one per session and registration with a call in
+    /// The number of refresh lock entries, one per refresh token with a call or a refresh in
     /// flight: a test hook, not a stable API.
     #[doc(hidden)]
     #[must_use]
     pub fn __refresh_locks(&self) -> usize {
-        self.refresh_locks.len()
+        self.rotations.locks()
+    }
+
+    /// The number of live rotation records: a test hook, not a stable API.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn __rotation_records(&self) -> usize {
+        self.rotations.records(self.clock.now())
     }
 
     /// [`access_token_for`](Self::access_token_for) with the session and the authentication
@@ -617,7 +655,8 @@ impl OAuth2Client {
         authentication: Option<&Authentication>,
         registration_id: &str,
     ) -> Result<AccessToken, TokenError> {
-        let registration = self.registration(registration_id)?;
+        self.registration(registration_id)?;
+        // The binding check comes first: nothing of the session is read for another principal.
         if !is_oauth2_login_of(authentication, registration_id) {
             return Err(TokenError::ReauthenticationRequired);
         }
@@ -628,39 +667,125 @@ impl OAuth2Client {
             return Ok(token);
         }
 
-        let entry = self.refresh_locks.entry(session.id(), registration_id);
-        let mut last = entry.lock().await;
-        // Another call with this session handle may have refreshed while this one waited.
-        let stored = StoredTokens::load(session, registration_id)
-            .ok_or(TokenError::ReauthenticationRequired)?;
-        if let Some(token) = self.usable(&stored) {
-            return Ok(token);
+        // The refresh token may have been spent already, by a concurrent request or before a
+        // stale copy of the session was written back: follow the rotation records.
+        let mut current = stored.clone();
+        for _ in 0..MAX_RECORD_LINKS {
+            let Some(next) = current.refresh_token.as_deref().and_then(|token| {
+                self.rotations
+                    .record(registration_id, token, self.clock.now())
+            }) else {
+                break;
+            };
+            current = next;
+            if let Some(token) = self.usable(&current) {
+                keep(session, registration_id, &current);
+                return Ok(token);
+            }
         }
-        let Some(refresh_token) = stored.refresh_token.clone() else {
+        if current != stored {
+            keep(session, registration_id, &current);
+        }
+        let Some(refresh_token) = current.refresh_token.clone() else {
             StoredTokens::remove(session, registration_id);
             return Err(TokenError::ReauthenticationRequired);
         };
-        // Or a call of another request of this session, with its own copy of the session: the
-        // refresh token this call holds is the one that call spent.
-        if let Some(done) = &*last
-            && constant_time_eq(&done.spent, &refresh_token)
-        {
-            done.tokens
-                .store(session, registration_id)
-                .map_err(|_| TokenError::Invalid)?;
-            return Ok(stored_access_token(&done.tokens, self.clock.now()));
+
+        let entry = self.rotations.entry(registration_id, &refresh_token);
+        let seen = entry.attempts();
+        let last = entry.lock().await;
+        if entry.attempts() != seen {
+            // A refresh of this very token ran while this call waited: take its outcome.
+            match *last {
+                Some(TokenError::ReauthenticationRequired) => {
+                    StoredTokens::remove(session, registration_id);
+                    return Err(TokenError::ReauthenticationRequired);
+                }
+                Some(error) => return Err(error),
+                None => {
+                    if let Some(done) =
+                        self.rotations
+                            .record(registration_id, &refresh_token, self.clock.now())
+                    {
+                        keep(session, registration_id, &done);
+                        return Ok(stored_access_token(&done, self.clock.now()));
+                    }
+                }
+            }
         }
 
-        let response = match self.fetch_refresh(registration, &refresh_token).await {
+        // The refresh runs in its own task, which holds the lock and writes the rotation record
+        // even when this call is dropped (a client that disconnects), so a refresh token the
+        // provider has already rotated is never lost.
+        let task = tokio::spawn(self.clone().refresh_task(
+            registration_id.to_owned(),
+            current,
+            refresh_token,
+            entry,
+            last,
+        ));
+        match task.await.unwrap_or(Err(TokenError::Invalid)) {
+            Ok((tokens, token)) => {
+                keep(session, registration_id, &tokens);
+                Ok(token)
+            }
+            Err(TokenError::ReauthenticationRequired) => {
+                StoredTokens::remove(session, registration_id);
+                Err(TokenError::ReauthenticationRequired)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Spends `spent`, the refresh token of `base`, at the provider, records the rotation and
+    /// releases the lock. Returns the tokens for the session and the access token;
+    /// `ReauthenticationRequired` stands for a genuine `invalid_grant`.
+    async fn refresh_task(
+        self,
+        registration_id: String,
+        base: StoredTokens,
+        spent: String,
+        entry: Entry,
+        mut last: tokio::sync::OwnedMutexGuard<LastFailure>,
+    ) -> Result<(StoredTokens, AccessToken), TokenError> {
+        let outcome = self.refresh_once(&registration_id, base, &spent).await;
+        *last = outcome.as_ref().err().copied();
+        entry.finished();
+        drop(last);
+        drop(entry);
+        outcome
+    }
+
+    async fn refresh_once(
+        &self,
+        registration_id: &str,
+        base: StoredTokens,
+        spent: &str,
+    ) -> Result<(StoredTokens, AccessToken), TokenError> {
+        let registration = self.registration(registration_id)?;
+        let response = match self.fetch_refresh(registration, spent).await {
             Ok(response) => response,
             Err(TokenError::Provider("invalid_grant")) => {
-                StoredTokens::remove(session, registration_id);
-                tracing::debug!(
-                    target: "oxbloom::security",
-                    registration = %registration_id,
-                    "the OAuth2 provider refused the refresh token; the user has to log in again"
-                );
-                return Err(TokenError::ReauthenticationRequired);
+                let now = self.clock.now();
+                // Spent by a concurrent refresh that rotated it: adopt what that one got. A
+                // record that kept the same refresh token is no rotation, so the refusal is real.
+                return match self.rotations.record(registration_id, spent, now) {
+                    Some(tokens) if tokens.refresh_token.as_deref() != Some(spent) => {
+                        let token = stored_access_token(&tokens, now);
+                        Ok((tokens, token))
+                    }
+                    other => {
+                        if other.is_some() {
+                            self.rotations.forget(registration_id, spent);
+                        }
+                        tracing::debug!(
+                            target: "oxbloom::security",
+                            registration = %registration_id,
+                            "the OAuth2 provider refused the refresh token; the user has to log in again"
+                        );
+                        Err(TokenError::ReauthenticationRequired)
+                    }
+                };
             }
             Err(error) => return Err(error),
         };
@@ -677,23 +802,17 @@ impl OAuth2Client {
                 .refresh_token
                 .as_ref()
                 .map(|token| token.expose().clone())
-                .or(stored.refresh_token),
-            ..stored
+                .or(base.refresh_token.clone()),
+            ..base
         };
-        renewed
-            .store(session, registration_id)
-            .map_err(|_| TokenError::Invalid)?;
+        self.rotations
+            .remember(registration_id, spent, renewed.clone(), now);
         tracing::debug!(
             target: "oxbloom::security",
             registration = %registration_id,
             "the OAuth2 access token of the user was refreshed"
         );
-        let token = AccessToken::new(response.access_token, expires_at);
-        *last = Some(Refreshed {
-            spent: refresh_token,
-            tokens: renewed,
-        });
-        Ok(token)
+        Ok((renewed, AccessToken::new(response.access_token, expires_at)))
     }
 
     /// The stored access token, when it can still be used now.

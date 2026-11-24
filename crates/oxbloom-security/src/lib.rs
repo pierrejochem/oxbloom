@@ -161,7 +161,8 @@ pub mod __test_support {
 
     /// A session that no session filter manages, for the doc examples and the tests of code
     /// that reads the session of a request: insert it into the request's extensions. What is
-    /// written to it is kept in memory only.
+    /// written to it is kept in memory only. It is hidden and meant for tests only; an
+    /// application gets its sessions from the `SessionFilter`.
     ///
     /// # Examples
     ///

@@ -771,11 +771,28 @@ async fn concurrent_refreshes_of_two_sessions_each_get_their_own_tokens() {
     .await;
 }
 
+/// Another copy of the tokens of `session`, under a different session id: what a second
+/// request of the same browser holds with the cookie session backend, or a stale copy that a
+/// server store writes back.
+fn copy_of(session: &Session) -> Session {
+    let copy = oxbloom_security::__test_support::session();
+    copy.set_reserved(TOKENS_KEY, &stored(session)).unwrap();
+    assert_ne!(copy.id(), session.id());
+    copy
+}
+
+fn refresh_token_of(session: &Session) -> String {
+    stored(session)["refresh_token"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_cancelled_refresh_does_not_block_the_next_call_or_keep_a_lock() {
+async fn a_caller_dropped_mid_refresh_still_leaves_a_record_that_the_next_request_adopts() {
     bounded(async {
         let s = setup();
-        let (session, _) = s.session_with_tokens(FakeUser::new("alice"), 0).await;
+        let (session, login) = s.session_with_tokens(FakeUser::new("alice"), 0).await;
         s.gate.armed.store(true, Ordering::SeqCst);
         let call = {
             let client = s.client.clone();
@@ -783,17 +800,302 @@ async fn a_cancelled_refresh_does_not_block_the_next_call_or_keep_a_lock() {
             tokio::spawn(async move { client.access_token_for(&req, "idp").await })
         };
         s.gate.entered.notified().await;
-        assert_eq!(s.client.__refresh_locks(), 1);
+        // The handler is dropped (the client disconnected) while the provider call is in
+        // flight; the refresh token is spent at the provider anyway.
         call.abort();
         assert!(call.await.unwrap_err().is_cancelled());
-        assert_eq!(s.client.__refresh_locks(), 0);
         s.gate.armed.store(false, Ordering::SeqCst);
-        s.client
+        s.gate.release.notify_one();
+        while s.client.__rotation_records() < 1 {
+            tokio::task::yield_now().await;
+        }
+        while s.client.__refresh_locks() > 0 {
+            tokio::task::yield_now().await;
+        }
+        // The session still holds the spent refresh token; the next request adopts the
+        // recorded tokens without asking the provider.
+        assert_eq!(refresh_token_of(&session), login.refresh_token);
+        let token = s
+            .client
             .access_token_for(&alice_request(&session), "idp")
             .await
             .unwrap();
+        assert_ne!(token.value.expose(), &login.access_token);
         assert_eq!(s.refresh_requests(), 1);
-        assert_eq!(s.client.__refresh_locks(), 0);
+        assert_ne!(refresh_token_of(&session), login.refresh_token);
+        assert_eq!(
+            stored(&session)["access_token"],
+            token.value.expose().as_str()
+        );
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_requests_with_different_session_ids_and_the_same_refresh_token_refresh_once() {
+    bounded(async {
+        let s = setup();
+        let (first_session, _) = s.session_with_tokens(FakeUser::new("alice"), 0).await;
+        let second_session = copy_of(&first_session);
+        s.gate.armed.store(true, Ordering::SeqCst);
+        let first = {
+            let client = s.client.clone();
+            let req = alice_request(&first_session);
+            tokio::spawn(async move { client.access_token_for(&req, "idp").await })
+        };
+        s.gate.entered.notified().await;
+        let second = {
+            let client = s.client.clone();
+            let req = alice_request(&second_session);
+            tokio::spawn(async move { client.access_token_for(&req, "idp").await })
+        };
+        wait_for_refresh_waiters(&s.client, 1).await;
+        s.gate.armed.store(false, Ordering::SeqCst);
+        s.gate.release.notify_one();
+        let first = first.await.unwrap().unwrap();
+        let second = second.await.unwrap().unwrap();
+        assert_eq!(first.value.expose(), second.value.expose());
+        assert_eq!(s.refresh_requests(), 1);
+        assert_eq!(stored(&first_session), stored(&second_session));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_stale_session_copy_with_a_spent_token_adopts_the_rotated_one() {
+    let s = setup();
+    let (session, login) = s.session_with_tokens(FakeUser::new("alice"), 0).await;
+    let stale = copy_of(&session);
+    let token = s
+        .client
+        .access_token_for(&alice_request(&session), "idp")
+        .await
+        .unwrap();
+    assert_eq!(s.refresh_requests(), 1);
+    // Later, a copy written back with the spent refresh token: no provider call.
+    let adopted = s
+        .client
+        .access_token_for(&alice_request(&stale), "idp")
+        .await
+        .unwrap();
+    assert_eq!(adopted.value.expose(), token.value.expose());
+    assert_eq!(s.refresh_requests(), 1);
+    assert_ne!(refresh_token_of(&stale), login.refresh_token);
+    assert_eq!(stored(&stale), stored(&session));
+}
+
+#[tokio::test]
+async fn invalid_grant_for_a_token_with_a_rotation_record_adopts_instead_of_removing() {
+    let s = setup();
+    s.fake.access_token_lifetime(Some(0));
+    let (driver, _) = s.session_with_tokens(FakeUser::new("alice"), 0).await;
+    let stale = copy_of(&driver);
+    // Five rotations whose access tokens are all due at once: R1 -> R2 -> ... -> R6.
+    let mut last = None;
+    for _ in 0..5 {
+        last = Some(
+            s.client
+                .access_token_for(&alice_request(&driver), "idp")
+                .await
+                .unwrap(),
+        );
+    }
+    assert_eq!(s.refresh_requests(), 5);
+    assert_eq!(s.client.__rotation_records(), 5);
+    // The stale copy follows four records, then spends R5 at the provider, which refuses it
+    // as spent; the record of R5 turns the refusal into an adoption of the newest tokens.
+    let adopted = s
+        .client
+        .access_token_for(&alice_request(&stale), "idp")
+        .await
+        .unwrap();
+    assert_eq!(s.refresh_requests(), 6);
+    assert_eq!(
+        s.fake
+            .token_requests()
+            .last()
+            .unwrap()
+            .field("refresh_token"),
+        Some(s.fake.token_requests()[5].field("refresh_token").unwrap())
+    );
+    assert_eq!(adopted.value.expose(), last.unwrap().value.expose());
+    assert_eq!(stored(&stale), stored(&driver));
+}
+
+#[tokio::test]
+async fn invalid_grant_for_a_token_without_a_record_removes_the_tokens() {
+    let s = setup();
+    let (session, _) = s.session_with_tokens(FakeUser::new("alice"), 0).await;
+    let mut value = stored(&session);
+    value["refresh_token"] = json!("revoked-at-the-provider");
+    session.set_reserved(TOKENS_KEY, &value).unwrap();
+    assert_eq!(
+        s.client
+            .access_token_for(&alice_request(&session), "idp")
+            .await
+            .unwrap_err(),
+        TokenError::ReauthenticationRequired
+    );
+    assert_eq!(stored(&session), Value::Null);
+    assert_eq!(s.client.__rotation_records(), 0);
+}
+
+#[tokio::test]
+async fn a_rotation_record_expires_after_ten_minutes() {
+    let s = setup();
+    let (session, _) = s.session_with_tokens(FakeUser::new("alice"), 0).await;
+    let stale = copy_of(&session);
+    s.client
+        .access_token_for(&alice_request(&session), "idp")
+        .await
+        .unwrap();
+    s.clock.advance(Duration::from_secs(599));
+    assert_eq!(s.client.__rotation_records(), 1);
+    s.clock.advance(Duration::from_secs(1));
+    assert_eq!(s.client.__rotation_records(), 0);
+    // The very old spent token now goes to the provider, which refuses it.
+    assert_eq!(
+        s.client
+            .access_token_for(&alice_request(&stale), "idp")
+            .await
+            .unwrap_err(),
+        TokenError::ReauthenticationRequired
+    );
+    assert_eq!(s.refresh_requests(), 2);
+    assert_eq!(stored(&stale), Value::Null);
+}
+
+#[tokio::test]
+async fn the_rotation_record_keeps_at_most_256_entries() {
+    let s = setup();
+    let mut sessions = Vec::new();
+    for i in 0..257 {
+        let (session, _) = s
+            .session_with_tokens(FakeUser::new(&format!("user-{i}")), 0)
+            .await;
+        sessions.push((copy_of(&session), i));
+        let req = request(
+            Some(&session),
+            Some(oauth2_authentication(&format!("user-{i}"), "idp")),
+        );
+        s.client.access_token_for(&req, "idp").await.unwrap();
+    }
+    assert_eq!(s.refresh_requests(), 257);
+    assert_eq!(s.client.__rotation_records(), 256);
+    // The least recently used record, the first one, is gone; the last one is kept.
+    let (newest, i) = &sessions[256];
+    let req = request(
+        Some(newest),
+        Some(oauth2_authentication(&format!("user-{i}"), "idp")),
+    );
+    s.client.access_token_for(&req, "idp").await.unwrap();
+    assert_eq!(s.refresh_requests(), 257);
+    let (oldest, i) = &sessions[0];
+    let req = request(
+        Some(oldest),
+        Some(oauth2_authentication(&format!("user-{i}"), "idp")),
+    );
+    assert_eq!(
+        s.client.access_token_for(&req, "idp").await.unwrap_err(),
+        TokenError::ReauthenticationRequired
+    );
+    assert_eq!(s.refresh_requests(), 258);
+}
+
+#[tokio::test]
+async fn a_chain_of_two_rotations_is_followed() {
+    let s = setup();
+    s.fake.access_token_lifetime(Some(100));
+    let (session, _) = s.session_with_tokens(FakeUser::new("alice"), 0).await;
+    let stale = copy_of(&session);
+    s.client
+        .access_token_for(&alice_request(&session), "idp")
+        .await
+        .unwrap();
+    s.clock.advance(Duration::from_secs(70));
+    let second = s
+        .client
+        .access_token_for(&alice_request(&session), "idp")
+        .await
+        .unwrap();
+    assert_eq!(s.refresh_requests(), 2);
+    // The stale copy holds R1: R1 -> T1 (due) -> R2 -> T2 (usable).
+    let adopted = s
+        .client
+        .access_token_for(&alice_request(&stale), "idp")
+        .await
+        .unwrap();
+    assert_eq!(adopted.value.expose(), second.value.expose());
+    assert_eq!(s.refresh_requests(), 2);
+    assert_eq!(stored(&stale), stored(&session));
+}
+
+#[tokio::test]
+async fn the_records_of_one_registration_do_not_serve_another() {
+    let s = setup();
+    let (session, login) = s.session_with_tokens(FakeUser::new("alice"), 0).await;
+    let renewed = s
+        .client
+        .access_token_for(&alice_request(&session), "idp")
+        .await
+        .unwrap();
+    // A session of `other` that holds the same (spent) refresh token string.
+    let other = oxbloom_security::__test_support::session();
+    let mut value = stored(&session);
+    value["refresh_token"] = json!(login.refresh_token);
+    value["expires_at"] = json!(0);
+    other
+        .set_reserved("oxbloom.security.oauth2.tokens.other", &value)
+        .unwrap();
+    let req = request(Some(&other), Some(oauth2_authentication("alice", "other")));
+    let result = s.client.access_token_for(&req, "other").await;
+    assert_eq!(result.unwrap_err(), TokenError::ReauthenticationRequired);
+    // The provider was asked, so the record of `idp` was not used.
+    assert_eq!(s.refresh_requests(), 2);
+    let _ = renewed;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failed_refresh_is_given_to_the_callers_that_waited_for_it() {
+    bounded(async {
+        for (fault, expected) in [
+            (Fault::TokenEndpointStatus(503), TokenError::Invalid),
+            (
+                Fault::TokenEndpointError("invalid_grant"),
+                TokenError::ReauthenticationRequired,
+            ),
+        ] {
+            let s = setup();
+            let (first_session, _) = s.session_with_tokens(FakeUser::new("alice"), 0).await;
+            let second_session = copy_of(&first_session);
+            let before = stored(&first_session);
+            s.fake.misbehave(fault);
+            s.gate.armed.store(true, Ordering::SeqCst);
+            let first = {
+                let client = s.client.clone();
+                let req = alice_request(&first_session);
+                tokio::spawn(async move { client.access_token_for(&req, "idp").await })
+            };
+            s.gate.entered.notified().await;
+            let second = {
+                let client = s.client.clone();
+                let req = alice_request(&second_session);
+                tokio::spawn(async move { client.access_token_for(&req, "idp").await })
+            };
+            wait_for_refresh_waiters(&s.client, 1).await;
+            s.gate.armed.store(false, Ordering::SeqCst);
+            s.gate.release.notify_one();
+            assert_eq!(first.await.unwrap().unwrap_err(), expected);
+            assert_eq!(second.await.unwrap().unwrap_err(), expected);
+            assert_eq!(s.refresh_requests(), 1, "{fault:?}");
+            if expected == TokenError::ReauthenticationRequired {
+                assert_eq!(stored(&first_session), Value::Null);
+                assert_eq!(stored(&second_session), Value::Null);
+            } else {
+                assert_eq!(stored(&first_session), before);
+                assert_eq!(stored(&second_session), before);
+            }
+        }
     })
     .await;
 }
