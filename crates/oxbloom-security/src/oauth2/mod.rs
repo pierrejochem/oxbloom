@@ -35,9 +35,12 @@ pub use user::{UserInfo, authentication_from};
 /// The largest provider answer read: 1 MiB, as for a JWKS.
 pub(crate) const MAX_BODY_BYTES: usize = 1_048_576;
 
-/// The timeout of every provider call: discovery, the key set, the token exchange and the user
-/// info. It is set on each request, so it caps the timeout of the shared `HttpClient` bean
-/// (`http.client.timeout`) for these calls.
+/// The timeout of the provider calls: discovery, the key set, the token exchange and the user
+/// info. For discovery, the token exchange and the user info it is set on each request and
+/// replaces the timeout of the shared `HttpClient` bean (`http.client.timeout`), so a shorter
+/// client timeout does not apply to them. The key set fetch is bounded by the shorter of the
+/// client timeout and this constant. The limit is per attempt: a client that retries
+/// idempotent requests (`http.client.retry.max-attempts` above 1) can take longer in total.
 pub(crate) const PROVIDER_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Compares two secrets (a nonce, a state) in constant time with respect to their content.
