@@ -929,3 +929,110 @@ impl fmt::Debug for OAuth2Client {
             .finish_non_exhaustive()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::oauth2::ProviderConfig;
+    use async_trait::async_trait;
+    use oxbloom_http_client::{HttpClientError, Request, Response};
+
+    /// A token endpoint that refuses every request with `invalid_grant`, and counts them.
+    #[derive(Default)]
+    struct Refuses(std::sync::atomic::AtomicUsize);
+
+    #[async_trait]
+    impl HttpClient for Refuses {
+        async fn execute(&self, _request: Request) -> Result<Response, HttpClientError> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let mut headers = http::HeaderMap::new();
+            headers.insert(
+                http::header::CONTENT_TYPE,
+                http::HeaderValue::from_static("application/json"),
+            );
+            Ok(Response::new(
+                http::StatusCode::BAD_REQUEST,
+                headers,
+                br#"{"error":"invalid_grant"}"#.to_vec(),
+            ))
+        }
+    }
+
+    fn client(http: Arc<Refuses>) -> OAuth2Client {
+        let provider = ProviderConfig {
+            authorization_uri: Some("https://idp.example.test/authorize".into()),
+            token_uri: Some("https://idp.example.test/token".into()),
+            user_info_uri: Some("https://idp.example.test/userinfo".into()),
+            user_name_attribute: Some("sub".into()),
+            ..ProviderConfig::default()
+        };
+        let settings = OAuth2Settings {
+            registrations: vec![ClientRegistration {
+                id: "idp".into(),
+                client_id: "app".into(),
+                client_secret: Some(Secret::new("app-secret".into())),
+                scopes: Vec::new(),
+                redirect_uri: String::new(),
+                client_authentication: ClientAuthentication::Basic,
+                provider: "idp".into(),
+            }],
+            providers: [("idp".to_owned(), provider)].into(),
+        };
+        OAuth2Client::new(settings, http)
+    }
+
+    fn tokens(access: &str, refresh: &str) -> StoredTokens {
+        StoredTokens {
+            v: 1,
+            access_token: access.into(),
+            token_type: "Bearer".into(),
+            expires_at: Some(4_102_444_800),
+            refresh_token: Some(refresh.into()),
+            id_token: None,
+            scope: Some("openid".into()),
+        }
+    }
+
+    /// The backstop: an `invalid_grant` for a refresh token whose rotation is recorded adopts
+    /// the recorded tokens instead of asking for a new login.
+    #[tokio::test]
+    async fn invalid_grant_for_a_recorded_rotation_adopts_the_recorded_tokens() {
+        let http = Arc::new(Refuses::default());
+        let client = client(http.clone());
+        let renewed = tokens("renewed-access", "renewed-refresh");
+        client
+            .rotations
+            .remember("idp", "spent-refresh", renewed.clone(), client.clock.now());
+        let (adopted, token) = client
+            .refresh_once(
+                "idp",
+                tokens("old-access", "spent-refresh"),
+                "spent-refresh",
+            )
+            .await
+            .unwrap();
+        assert_eq!(http.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(adopted, renewed);
+        assert_eq!(token.value.expose(), "renewed-access");
+        assert_eq!(client.__rotation_records(), 1);
+    }
+
+    /// A record of a provider that does not rotate (the renewed refresh token is the spent one)
+    /// is no rotation: the refusal is genuine and the record is dropped.
+    #[tokio::test]
+    async fn invalid_grant_for_a_non_rotating_record_requires_a_new_login() {
+        let http = Arc::new(Refuses::default());
+        let client = client(http.clone());
+        client.rotations.remember(
+            "idp",
+            "kept-refresh",
+            tokens("renewed-access", "kept-refresh"),
+            client.clock.now(),
+        );
+        let result = client
+            .refresh_once("idp", tokens("old-access", "kept-refresh"), "kept-refresh")
+            .await;
+        assert_eq!(result.unwrap_err(), TokenError::ReauthenticationRequired);
+        assert_eq!(client.__rotation_records(), 0);
+    }
+}

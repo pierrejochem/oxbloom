@@ -259,6 +259,18 @@ async fn no_secret_or_token_of_the_client_flows_reaches_the_logs() {
         ("client secret", SECRET.to_owned()),
         ("client credentials token", client_token),
     ];
+    // The Basic header form of the secret, `base64("<client-id>:<secret>")`, exactly as the
+    // client sent it for both registrations.
+    let mut basics: Vec<String> = fake
+        .token_requests()
+        .iter()
+        .filter_map(|r| r.authorization())
+        .filter_map(|a| a.strip_prefix("Basic ").map(str::to_owned))
+        .collect();
+    basics.sort();
+    basics.dedup();
+    assert_eq!(basics.len(), 2, "one Basic credential per registration");
+    hidden.extend(basics.into_iter().map(|b| ("Basic credentials", b)));
     hidden.extend(login);
     hidden.extend(refreshed);
     for (name, value) in &hidden {

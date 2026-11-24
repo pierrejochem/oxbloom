@@ -12,14 +12,16 @@ use std::time::{Duration, SystemTime};
 use http::Method;
 use oxbloom_boot::SecurityCustomizer;
 use oxbloom_boot::{
-    HttpClientAutoConfiguration, OAuth2ClientAutoConfiguration, StartupPhase, auto_configurations,
+    AutoConfiguration, ConfigRef, HttpClientAutoConfiguration, OAuth2ClientAutoConfiguration,
+    SecurityAutoConfiguration, StartupPhase, auto_configurations,
 };
 use oxbloom_config::ConfigError;
 use oxbloom_di::{ContainerBuilder, DiError};
 use oxbloom_http_client::{HttpClient, Request as OutRequest};
 use oxbloom_security::{
     Argon2PasswordEncoder, BearerRetryClient, DelegatingPasswordEncoder, HttpSecurity,
-    OAuth2Client, OAuth2Settings, PasswordEncoder, RequestSessionExt, TokenError,
+    OAuth2Client, OAuth2Settings, PasswordEncoder, RequestSessionExt, SecurityFilterChain,
+    TokenError,
 };
 use oxbloom_test::{
     ContextRunner, FakeProvider, FakeUser, ManualClock, MockHttpClient, MockResponse, RunningApp,
@@ -34,6 +36,7 @@ const SECRET: &str = "app-secret-for-the-boot-oauth2-client-tests";
 const COOKIE: &str = "OXBLOOM_SESSION";
 const TOKENS_KEY: &str = "oxbloom.security.oauth2.tokens.idp";
 const DOWNSTREAM: &str = "https://orders.example.test/orders";
+const PLANTED_ACCESS_TOKEN: &str = "planted-access-token";
 
 /// Form login, the session table, the base URL and two registrations of the provider `idp`
 /// (OpenID Connect, through discovery): `idp` for the login and `billing` for the client
@@ -75,7 +78,8 @@ fn start_time() -> SystemTime {
 /// - `/downstream`: calls the downstream service through a `BearerRetryClient` with the client
 ///   credentials of `billing` and answers with the downstream body;
 /// - `/user-token`: the access token of the logged-in user for `idp`, or the error text;
-/// - `/tokens`: the tokens that the session holds for `idp`.
+/// - `/tokens`: the tokens that the session holds for `idp`;
+/// - `/plant-tokens`: writes a valid token record of `idp` into the session.
 struct Routes {
     oauth2: Arc<OAuth2Client>,
     downstream: Arc<MockHttpClient>,
@@ -111,7 +115,27 @@ impl Controller for Routes {
                 .unwrap_or(Value::Null)
                 .to_string()
         });
-        vec![downstream, user_token, tokens]
+        // Writes a valid token record of `idp` into the session of the request, whoever is
+        // logged in: the binding check, not the absence of tokens, must then refuse them.
+        let plant = Route::new(
+            HttpMethod::Get,
+            "/plant-tokens",
+            |req: Request| async move {
+                let session = req.session().expect("a session");
+                session
+                .set_reserved(
+                    TOKENS_KEY,
+                    &serde_json::json!({
+                        "v": 1, "access_token": PLANTED_ACCESS_TOKEN, "token_type": "Bearer",
+                        "expires_at": 4_102_444_800u64, "refresh_token": "planted-refresh-token",
+                        "id_token": null, "scope": "openid email",
+                    }),
+                )
+                .expect("the reserved key is writable");
+                "planted"
+            },
+        );
+        vec![downstream, user_token, tokens, plant]
     }
 }
 
@@ -244,6 +268,61 @@ async fn the_application_bean_wins() {
             );
         })
         .await;
+}
+
+/// One client-credentials registration, without form login, a session or a base URL.
+fn client_only() -> String {
+    format!(
+        "[security.oauth2.client.registration.billing]\nclient-id = \"orders-service\"\n\
+         client-secret = \"{SECRET}\"\nprovider = \"idp\"\n\
+         [security.oauth2.client.provider.idp]\nissuer-uri = \"{ISSUER}\"\n"
+    )
+}
+
+#[tokio::test]
+async fn a_client_only_application_with_its_own_chain_boots_with_the_client() {
+    ContextRunner::new()
+        .config_str(client_only())
+        .auto_configurations(auto_configurations())
+        .configure(|b| {
+            b.try_bean(|| -> Result<SecurityFilterChain, DiError> {
+                Ok(HttpSecurity::new()
+                    .authorize(|a| a.any_request().authenticated())
+                    .build()?)
+            })
+        })
+        .run(|context| {
+            let client = context.get::<OAuth2Client>().unwrap();
+            assert!(
+                format!("{client:?}").contains("registrations: 1"),
+                "{client:?}"
+            );
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn a_client_only_application_without_security_auto_configuration_boots_with_the_client() {
+    ContextRunner::new()
+        .config_str(client_only())
+        .auto_configurations(auto_configurations())
+        .exclude::<SecurityAutoConfiguration>()
+        .run(|context| {
+            assert!(context.contains::<OAuth2Client>());
+            assert!(!context.contains::<SecurityFilterChain>());
+        })
+        .await;
+}
+
+#[test]
+fn the_client_runs_after_the_http_client_and_security() {
+    assert_eq!(
+        OAuth2ClientAutoConfiguration::after(),
+        [
+            ConfigRef::of::<HttpClientAutoConfiguration>(),
+            ConfigRef::of::<SecurityAutoConfiguration>(),
+        ]
+    );
 }
 
 // ---- Tokens through the bean ---------------------------------------------------------------
@@ -491,7 +570,7 @@ async fn a_logged_in_user_token_is_refreshed_through_the_bean() {
 const PASSWORD: &str = "wonderland-for-the-oauth2-client-test";
 
 #[tokio::test]
-async fn a_password_user_cannot_get_an_oauth2_user_token() {
+async fn a_password_user_cannot_get_the_oauth2_tokens_in_the_session() {
     let fake = FakeProvider::new(ISSUER);
     fake.expect_client_secret(SECRET);
     let hash = DelegatingPasswordEncoder::argon2(Argon2PasswordEncoder::new(8, 1, 1).unwrap())
@@ -524,6 +603,12 @@ async fn a_password_user_cannot_get_an_oauth2_user_token() {
         .await;
     assert_eq!(res.status(), 302, "{}", res.text());
     assert_ne!(res.header("location"), Some("/login?error"));
+    // The password login removed the tokens of the OAuth2 login. Put a usable token record of
+    // `idp` back into the session of the password user: only the binding check stands between
+    // that user and the tokens now.
+    assert_eq!(b.tokens().await, Value::Null);
+    assert_eq!(b.text("/plant-tokens").await, "planted");
+    assert_eq!(b.tokens().await["access_token"], PLANTED_ACCESS_TOKEN);
     let answer = b.text("/user-token").await;
     assert_eq!(
         answer,

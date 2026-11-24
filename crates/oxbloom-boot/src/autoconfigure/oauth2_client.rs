@@ -10,7 +10,7 @@ use oxbloom_http_client::HttpClient;
 use oxbloom_security::OAuth2Client;
 
 use super::oauth2::{OAuth2LoginError, OAuth2Properties, REGISTRATIONS, oauth2_properties};
-use crate::autoconfig::AutoConfiguration;
+use crate::autoconfig::{AutoConfiguration, ConfigRef};
 
 /// Registers one `OAuth2Client` bean (fetched as `Arc<OAuth2Client>`) for the registrations
 /// and providers of `security.oauth2.client`, unless the application registers an
@@ -32,8 +32,13 @@ use crate::autoconfig::AutoConfiguration;
 ///
 /// It reads no keys of its own, so it adds no property metadata: the `security.oauth2.*` keys
 /// are listed by `SecurityAutoConfiguration`. A bad registration fails the startup with a
-/// `ConfigError` that names the full key and never holds the value or the client secret. The
-/// client needs neither form login nor `security.oauth2.base-url`.
+/// `ConfigError` that names the full key and never holds the value or the client secret. It
+/// runs after `HttpClientAutoConfiguration` and `SecurityAutoConfiguration`.
+///
+/// The client itself needs neither form login nor `security.oauth2.base-url`. But with
+/// `SecurityAutoConfiguration` in the list (as in `auto_configurations()`), every registration
+/// also turns on OAuth2 login, which needs both: an application that only uses the client
+/// registers its own `SecurityFilterChain` bean or excludes `SecurityAutoConfiguration`.
 ///
 /// # Examples
 ///
@@ -100,6 +105,17 @@ impl AutoConfiguration for OAuth2ClientAutoConfiguration {
     /// The table `security.oauth2.client.registration` is present.
     fn conditions() -> Conditions {
         Conditions::new().on_property(REGISTRATIONS)
+    }
+
+    /// `HttpClientAutoConfiguration` and `SecurityAutoConfiguration`, whose beans (the client
+    /// and the shared parsed section) it reads. The beans are resolved when the client is
+    /// created, so the order states the dependency rather than enabling it; an excluded one
+    /// is ignored.
+    fn after() -> Vec<ConfigRef> {
+        vec![
+            ConfigRef::of::<super::HttpClientAutoConfiguration>(),
+            ConfigRef::of::<super::SecurityAutoConfiguration>(),
+        ]
     }
 }
 
