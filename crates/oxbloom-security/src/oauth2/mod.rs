@@ -4,9 +4,12 @@
 //! `security.oauth2.client.registration.<id>.*` and `security.oauth2.client.provider.<id>.*`,
 //! and the steps of a login: provider metadata, the token exchange, id token validation, the
 //! user info and the mapping to an `Authentication`, and the login endpoints of the security
-//! chain.
+//! chain. The client part gets access tokens: the application's own (client credentials), the
+//! logged-in user's (from the session, with refresh), and the interceptors that add them to
+//! outgoing requests.
 
 mod authorization;
+mod bearer;
 mod cache;
 mod client;
 mod error;
@@ -15,12 +18,14 @@ mod login;
 mod metadata;
 mod pending;
 mod pkce;
+mod refresh;
 mod registration;
 mod settings;
 mod stored;
 mod token;
 mod user;
 
+pub use bearer::{BearerRetryClient, ClientCredentialsInterceptor, UserTokenInterceptor};
 pub use client::{AccessToken, OAuth2Client, TokenError};
 pub use error::OAuth2Error;
 pub use id_token::{IdTokenClaims, IdTokenValidator};

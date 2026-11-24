@@ -1,4 +1,5 @@
-//! The OAuth2 client: tokens for the application itself, with the client credentials grant.
+//! The OAuth2 client: tokens for the application itself, with the client credentials grant,
+//! and the logged-in user's tokens from the session, refreshed with the refresh token grant.
 
 use std::fmt;
 use std::sync::Arc;
@@ -7,10 +8,16 @@ use std::time::{Duration, SystemTime};
 use oxbloom_config::Secret;
 use oxbloom_core::{Clock, SystemClock};
 use oxbloom_http_client::HttpClient;
+use serde_json::Value;
 
 use super::cache::TokenCache;
+use super::refresh::{RefreshLocks, Refreshed};
+use super::stored::StoredTokens;
 use super::{ClientAuthentication, ClientRegistration, MetadataCache, OAuth2Error, OAuth2Settings};
-use super::{TokenEndpoint, TokenResponse};
+use super::{OAUTH2_PRINCIPAL_KEY, OAUTH2_REGISTRATION_KEY, constant_time_eq};
+use super::{ProviderMetadata, TokenEndpoint, TokenResponse};
+use crate::form_login::epoch_seconds;
+use crate::{Authentication, RequestSecurityExt, RequestSessionExt, Session};
 
 /// How long a token without `expires_in` is used.
 const DEFAULT_VALIDITY: Duration = Duration::from_secs(60);
@@ -160,9 +167,42 @@ fn token_error(error: OAuth2Error) -> TokenError {
     }
 }
 
-/// An OAuth2 client for the application itself: it gets access tokens at the providers of
-/// the registrations in [`OAuth2Settings`], with the client credentials grant, and keeps them
-/// in a cache.
+/// Whether `authentication` is the OAuth2 login of `registration_id`: its details hold the
+/// boolean `oauth2.principal = true` and `oauth2.registration = registration_id`, which only
+/// the OAuth2 login sets (provider attributes with those names are dropped at the login).
+fn is_oauth2_login_of(authentication: Option<&Authentication>, registration_id: &str) -> bool {
+    authentication.is_some_and(|authentication| {
+        let details = authentication.details();
+        details.get(OAUTH2_PRINCIPAL_KEY) == Some(&Value::Bool(true))
+            && details.get(OAUTH2_REGISTRATION_KEY).and_then(Value::as_str) == Some(registration_id)
+    })
+}
+
+/// The expiry of a stored access token, when the login or the refresh recorded one.
+fn stored_expiry(stored: &StoredTokens) -> Option<SystemTime> {
+    stored
+        .expires_at
+        .and_then(|secs| SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(secs)))
+}
+
+/// The stored access token as an `AccessToken`. A token without an expiry is reported with
+/// one 60 seconds from `now`.
+fn stored_access_token(stored: &StoredTokens, now: SystemTime) -> AccessToken {
+    let expires_at = stored_expiry(stored)
+        .or_else(|| now.checked_add(DEFAULT_VALIDITY))
+        .unwrap_or(now);
+    AccessToken::new(Secret::new(stored.access_token.clone()), expires_at)
+}
+
+/// An OAuth2 client: it gets access tokens at the providers of the registrations in
+/// [`OAuth2Settings`], for the application itself with the client credentials grant (kept in
+/// a cache), and for the logged-in user of a request from the tokens that the OAuth2 login
+/// stored in the session, refreshed with the refresh token grant (see
+/// [`access_token_for`](Self::access_token_for)). The interceptors
+/// [`ClientCredentialsInterceptor`](crate::ClientCredentialsInterceptor),
+/// [`BearerRetryClient`](crate::BearerRetryClient) and
+/// [`UserTokenInterceptor`](crate::UserTokenInterceptor) add those tokens to outgoing
+/// requests.
 ///
 /// Cloning is cheap and the clones share one cache, so one client can be built at startup and
 /// handed to every component that calls a protected service.
@@ -218,6 +258,7 @@ pub struct OAuth2Client {
     skew: Duration,
     metadata: Arc<MetadataCache>,
     cache: Arc<TokenCache>,
+    refresh_locks: Arc<RefreshLocks>,
 }
 
 impl OAuth2Client {
@@ -245,6 +286,7 @@ impl OAuth2Client {
             skew: DEFAULT_SKEW,
             metadata: Arc::new(MetadataCache::new()),
             cache: Arc::new(TokenCache::default()),
+            refresh_locks: Arc::new(RefreshLocks::default()),
         }
     }
 
@@ -339,12 +381,7 @@ impl OAuth2Client {
         &self,
         registration_id: &str,
     ) -> Result<AccessToken, TokenError> {
-        let registration = self
-            .settings
-            .registrations
-            .iter()
-            .find(|registration| registration.id == registration_id)
-            .ok_or(TokenError::UnknownRegistration)?;
+        let registration = self.registration(registration_id)?;
         // Refused before anything is cached or requested.
         if registration.client_authentication == ClientAuthentication::None {
             return Err(TokenError::Invalid);
@@ -442,18 +479,282 @@ impl OAuth2Client {
         self.cache.waiting(registration_id)
     }
 
+    /// Returns the access token of the user of `request` for the registration
+    /// `registration_id`: the token that the OAuth2 login stored in the session, refreshed with
+    /// the refresh token grant when it is due.
+    ///
+    /// The call is request-based because sessions are: it reads the session and the
+    /// authentication that the session filter and the security chain put into `request`.
+    ///
+    /// - The current authentication must be the OAuth2 login of this registration: its
+    ///   `details` hold `oauth2.principal = true` and `oauth2.registration = registration_id`.
+    ///   Otherwise, for example after a later password login in the same session or for a
+    ///   user who logged in with another registration, the call refuses without looking at the
+    ///   session, so tokens never reach a principal they were not issued to.
+    /// - The stored access token is returned while its expiry minus the skew (30 seconds by
+    ///   default, see [`skew`](Self::skew)) is in the future. A token stored without an expiry,
+    ///   because the provider sent no `expires_in` at the login, is used as it is and reported
+    ///   with an expiry 60 seconds from now.
+    /// - A due token is refreshed: `grant_type=refresh_token` with the stored refresh token and
+    ///   no `scope` (the provider grants the scope of the login), with the client
+    ///   authentication of the registration (a public client sends its `client_id` only) and a
+    ///   10 second timeout. The new tokens are written to the session: a new refresh token
+    ///   replaces the old one, an answer without one keeps the old one, and the id token and
+    ///   the scope of the login are kept. A new token without `expires_in` counts as valid for
+    ///   60 seconds; one that is already due when it arrives (`expires_in = 0`) is returned once,
+    ///   and the next call refreshes again, so one call makes at most one request.
+    /// - Refreshes of one session and registration are serialized. A call that waited while
+    ///   another call of the same session refreshed does not refresh again: it takes the new
+    ///   tokens, also when it runs in another request with its own copy of the session. So a
+    ///   provider that rotates refresh tokens never sees one used twice.
+    ///
+    /// The session filter writes the session back at the end of the request, so the refreshed
+    /// tokens are stored when the request that refreshed them ends.
+    ///
+    /// # Errors
+    ///
+    /// [`TokenError::ReauthenticationRequired`] when the current authentication is not the
+    /// OAuth2 login of the registration, when the request has no session, when the session
+    /// holds no tokens of the registration, when a due token has no refresh token (the
+    /// useless token is removed), or when the provider answers the refresh with
+    /// `invalid_grant` (the tokens are removed from the session): the user has to log in
+    /// again. [`TokenError::UnknownRegistration`] for an id that is not configured. Any other
+    /// failure of the refresh leaves the stored tokens as they are and is reported as for
+    /// [`client_credentials`](Self::client_credentials): [`TokenError::Provider`],
+    /// [`TokenError::Http`], [`TokenError::Discovery`] or [`TokenError::Invalid`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use oxbloom_config::Secret;
+    /// use oxbloom_security::{
+    ///     Authentication, ClientAuthentication, ClientRegistration, OAuth2Client, OAuth2Settings,
+    ///     SecurityContext, TokenError,
+    /// };
+    /// use oxbloom_test::MockHttpClient;
+    /// use oxbloom_web::{HttpMethod, Request};
+    ///
+    /// // In a handler: the `Authorization` value for a call on behalf of the logged-in user.
+    /// async fn authorization(client: &OAuth2Client, req: &Request) -> Result<String, TokenError> {
+    ///     let token = client.access_token_for(req, "idp").await?;
+    ///     Ok(format!("Bearer {}", token.value.expose()))
+    /// }
+    ///
+    /// # tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(async {
+    /// let mut settings = OAuth2Settings::default();
+    /// settings.registrations.push(ClientRegistration {
+    ///     id: "idp".into(),
+    ///     client_id: "app".into(),
+    ///     client_secret: Some(Secret::new("app-secret".into())),
+    ///     scopes: vec!["openid".into()],
+    ///     redirect_uri: "https://app.example.test/login/oauth2/code/idp".into(),
+    ///     client_authentication: ClientAuthentication::Basic,
+    ///     provider: "idp".into(),
+    /// });
+    /// let client = OAuth2Client::new(settings, Arc::new(MockHttpClient::new()));
+    ///
+    /// // A request of a user who logged in with `idp`: in an application the login stored the
+    /// // tokens in the session, and the session filter and the security chain put the session
+    /// // and the authentication into the request. Here they are built by hand.
+    /// let mut req = Request::new(HttpMethod::Get, "/orders");
+    /// # let session = oxbloom_security::__test_support::session();
+    /// # session.set_reserved("oxbloom.security.oauth2.tokens.idp", &serde_json::json!({
+    /// #     "v": 1, "access_token": "the-access-token", "token_type": "Bearer",
+    /// #     "expires_at": 4_102_444_800u64, "refresh_token": "the-refresh-token",
+    /// #     "id_token": null, "scope": "openid",
+    /// # }))?;
+    /// # req.extensions_mut().insert(session);
+    /// let mut details = serde_json::Map::new();
+    /// details.insert("oauth2.registration".into(), "idp".into());
+    /// details.insert("oauth2.principal".into(), true.into());
+    /// req.extensions_mut().insert(SecurityContext::authenticated(
+    ///     Authentication::new("alice", []).with_details(details),
+    /// ));
+    /// assert_eq!(authorization(&client, &req).await?, "Bearer the-access-token");
+    ///
+    /// // A request without that login gets no token.
+    /// let anonymous = Request::new(HttpMethod::Get, "/orders");
+    /// assert_eq!(
+    ///     authorization(&client, &anonymous).await.unwrap_err(),
+    ///     TokenError::ReauthenticationRequired
+    /// );
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub async fn access_token_for(
+        &self,
+        request: &oxbloom_web::Request,
+        registration_id: &str,
+    ) -> Result<AccessToken, TokenError> {
+        let session = request.session();
+        self.user_access_token(session.as_ref(), request.authentication(), registration_id)
+            .await
+    }
+
+    /// The number of calls waiting for the refresh of a user's token: a test hook, not a
+    /// stable API.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn __refresh_waiters(&self) -> usize {
+        self.refresh_locks.waiting()
+    }
+
+    /// The number of refresh lock entries, one per session and registration with a call in
+    /// flight: a test hook, not a stable API.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn __refresh_locks(&self) -> usize {
+        self.refresh_locks.len()
+    }
+
+    /// [`access_token_for`](Self::access_token_for) with the session and the authentication
+    /// taken out of the request already; the user token interceptor calls it.
+    pub(crate) async fn user_access_token(
+        &self,
+        session: Option<&Session>,
+        authentication: Option<&Authentication>,
+        registration_id: &str,
+    ) -> Result<AccessToken, TokenError> {
+        let registration = self.registration(registration_id)?;
+        if !is_oauth2_login_of(authentication, registration_id) {
+            return Err(TokenError::ReauthenticationRequired);
+        }
+        let session = session.ok_or(TokenError::ReauthenticationRequired)?;
+        let stored = StoredTokens::load(session, registration_id)
+            .ok_or(TokenError::ReauthenticationRequired)?;
+        if let Some(token) = self.usable(&stored) {
+            return Ok(token);
+        }
+
+        let entry = self.refresh_locks.entry(session.id(), registration_id);
+        let mut last = entry.lock().await;
+        // Another call with this session handle may have refreshed while this one waited.
+        let stored = StoredTokens::load(session, registration_id)
+            .ok_or(TokenError::ReauthenticationRequired)?;
+        if let Some(token) = self.usable(&stored) {
+            return Ok(token);
+        }
+        let Some(refresh_token) = stored.refresh_token.clone() else {
+            StoredTokens::remove(session, registration_id);
+            return Err(TokenError::ReauthenticationRequired);
+        };
+        // Or a call of another request of this session, with its own copy of the session: the
+        // refresh token this call holds is the one that call spent.
+        if let Some(done) = &*last
+            && constant_time_eq(&done.spent, &refresh_token)
+        {
+            done.tokens
+                .store(session, registration_id)
+                .map_err(|_| TokenError::Invalid)?;
+            return Ok(stored_access_token(&done.tokens, self.clock.now()));
+        }
+
+        let response = match self.fetch_refresh(registration, &refresh_token).await {
+            Ok(response) => response,
+            Err(TokenError::Provider("invalid_grant")) => {
+                StoredTokens::remove(session, registration_id);
+                tracing::debug!(
+                    target: "oxbloom::security",
+                    registration = %registration_id,
+                    "the OAuth2 provider refused the refresh token; the user has to log in again"
+                );
+                return Err(TokenError::ReauthenticationRequired);
+            }
+            Err(error) => return Err(error),
+        };
+        let now = self.clock.now();
+        let expires_at = response
+            .expires_at(now)
+            .or_else(|| now.checked_add(DEFAULT_VALIDITY))
+            .unwrap_or(now);
+        let renewed = StoredTokens {
+            access_token: response.access_token.expose().clone(),
+            token_type: response.token_type.clone(),
+            expires_at: Some(epoch_seconds(expires_at)),
+            refresh_token: response
+                .refresh_token
+                .as_ref()
+                .map(|token| token.expose().clone())
+                .or(stored.refresh_token),
+            ..stored
+        };
+        renewed
+            .store(session, registration_id)
+            .map_err(|_| TokenError::Invalid)?;
+        tracing::debug!(
+            target: "oxbloom::security",
+            registration = %registration_id,
+            "the OAuth2 access token of the user was refreshed"
+        );
+        let token = AccessToken::new(response.access_token, expires_at);
+        *last = Some(Refreshed {
+            spent: refresh_token,
+            tokens: renewed,
+        });
+        Ok(token)
+    }
+
+    /// The stored access token, when it can still be used now.
+    fn usable(&self, stored: &StoredTokens) -> Option<AccessToken> {
+        let now = self.clock.now();
+        let fresh = match stored.expires_at {
+            None => true,
+            Some(_) => stored_expiry(stored)
+                .and_then(|expires_at| expires_at.checked_sub(self.skew))
+                .is_some_and(|limit| now < limit),
+        };
+        fresh.then(|| stored_access_token(stored, now))
+    }
+
+    /// One refresh request: resolves the provider metadata, then asks the token endpoint.
+    async fn fetch_refresh(
+        &self,
+        registration: &ClientRegistration,
+        refresh_token: &str,
+    ) -> Result<TokenResponse, TokenError> {
+        let metadata = self.metadata_of(registration).await?;
+        self.endpoint
+            .refresh(registration, &metadata, refresh_token)
+            .await
+            .map_err(token_error)
+    }
+
     /// One token request: resolves the provider metadata, then asks the token endpoint.
     async fn fetch_client_credentials(
         &self,
         registration: &ClientRegistration,
     ) -> Result<AccessToken, TokenError> {
+        let metadata = self.metadata_of(registration).await?;
+        let tokens = self
+            .endpoint
+            .client_credentials(registration, &metadata)
+            .await
+            .map_err(token_error)?;
+        Ok(self.access_token(tokens))
+    }
+
+    /// The registration with this id.
+    fn registration(&self, registration_id: &str) -> Result<&ClientRegistration, TokenError> {
+        self.settings
+            .registrations
+            .iter()
+            .find(|registration| registration.id == registration_id)
+            .ok_or(TokenError::UnknownRegistration)
+    }
+
+    /// The provider metadata of `registration`, from the metadata cache of the client.
+    async fn metadata_of(
+        &self,
+        registration: &ClientRegistration,
+    ) -> Result<Arc<ProviderMetadata>, TokenError> {
         let provider = self
             .settings
             .providers
             .get(&registration.provider)
             .ok_or(TokenError::Invalid)?;
-        let metadata = self
-            .metadata
+        self.metadata
             .get_or_resolve(
                 &registration.provider,
                 provider,
@@ -461,13 +762,7 @@ impl OAuth2Client {
                 self.clock.now(),
             )
             .await
-            .map_err(token_error)?;
-        let tokens = self
-            .endpoint
-            .client_credentials(registration, &metadata)
-            .await
-            .map_err(token_error)?;
-        Ok(self.access_token(tokens))
+            .map_err(token_error)
     }
 
     /// The access token of a token response, with the expiry counted from now.

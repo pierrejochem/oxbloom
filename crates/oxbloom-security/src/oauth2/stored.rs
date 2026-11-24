@@ -83,8 +83,6 @@ impl StoredTokens {
 
     /// The tokens of `registration`. A value that does not deserialize or has another version
     /// is removed and gives `None`.
-    // Read by the OAuth2 client for the user's access token.
-    #[allow(dead_code)]
     pub(crate) fn load(session: &Session, registration: &str) -> Option<Self> {
         let key = key_for(registration);
         match session.get::<Self>(&key) {
@@ -98,8 +96,6 @@ impl StoredTokens {
     }
 
     /// Removes the tokens of `registration`.
-    // Used by the OAuth2 client when a refresh fails.
-    #[allow(dead_code)]
     pub(crate) fn remove(session: &Session, registration: &str) {
         session.remove_reserved(&key_for(registration));
     }

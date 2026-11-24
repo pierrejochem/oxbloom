@@ -277,6 +277,25 @@ impl TokenEndpoint {
             .await
     }
 
+    /// Requests a new access token with the `refresh_token` grant (RFC 6749 section 6):
+    /// `grant_type=refresh_token` and the refresh token, with no `scope` field, so the provider
+    /// grants the scope of the login, and with the client authentication of the registration.
+    /// A public client (`client-authentication = none`) sends its `client_id` only, which RFC
+    /// 6749 allows for the refresh of a token that was issued to it.
+    pub(crate) async fn refresh(
+        &self,
+        registration: &ClientRegistration,
+        metadata: &ProviderMetadata,
+        refresh_token: &str,
+    ) -> Result<TokenResponse, OAuth2Error> {
+        let form = vec![
+            ("grant_type".to_owned(), "refresh_token".to_owned()),
+            ("refresh_token".to_owned(), refresh_token.to_owned()),
+        ];
+        self.request(registration, &metadata.token_endpoint, form)
+            .await
+    }
+
     /// Sends a token request with `form` plus the client authentication, and reads the answer.
     async fn request(
         &self,

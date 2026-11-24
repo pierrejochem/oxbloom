@@ -144,8 +144,9 @@ pub use matcher::RequestMatcher;
 pub use method_security::{__private, AccessDenied, spawn};
 #[cfg(feature = "oauth2")]
 pub use oauth2::{
-    AccessToken, ClientAuthentication, ClientRegistration, OAuth2Client, OAuth2Login,
-    OAuth2Settings, ProviderConfig, TokenError,
+    AccessToken, BearerRetryClient, ClientAuthentication, ClientCredentialsInterceptor,
+    ClientRegistration, OAuth2Client, OAuth2Login, OAuth2Settings, ProviderConfig, TokenError,
+    UserTokenInterceptor,
 };
 
 /// The steps of an OAuth2 login, reachable for the integration tests and the doc examples
@@ -157,6 +158,27 @@ pub mod __test_support {
         IdTokenClaims, IdTokenValidator, MetadataCache, OAuth2Error, ProviderMetadata,
         TokenEndpoint, TokenResponse, UserInfo, authentication_from,
     };
+
+    /// A session that no session filter manages, for the doc examples and the tests of code
+    /// that reads the session of a request: insert it into the request's extensions. What is
+    /// written to it is kept in memory only.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_security::RequestSessionExt;
+    /// use oxbloom_web::{HttpMethod, Request};
+    ///
+    /// let mut req = Request::new(HttpMethod::Get, "/");
+    /// req.extensions_mut().insert(oxbloom_security::__test_support::session());
+    /// assert!(req.session().is_some());
+    /// ```
+    #[must_use]
+    pub fn session() -> crate::Session {
+        crate::Session::from_state(crate::session::handle::SessionState::fresh(
+            std::time::SystemTime::now(),
+        ))
+    }
 }
 pub use oxbloom_macros::{method_security, post_authorize, post_filter, pre_authorize, pre_filter};
 pub use password::{
