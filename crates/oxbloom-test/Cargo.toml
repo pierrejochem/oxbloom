@@ -27,14 +27,22 @@ logging = ["oxbloom-boot/logging"]
 # `MockHttpClient` and `MockResponse`; `oxbloom-boot/http-client` lets `ContextRunner` and `TestApp::full`
 # run `HttpClientAutoConfiguration`.
 http-client = ["oxbloom-boot/http-client", "dep:oxbloom-http-client", "dep:async-trait", "dep:http", "dep:serde", "dep:serde_json"]
+# `FakeProvider`: an OpenID Connect provider over `MockHttpClient` that signs id tokens with an
+# ES256 key generated at construction (`aws-lc-rs`, no `ring`).
+oauth2 = ["http-client", "dep:jsonwebtoken", "dep:aws-lc-rs", "dep:base64"]
 
 [dependencies]
+# The ES256 key pair of `FakeProvider` (feature `oauth2`); `aws-lc-sys` only, no `ring`.
+aws-lc-rs = { version = "1.18.2", default-features = false, features = ["aws-lc-sys"], optional = true }
 async-trait = { version = "0.1.92", optional = true }
+base64 = { version = "0.23.1", optional = true }
 bytes = { version = "1.12.1", optional = true }
 http = { version = "1.5.0", optional = true }
 http-body-util = { version = "0.1.5", optional = true }
 hyper = { version = "1.12.0", features = ["client", "http1"], optional = true }
 hyper-util = { version = "0.1.21", features = ["tokio"], optional = true }
+# Signs the id tokens of `FakeProvider` (feature `oauth2`).
+jsonwebtoken = { version = "12.0.0", features = ["rust_crypto"], optional = true }
 oxbloom-boot = { version = "0.1.0", path = "../oxbloom-boot" }
 oxbloom-config = { version = "0.1.0", path = "../oxbloom-config" }
 oxbloom-core = { version = "0.1.0", path = "../oxbloom-core" }

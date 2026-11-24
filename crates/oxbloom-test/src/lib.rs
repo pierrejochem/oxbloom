@@ -14,8 +14,10 @@
 //! adds `TestClient::connect_tls` and `RunningApp::client_tls`, which send HTTPS to a server
 //! whose certificate a given CA signed. The feature `http-client` forwards to boot's feature of
 //! the same name and adds `MockHttpClient` and `MockResponse`, a scripted `HttpClient` that
-//! records the requests it gets. `web`, `security`, `logging`, `tls` and `http-client` are off
-//! by default.
+//! records the requests it gets. The feature `oauth2` turns on `http-client` and adds
+//! `FakeProvider`, an OpenID Connect provider over `MockHttpClient` that signs id tokens with a
+//! key generated at construction, with `FakeUser`, `Fault` and `TokenRequest`. `web`,
+//! `security`, `logging`, `tls`, `http-client` and `oauth2` are off by default.
 //!
 //! # Examples
 //!
@@ -33,6 +35,8 @@ mod captured;
 mod client;
 mod clock;
 mod config_dir;
+#[cfg(feature = "oauth2")]
+mod fake_provider;
 mod lifecycle;
 mod log;
 #[cfg(feature = "http-client")]
@@ -48,6 +52,8 @@ pub use captured::Captured;
 pub use client::{RequestBuilder, TestClient, TestResponse};
 pub use clock::{FixedClock, ManualClock};
 pub use config_dir::TempConfigDir;
+#[cfg(feature = "oauth2")]
+pub use fake_provider::{FakeProvider, FakeUser, Fault, TokenRequest};
 pub use log::Log;
 #[cfg(feature = "http-client")]
 pub use mock_http::{MockHttpClient, MockResponse};
