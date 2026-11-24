@@ -176,6 +176,35 @@ fn ssl_on_a_sqlite_source_is_refused_with_the_key() {
 }
 
 #[test]
+fn an_ssl_bundle_with_ssl_mode_disable_is_refused() {
+    assert_eq!(
+        invalid_key("[data]\nurl = \"postgres://h/d\"\nssl-mode = \"disable\"\nssl-bundle = \"b\""),
+        "data.ssl-bundle"
+    );
+    assert_eq!(
+        invalid_key(
+            "[data.sources.rep]\nurl = \"mysql://h/d\"\nssl-mode = \"disable\"\nssl-bundle = \"b\""
+        ),
+        "data.sources.rep.ssl-bundle"
+    );
+    match settings(
+        "[data]\nurl = \"postgres://h/d\"\nssl-mode = \"disable\"\nssl-bundle = \"s3cret\"",
+    ) {
+        Err(ConfigError::Invalid { message, .. }) => {
+            assert!(message.contains("no effect"), "{message}");
+            assert!(!message.contains("s3cret"), "{message}");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    // Every other mode is allowed with a bundle.
+    for mode in ["prefer", "require", "verify-ca", "verify-full"] {
+        let toml =
+            format!("[data]\nurl = \"postgres://h/d\"\nssl-mode = \"{mode}\"\nssl-bundle = \"b\"");
+        assert!(settings(&toml).is_ok(), "{mode}");
+    }
+}
+
+#[test]
 fn a_bad_source_name_and_the_name_default_are_refused() {
     for name in [
         "default",

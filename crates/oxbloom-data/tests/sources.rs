@@ -10,7 +10,7 @@
 use std::time::Duration;
 
 use oxbloom_config::Config;
-use oxbloom_data::{DataError, DataSettings, DataSources, Driver, TlsMaterial};
+use oxbloom_data::{DataError, DataSettings, DataSources, Driver, SourceError, TlsMaterial};
 
 fn settings(toml: &str) -> DataSettings {
     DataSettings::from_config(&Config::from_str(toml).unwrap()).unwrap()
@@ -20,8 +20,19 @@ fn no_tls(_: &str) -> Result<TlsMaterial, DataError> {
     Err(DataError::Tls)
 }
 
-fn build(toml: &str) -> Result<DataSources, DataError> {
+fn build_full(toml: &str) -> Result<DataSources, SourceError> {
     DataSources::build(&settings(toml), &no_tls)
+}
+
+/// As `build_full`, keeping only the `DataError` of a failure.
+fn build(toml: &str) -> Result<DataSources, DataError> {
+    build_full(toml).map_err(|e| e.error())
+}
+
+/// The `Debug` form sqlx gives an inline PEM certificate input.
+#[cfg(any(feature = "postgres", feature = "mysql"))]
+fn inline(field: &str, pem: &[u8]) -> String {
+    format!("{field}: Some(Inline({:?}))", pem.to_vec())
 }
 
 /// A SQLite file URL that is never opened by the tests that use it (the pools are lazy).
@@ -301,6 +312,46 @@ async fn a_bad_url_option_is_a_config_error_without_its_value() {
     assert!(!format!("{err:?}").contains("s3cret"));
 }
 
+#[tokio::test]
+async fn a_failing_source_is_named_in_the_error() {
+    let toml = "[data]\nurl = \"sqlite::memory:\"\n\
+                [data.sources.alpha]\nurl = \"sqlite::memory:\"\n\
+                [data.sources.broken]\nurl = \"sqlite:app.db?mode=s3cret\"";
+    let err = build_full(toml).unwrap_err();
+    assert_eq!(err.source_name, "broken");
+    assert_eq!(err.source_name(), "broken");
+    assert_eq!(err.error, DataError::Config);
+    assert_eq!(err.error(), DataError::Config);
+    assert_eq!(err.config_prefix(), "data.sources.broken");
+    let text = err.to_string();
+    assert_eq!(
+        text,
+        "data source `broken`: the data configuration is invalid"
+    );
+    for absent in ["alpha", "default", "s3cret"] {
+        assert!(!text.contains(absent), "{text}");
+        assert!(!format!("{err:?}").contains("s3cret"));
+    }
+    assert!(std::error::Error::source(&err).is_none());
+    assert_eq!(err.clone(), err);
+
+    // A failing default source.
+    let err = build_full("[data]\nurl = \"sqlite:app.db?mode=s3cret\"").unwrap_err();
+    assert_eq!(err.source_name(), "default");
+    assert_eq!(err.config_prefix(), "data");
+}
+
+#[cfg(not(feature = "mysql"))]
+#[tokio::test]
+async fn an_unsupported_second_source_is_named_in_the_error() {
+    let toml = "[data]\nurl = \"sqlite::memory:\"\n[data.sources.rep]\nurl = \"mysql://db/rep\"";
+    let err = build_full(toml).unwrap_err();
+    assert_eq!(err.source_name(), "rep");
+    assert_eq!(err.error(), DataError::Unsupported);
+    assert_eq!(err.config_prefix(), "data.sources.rep");
+    assert!(!err.to_string().contains("default"));
+}
+
 #[test]
 fn building_outside_a_tokio_runtime_is_an_error_not_a_panic() {
     assert_eq!(
@@ -393,10 +444,80 @@ mod postgres {
         assert_eq!(*seen.borrow(), ["db-trust"]);
     }
 
+    fn mode_of(sources: &DataSources) -> String {
+        let options = sources.postgres("default").unwrap().connect_options();
+        format!("{:?}", options.get_ssl_mode())
+    }
+
+    fn with_material(bundle: &str) -> Result<TlsMaterial, DataError> {
+        assert_eq!(bundle, "b");
+        Ok(TlsMaterial::default())
+    }
+
+    #[tokio::test]
+    async fn a_bundle_without_a_mode_verifies_the_full_certificate() {
+        let build_with = |toml: &str| DataSources::build(&settings(toml), &with_material).unwrap();
+        let sources = build_with("[data]\nurl = \"postgres://db/app\"\nssl-bundle = \"b\"");
+        assert_eq!(mode_of(&sources), "VerifyFull");
+        // The bundle overrides a weaker mode in the URL.
+        let sources =
+            build_with("[data]\nurl = \"postgres://db/app?sslmode=disable\"\nssl-bundle = \"b\"");
+        assert_eq!(mode_of(&sources), "VerifyFull");
+        // An explicit `ssl-mode` wins.
+        let sources = build_with(
+            "[data]\nurl = \"postgres://db/app\"\nssl-bundle = \"b\"\nssl-mode = \"require\"",
+        );
+        assert_eq!(mode_of(&sources), "Require");
+        // Without a bundle and a mode the driver default stays.
+        let url = "postgres://db/app";
+        let sources = build_with(&format!("[data]\nurl = \"{url}\""));
+        let default: oxbloom_data::sqlx::postgres::PgConnectOptions = url.parse().unwrap();
+        assert_eq!(mode_of(&sources), format!("{:?}", default.get_ssl_mode()));
+    }
+
+    #[tokio::test]
+    async fn the_bundle_pem_reaches_the_connect_options() {
+        let tls = |_: &str| {
+            Ok(TlsMaterial {
+                trust_pem: Some(b"TRUST-PEM".to_vec()),
+                identity: Some((b"CHAIN-PEM".to_vec(), b"KEY-PEM".to_vec())),
+            })
+        };
+        let toml = "[data]\nurl = \"postgres://db/app\"\nssl-bundle = \"b\"";
+        let sources = DataSources::build(&settings(toml), &tls).unwrap();
+        let debug = format!(
+            "{:?}",
+            sources.postgres("default").unwrap().connect_options()
+        );
+        assert!(
+            debug.contains(&inline("ssl_root_cert", b"TRUST-PEM")),
+            "{debug}"
+        );
+        assert!(
+            debug.contains(&inline("ssl_client_cert", b"CHAIN-PEM")),
+            "{debug}"
+        );
+        assert!(
+            debug.contains(&inline("ssl_client_key", b"KEY-PEM")),
+            "{debug}"
+        );
+    }
+
     #[tokio::test]
     async fn a_failing_tls_function_fails_the_build() {
         let toml = "[data]\nurl = \"postgres://db/app\"\nssl-bundle = \"missing\"";
         assert_eq!(build(toml).unwrap_err(), DataError::Tls);
+
+        // A failing second source is named, the first one is not.
+        let toml = "[data]\nurl = \"sqlite::memory:\"\n\
+                    [data.sources.pg]\nurl = \"postgres://db/app\"\nssl-bundle = \"missing\"";
+        let err = build_full(toml).unwrap_err();
+        assert_eq!(err.source_name(), "pg");
+        assert_eq!(err.error(), DataError::Tls);
+        assert_eq!(
+            err.to_string(),
+            "data source `pg`: the TLS configuration of the database is unusable"
+        );
     }
 
     #[tokio::test]
@@ -467,6 +588,52 @@ mod mysql {
         let toml = "[data]\nurl = \"mysql://db/app\"\nssl-bundle = \"db-trust\"";
         let sources = DataSources::build(&settings(toml), &tls).unwrap();
         assert_eq!(sources.driver_of("default"), Some(Driver::Mysql));
+    }
+
+    fn mode_of(sources: &DataSources) -> String {
+        let options = sources.mysql("default").unwrap().connect_options();
+        format!("{:?}", options.get_ssl_mode())
+    }
+
+    #[tokio::test]
+    async fn a_bundle_without_a_mode_verifies_the_identity() {
+        let tls = |_: &str| Ok(TlsMaterial::default());
+        let build_with = |toml: &str| DataSources::build(&settings(toml), &tls).unwrap();
+        let sources = build_with("[data]\nurl = \"mysql://db/app\"\nssl-bundle = \"b\"");
+        assert_eq!(mode_of(&sources), "VerifyIdentity");
+        let sources =
+            build_with("[data]\nurl = \"mysql://db/app?ssl-mode=disabled\"\nssl-bundle = \"b\"");
+        assert_eq!(mode_of(&sources), "VerifyIdentity");
+        let sources = build_with(
+            "[data]\nurl = \"mysql://db/app\"\nssl-bundle = \"b\"\nssl-mode = \"verify-ca\"",
+        );
+        assert_eq!(mode_of(&sources), "VerifyCa");
+        let url = "mysql://db/app";
+        let sources = build_with(&format!("[data]\nurl = \"{url}\""));
+        let default: oxbloom_data::sqlx::mysql::MySqlConnectOptions = url.parse().unwrap();
+        assert_eq!(mode_of(&sources), format!("{:?}", default.get_ssl_mode()));
+    }
+
+    #[tokio::test]
+    async fn the_bundle_pem_reaches_the_connect_options() {
+        let tls = |_: &str| {
+            Ok(TlsMaterial {
+                trust_pem: Some(b"TRUST-PEM".to_vec()),
+                identity: Some((b"CHAIN-PEM".to_vec(), b"KEY-PEM".to_vec())),
+            })
+        };
+        let toml = "[data]\nurl = \"mysql://db/app\"\nssl-bundle = \"b\"";
+        let sources = DataSources::build(&settings(toml), &tls).unwrap();
+        let debug = format!("{:?}", sources.mysql("default").unwrap().connect_options());
+        assert!(debug.contains(&inline("ssl_ca", b"TRUST-PEM")), "{debug}");
+        assert!(
+            debug.contains(&inline("ssl_client_cert", b"CHAIN-PEM")),
+            "{debug}"
+        );
+        assert!(
+            debug.contains(&inline("ssl_client_key", b"KEY-PEM")),
+            "{debug}"
+        );
     }
 
     #[tokio::test]

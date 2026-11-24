@@ -21,7 +21,7 @@ mod pool;
 mod settings;
 mod sources;
 
-pub use error::DataError;
+pub use error::{DataError, SourceError};
 pub use pool::TlsMaterial;
 pub use settings::{DataSettings, Driver, PROPERTIES, SourceSettings, SslMode};
 pub use sources::DataSources;

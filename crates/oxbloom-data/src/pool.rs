@@ -158,6 +158,18 @@ fn ensure_runtime() -> Result<(), DataError> {
         .map_err(|_| DataError::Pool)
 }
 
+/// The TLS mode to set on the connect options: the configured `ssl-mode`, or `verify-full`
+/// when the source has an `ssl-bundle` and no mode, so the bundle's trust roots are really
+/// checked. Postgres and MySQL accept any certificate in `prefer` and `require`, and `prefer`
+/// falls back to plain text, so a weaker mode from the URL or the environment must not
+/// apply. `None` leaves the mode of the URL and the driver.
+#[cfg(any(feature = "postgres", feature = "mysql"))]
+fn effective_ssl_mode(source: &SourceSettings) -> Option<SslMode> {
+    source
+        .ssl_mode
+        .or(source.ssl_bundle.is_some().then_some(SslMode::VerifyFull))
+}
+
 /// The pool options of `source`. For an in-memory SQLite database an unset idle timeout or
 /// lifetime means never, because closing its last connection destroys the database; for any
 /// other source the sqlx defaults stay.
@@ -199,7 +211,7 @@ fn postgres_connect_options(
 
     let mut options =
         PgConnectOptions::from_str(source.url.expose()).map_err(|_| DataError::Config)?;
-    if let Some(mode) = source.ssl_mode {
+    if let Some(mode) = effective_ssl_mode(source) {
         options = options.ssl_mode(match mode {
             SslMode::Disable => PgSslMode::Disable,
             SslMode::Prefer => PgSslMode::Prefer,
@@ -249,7 +261,7 @@ fn mysql_connect_options(
 
     let mut options =
         MySqlConnectOptions::from_str(source.url.expose()).map_err(|_| DataError::Config)?;
-    if let Some(mode) = source.ssl_mode {
+    if let Some(mode) = effective_ssl_mode(source) {
         options = options.ssl_mode(match mode {
             SslMode::Disable => MySqlSslMode::Disabled,
             SslMode::Prefer => MySqlSslMode::Preferred,

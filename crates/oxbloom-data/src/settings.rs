@@ -126,7 +126,9 @@ pub struct SourceSettings {
     pub driver: Driver,
     /// The most connections the pool holds. Default 10, or 1 for an in-memory SQLite URL.
     pub max_connections: u32,
-    /// The connections the pool keeps open. Default 0.
+    /// The connections the pool keeps open. Default 0. A lazy pool honours it only loosely:
+    /// sqlx opens these connections in the background and refills them after it reaps idle or
+    /// old ones, so the pool can hold fewer for a while.
     pub min_connections: u32,
     /// How long acquiring a connection may wait. Default 30 seconds.
     pub acquire_timeout: Duration,
@@ -139,10 +141,16 @@ pub struct SourceSettings {
     pub max_lifetime: Option<Duration>,
     /// Whether a connection is checked before it is handed out. Default true.
     pub test_before_acquire: bool,
-    /// The TLS mode, not allowed for SQLite. Default none, which leaves it to the URL.
+    /// The TLS mode, not allowed for SQLite. Default none, which leaves it to the URL and the
+    /// driver, except with an `ssl_bundle`, where none means `verify-full`. An explicit
+    /// `prefer` or `require` encrypts without checking the certificate against the bundle's
+    /// trust roots, and `prefer` falls back to plain text.
     pub ssl_mode: Option<SslMode>,
     /// The name of the SSL bundle with the trust roots or client certificate. Not allowed for
-    /// SQLite. The caller resolves the name.
+    /// SQLite, nor with `ssl-mode = disable`. The caller resolves the name. Without an
+    /// `ssl_mode` the bundle makes the connection `verify-full`, overriding a mode in the URL
+    /// or the environment. The PEM is parsed on the first connection, so a bad PEM shows up
+    /// then as [`DataError::Connect`](crate::DataError::Connect).
     pub ssl_bundle: Option<String>,
 }
 
@@ -166,15 +174,16 @@ impl SourceSettings {
     /// # Ok::<(), oxbloom_config::ConfigError>(())
     /// ```
     pub fn config_prefix(&self) -> String {
-        if self.name == DEFAULT_SOURCE {
-            "data".to_string()
-        } else {
-            format!("data.sources.{}", self.name)
-        }
+        config_prefix(&self.name)
     }
 }
 
 /// The settings of the data core: whether the pools open at startup and the sources.
+///
+/// A source with `ssl-bundle` and no `ssl-mode` connects with `verify-full`. An explicit
+/// `ssl-mode` of `prefer` or `require` does not check the server certificate against the
+/// bundle's trust roots, and a bad PEM in the bundle shows up as
+/// [`DataError::Connect`](crate::DataError::Connect) on the first connection.
 ///
 /// Source names with a dash are best set in the configuration file: an environment variable
 /// override such as `..._DATA__SOURCES__REPORTING_DB__URL` spells the name `reporting_db`,
@@ -265,7 +274,8 @@ impl DataSettings {
     /// unknown key, a value of the wrong type, a bad duration, a source without `url`, a URL
     /// whose scheme is not `postgres`, `postgresql`, `mysql`, `mariadb` or `sqlite`, a zero
     /// `max-connections` or duration, `min-connections` above `max-connections`, an unknown
-    /// `ssl-mode`, `ssl-mode` or `ssl-bundle` on a SQLite source, a source name outside
+    /// `ssl-mode`, `ssl-mode` or `ssl-bundle` on a SQLite source, `ssl-bundle` with
+    /// `ssl-mode = disable`, a source name outside
     /// `[a-z0-9-]+` or equal to `default`, and an in-memory SQLite URL with `max-connections`
     /// above 1 and no `cache=shared`.
     ///
@@ -339,6 +349,16 @@ impl DataSettings {
             connect_on_startup: connect_on_startup.unwrap_or(true),
             sources,
         })
+    }
+}
+
+/// The configuration key of the source `name`: `data` for the default source and
+/// `data.sources.<name>` otherwise.
+pub(crate) fn config_prefix(name: &str) -> String {
+    if name == DEFAULT_SOURCE {
+        "data".to_string()
+    } else {
+        format!("data.sources.{name}")
     }
 }
 
@@ -464,6 +484,12 @@ fn source(name: &str, prefix: &str, raw: RawSource) -> Result<SourceSettings, Co
             ));
         }
     }
+    if ssl_mode == Some(SslMode::Disable) && raw.ssl_bundle.is_some() {
+        return Err(ConfigError::invalid(
+            key("ssl-bundle"),
+            "`ssl-bundle` has no effect with `ssl-mode = disable`",
+        ));
+    }
     Ok(SourceSettings {
         name: name.to_string(),
         url,
@@ -551,7 +577,7 @@ pub const PROPERTIES: &[(&str, &str, Option<&str>, &str)] = &[
         "data.ssl-bundle",
         "String",
         None,
-        "The name of the SSL bundle with the trust roots or client certificate; not for SQLite.",
+        "The name of the SSL bundle with the trust roots or client certificate; implies `ssl-mode = verify-full` when unset; not for SQLite or `ssl-mode = disable`.",
     ),
     (
         "data.sources.<name>.url",
@@ -605,6 +631,6 @@ pub const PROPERTIES: &[(&str, &str, Option<&str>, &str)] = &[
         "data.sources.<name>.ssl-bundle",
         "String",
         None,
-        "The SSL bundle of a named source; not for SQLite.",
+        "The SSL bundle of a named source; implies `verify-full` when `ssl-mode` is unset; not for SQLite or `ssl-mode = disable`.",
     ),
 ];

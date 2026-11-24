@@ -3,9 +3,9 @@
 use std::fmt;
 use std::time::Duration;
 
-use crate::DataError;
 use crate::pool::{self, Pool, TlsMaterial};
 use crate::settings::{DEFAULT_SOURCE, DataSettings, Driver};
+use crate::{DataError, SourceError};
 
 /// One configured source: its name, its driver and its pool.
 struct Entry {
@@ -64,19 +64,27 @@ impl DataSources {
     ///
     /// Building opens no connection and needs no database; the first use of a pool connects.
     /// `tls` resolves an SSL bundle name to its PEM material and is called only for a source
-    /// with an `ssl-bundle`, with the bundle name. An in-memory SQLite database keeps its
-    /// connections open unless `idle-timeout` or `max-lifetime` is set, because closing the
-    /// last connection destroys the database.
+    /// with an `ssl-bundle`, with the bundle name. A source with a bundle and no `ssl-mode`
+    /// connects with `verify-full`. An in-memory SQLite database keeps its connections open
+    /// unless `idle-timeout` or `max-lifetime` is set, because closing the last connection
+    /// destroys the database. `min-connections` is honoured only loosely by a lazy pool: sqlx
+    /// opens and refills those connections in the background.
     ///
-    /// Call it inside a Tokio runtime: sqlx starts the maintenance task of a pool on the
-    /// current runtime.
+    /// Call it inside a Tokio runtime, and on the runtime the application keeps running, not a
+    /// temporary one: sqlx ties the maintenance task of a pool to the runtime that is current
+    /// when the pool is built.
+    ///
+    /// The pools come from sqlx, and sqlx's own `Debug` of the connect options (reachable
+    /// through `connect_options()` of a pool) contains the password, so never log it.
     ///
     /// # Errors
     ///
+    /// The first failing source stops the build. The [`SourceError`] names it, and
+    /// [`SourceError::config_prefix`] gives its configuration key. Its error is:
+    ///
     /// - [`DataError::Unsupported`] for a source whose driver feature is off.
     /// - [`DataError::Config`] for a URL the driver refuses, for example an unknown option
-    ///   value. The message never contains the URL; the caller names the source with
-    ///   [`SourceSettings::config_prefix`](crate::SourceSettings::config_prefix).
+    ///   value. The message never contains the URL.
     /// - Any error of `tls`, such as [`DataError::Tls`].
     /// - [`DataError::Pool`] when it is called outside a Tokio runtime and there is a source.
     ///
@@ -100,8 +108,12 @@ impl DataSources {
     /// let config = Config::from_str("[data]\nurl = \"postgres://app:pw@db/app\"")?;
     /// let settings = DataSettings::from_config(&config)?;
     /// let err = DataSources::build(&settings, &|_| Err(DataError::Tls)).unwrap_err();
-    /// assert_eq!(err, DataError::Unsupported);
-    /// assert_eq!(settings.sources[0].config_prefix(), "data");
+    /// assert_eq!(err.error(), DataError::Unsupported);
+    /// assert_eq!(err.config_prefix(), "data");
+    /// assert_eq!(
+    ///     err.to_string(),
+    ///     "data source `default`: the database driver is not available in this build"
+    /// );
     /// # Ok(())
     /// # }
     /// # #[cfg(not(all(feature = "sqlite", not(feature = "postgres"))))]
@@ -110,7 +122,7 @@ impl DataSources {
     pub fn build(
         settings: &DataSettings,
         tls: &dyn Fn(&str) -> Result<TlsMaterial, DataError>,
-    ) -> Result<DataSources, DataError> {
+    ) -> Result<DataSources, SourceError> {
         let entries = settings
             .sources
             .iter()
@@ -118,10 +130,11 @@ impl DataSources {
                 Ok(Entry {
                     name: source.name.clone(),
                     driver: source.driver,
-                    pool: pool::build(source, tls)?,
+                    pool: pool::build(source, tls)
+                        .map_err(|error| SourceError::new(&source.name, error))?,
                 })
             })
-            .collect::<Result<_, DataError>>()?;
+            .collect::<Result<_, SourceError>>()?;
         Ok(DataSources { entries })
     }
 
@@ -251,6 +264,8 @@ impl DataSources {
     /// The Postgres pool of the source `name`, or `None` when the name is unknown or the
     /// source uses another driver.
     ///
+    /// Never log `connect_options()` of the pool: sqlx's `Debug` of it contains the password.
+    ///
     /// # Examples
     ///
     /// ```
@@ -279,6 +294,8 @@ impl DataSources {
 
     /// The MySQL or MariaDB pool of the source `name`, or `None` when the name is unknown or
     /// the source uses another driver.
+    ///
+    /// Never log `connect_options()` of the pool: sqlx's `Debug` of it contains the password.
     ///
     /// # Examples
     ///
@@ -439,7 +456,8 @@ impl DataSources {
     }
 
     /// Closes every pool. Each close waits until the connections in use are returned, so
-    /// release them first. A closed pool refuses new connections with [`DataError::Pool`].
+    /// release them first; a caller at shutdown wraps it in a timeout. A closed pool refuses
+    /// new connections with [`DataError::Pool`].
     ///
     /// # Examples
     ///
