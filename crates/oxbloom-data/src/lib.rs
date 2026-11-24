@@ -3,8 +3,10 @@
 //! The crate re-exports `sqlx` as [`sqlx`], so an application uses the same version as the
 //! framework. The cargo features `postgres`, `mysql` and `sqlite` (all off by default) turn
 //! on the matching `sqlx` driver; the TLS stack is rustls with `aws-lc-rs` and the platform
-//! root certificates, never `ring`. The cargo feature `retry` (off by default) is reserved
-//! for retrying connection attempts.
+//! root certificates, never `ring`. [`transaction`] runs async work in a transaction of any
+//! enabled driver's pool. The cargo feature `retry` (off by default) adds
+//! `TransactionOptions::retry`, which runs that work again after a serialization failure or
+//! a deadlock.
 //!
 //! # Examples
 //!
@@ -20,9 +22,14 @@ mod error;
 mod pool;
 mod settings;
 mod sources;
+mod transaction;
 
 pub use error::{DataError, SourceError};
 pub use pool::TlsMaterial;
 pub use settings::{DataSettings, Driver, PROPERTIES, SourceSettings, SslMode};
 pub use sources::DataSources;
 pub use sqlx;
+pub use transaction::{
+    Isolation, RetryableError, TransactionDatabase, TransactionError, TransactionOptions,
+    transaction,
+};

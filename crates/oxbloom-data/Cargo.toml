@@ -11,14 +11,17 @@ default = []
 postgres = ["sqlx/postgres", "sqlx/tls-rustls-aws-lc-rs-native-roots"]
 mysql = ["sqlx/mysql", "sqlx/tls-rustls-aws-lc-rs-native-roots"]
 sqlite = ["sqlx/sqlite", "sqlx/tls-rustls-aws-lc-rs-native-roots"]
-# Retry of the connection attempts over the retry policy of `oxbloom-tasks`; it gets its
-# dependency in a later task.
-retry = []
+# `TransactionOptions::retry`: runs the work of a transaction again after a serialization
+# failure or a deadlock, with the retry policy of `oxbloom-tasks`. Off by default, so a build
+# without it does not depend on `oxbloom-tasks`; `fastrand` draws the jitter of the delays.
+retry = ["dep:oxbloom-tasks", "dep:fastrand"]
 
 [dependencies]
 # The `data.*` keys: the lenient `Config` reading and `Secret` for the URL. Durations are read by
 # `oxbloom-config` itself, so there is no dependency on `oxbloom-tasks`.
 oxbloom-config = { version = "0.1.0", path = "../oxbloom-config" }
+oxbloom-tasks = { version = "0.1.0", path = "../oxbloom-tasks", optional = true }
+fastrand = { version = "2.3.0", optional = true }
 serde = { version = "1.0.229", features = ["derive"] }
 # Each driver feature also enables rustls with aws-lc-rs and the platform root certificates
 # (never ring), so a build without drivers has no TLS crates. The migrate and macros features
@@ -29,4 +32,4 @@ sqlx = { version = "0.9.1", default-features = false, features = ["runtime-tokio
 tokio = { version = "1.54.1", features = ["rt", "time"] }
 
 [dev-dependencies]
-tokio = { version = "1.54.1", features = ["macros", "rt"] }
+tokio = { version = "1.54.1", features = ["macros", "rt", "sync"] }

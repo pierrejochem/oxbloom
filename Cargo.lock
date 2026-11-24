@@ -1861,7 +1861,9 @@ dependencies = [
 name = "oxbloom-data"
 version = "0.1.0"
 dependencies = [
+ "fastrand",
  "oxbloom-config",
+ "oxbloom-tasks",
  "serde",
  "sqlx",
  "tokio",
