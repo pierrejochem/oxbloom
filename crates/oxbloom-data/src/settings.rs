@@ -143,7 +143,39 @@ pub struct SourceSettings {
     pub ssl_bundle: Option<String>,
 }
 
+impl SourceSettings {
+    /// The configuration key of this source: `data` for the default source and
+    /// `data.sources.<name>` for a named one. Failure reports use it to say where to fix a
+    /// source.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_config::Config;
+    /// use oxbloom_data::DataSettings;
+    ///
+    /// let config = Config::from_str(
+    ///     "[data]\nurl = \"postgres://db/app\"\n[data.sources.rep]\nurl = \"mysql://db/rep\"",
+    /// )?;
+    /// let settings = DataSettings::from_config(&config)?;
+    /// assert_eq!(settings.sources[0].config_prefix(), "data");
+    /// assert_eq!(settings.sources[1].config_prefix(), "data.sources.rep");
+    /// # Ok::<(), oxbloom_config::ConfigError>(())
+    /// ```
+    pub fn config_prefix(&self) -> String {
+        if self.name == DEFAULT_SOURCE {
+            "data".to_string()
+        } else {
+            format!("data.sources.{}", self.name)
+        }
+    }
+}
+
 /// The settings of the data core: whether the pools open at startup and the sources.
+///
+/// Source names with a dash are best set in the configuration file: an environment variable
+/// override such as `..._DATA__SOURCES__REPORTING_DB__URL` spells the name `reporting_db`,
+/// which is refused.
 ///
 /// # Examples
 ///
@@ -314,11 +346,14 @@ fn is_valid_name(name: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
+/// The driver of the URL. The scheme is matched case-sensitively, in the lowercase forms the
+/// drivers themselves accept, and the network schemes need `://`.
 fn driver_of(url: &str) -> Option<Driver> {
-    let (scheme, _) = url.split_once(':')?;
-    match scheme.to_ascii_lowercase().as_str() {
-        "postgres" | "postgresql" => Some(Driver::Postgres),
-        "mysql" | "mariadb" => Some(Driver::Mysql),
+    let (scheme, rest) = url.split_once(':')?;
+    let slashes = rest.starts_with("//");
+    match scheme {
+        "postgres" | "postgresql" if slashes => Some(Driver::Postgres),
+        "mysql" | "mariadb" if slashes => Some(Driver::Mysql),
         "sqlite" => Some(Driver::Sqlite),
         _ => None,
     }
@@ -330,11 +365,14 @@ struct SqliteMemory {
     shared_cache: bool,
 }
 
+// sqlx already enables the shared cache for `:memory:`, so the one-connection rule is
+// conservative. Task 3: never `Display` a sqlx connect-option parse error, it echoes query
+// values; map it to a fixed `DataError`.
 fn sqlite_memory(url: &str) -> SqliteMemory {
     let rest = url.split_once(':').map_or("", |(_, rest)| rest);
     let rest = rest.strip_prefix("//").unwrap_or(rest);
     let (path, query) = rest.split_once('?').unwrap_or((rest, ""));
-    let has = |pair: &str| query.split('&').any(|p| p.eq_ignore_ascii_case(pair));
+    let has = |pair: &str| query.split('&').any(|p| p == pair);
     SqliteMemory {
         in_memory: path == ":memory:" || has("mode=memory"),
         shared_cache: has("cache=shared"),
@@ -349,7 +387,7 @@ fn source(name: &str, prefix: &str, raw: RawSource) -> Result<SourceSettings, Co
     let Some(driver) = driver_of(url.expose()) else {
         return Err(ConfigError::invalid(
             key("url"),
-            "must start with `postgres://`, `postgresql://`, `mysql://`, `mariadb://` or `sqlite:`",
+            "must start with `postgres://`, `postgresql://`, `mysql://` or `mariadb://` (lowercase, followed by `://`), or with `sqlite:`",
         ));
     };
     let memory = if driver == Driver::Sqlite {
@@ -380,7 +418,7 @@ fn source(name: &str, prefix: &str, raw: RawSource) -> Result<SourceSettings, Co
     if min_connections > max_connections {
         return Err(ConfigError::invalid(
             key("min-connections"),
-            "must not be above max-connections",
+            "must not be above the effective max-connections (an in-memory SQLite source has an implicit maximum of 1)",
         ));
     }
     for (field, value) in [
@@ -391,6 +429,13 @@ fn source(name: &str, prefix: &str, raw: RawSource) -> Result<SourceSettings, Co
         if value.is_some_and(|d| d.is_zero()) {
             return Err(ConfigError::invalid(key(field), "must be above zero"));
         }
+    }
+    if raw
+        .ssl_bundle
+        .as_deref()
+        .is_some_and(|b| b.trim().is_empty())
+    {
+        return Err(ConfigError::invalid(key("ssl-bundle"), "must not be empty"));
     }
     let ssl_mode = match raw.ssl_mode {
         Some(value) => Some(SslMode::parse(&value).ok_or_else(|| {

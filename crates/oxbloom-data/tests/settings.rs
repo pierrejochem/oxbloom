@@ -177,14 +177,76 @@ fn ssl_on_a_sqlite_source_is_refused_with_the_key() {
 
 #[test]
 fn a_bad_source_name_and_the_name_default_are_refused() {
-    for name in ["default", "Has_Underscore", "with.dot", "with space"] {
+    for name in [
+        "default",
+        "Has_Underscore",
+        "Reporting",
+        "with.dot",
+        "with space",
+        "",
+    ] {
         let toml = format!("[data.sources.\"{name}\"]\nurl = \"postgres://h/d\"");
-        let err = settings(&toml);
-        assert!(
-            matches!(err, Err(ConfigError::Invalid { .. })),
-            "{name}: {err:?}"
+        assert_eq!(
+            invalid_key(&toml),
+            format!("data.sources.{name}"),
+            "{name:?}"
         );
     }
+}
+
+#[test]
+fn schemes_are_case_sensitive_and_network_schemes_need_slashes() {
+    for url in [
+        "SQLITE::memory:",
+        "Sqlite:app.db",
+        "POSTGRES://h/db",
+        "MySQL://h/db",
+        "postgres:db",
+        "postgresql:db",
+        "mysql:x",
+        "mariadb:x",
+    ] {
+        let toml = format!("[data]\nurl = \"{url}\"");
+        let err = settings(&toml).unwrap_err();
+        assert!(matches!(err, ConfigError::Invalid { .. }), "{url}: {err:?}");
+        let text = format!("{err} {err:?}");
+        assert!(text.contains("data.url"), "{url}: {text}");
+        // The fixed text names the schemes only, never a part of the value.
+        for part in ["app.db", "memory", "h/db"] {
+            assert!(!text.contains(part), "{url}: {text}");
+        }
+        assert_eq!(
+            invalid_key(&format!("[data.sources.x]\nurl = \"{url}\"")),
+            "data.sources.x.url"
+        );
+    }
+}
+
+#[test]
+fn an_empty_ssl_bundle_is_refused() {
+    for value in ["", "  "] {
+        assert_eq!(
+            invalid_key(&format!(
+                "[data]\nurl = \"postgres://h/d\"\nssl-bundle = \"{value}\""
+            )),
+            "data.ssl-bundle"
+        );
+    }
+}
+
+#[test]
+fn the_config_prefix_names_the_source_key() {
+    let s =
+        settings("[data]\nurl = \"postgres://h/d\"\n[data.sources.rep-1]\nurl = \"mysql://h/d\"")
+            .unwrap();
+    assert_eq!(source(&s, "default").config_prefix(), "data");
+    assert_eq!(source(&s, "rep-1").config_prefix(), "data.sources.rep-1");
+}
+
+#[test]
+fn min_above_the_implicit_in_memory_maximum_names_min_connections() {
+    let key = invalid_key("[data]\nurl = \"sqlite::memory:\"\nmin-connections = 2");
+    assert_eq!(key, "data.min-connections");
 }
 
 #[test]
@@ -263,6 +325,12 @@ fn the_url_never_appears_in_debug_or_errors() {
         "[data]\nurl = \"sqlite://u:s3cret%40pw@[::1]:5432/db\"\nssl-mode = \"require\""
             .to_string(),
         "[data]\nurl = 42".to_string(),
+        "[data]\nurl = { v = \"postgres://u:s3cret%40pw@[::1]:5432/db\" }".to_string(),
+        format!("[data.sources.a]\nurl = \"{PG}\"\nbogus = 1"),
+        format!("[data.sources.a]\nurl = \"{PG}\"\nidle-timeout = \"0s\""),
+        "[data]\nurl = \"sqlite://u:s3cret%40pw@[::1]:5432/db\"\nssl-bundle = \"b\"".to_string(),
+        "[data]\nurl = \"sqlite://u:s3cret%40pw@[::1]:5432/db?mode=memory\"\nmax-connections = 3"
+            .to_string(),
     ];
     for toml in cases {
         let text = match settings(&toml) {
