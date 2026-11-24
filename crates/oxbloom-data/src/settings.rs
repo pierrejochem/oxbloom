@@ -10,7 +10,7 @@ use std::time::Duration;
 use oxbloom_config::{Config, ConfigError, Secret};
 use serde::Deserialize;
 
-const DEFAULT_SOURCE: &str = "default";
+pub(crate) const DEFAULT_SOURCE: &str = "default";
 const DEFAULT_MAX_CONNECTIONS: u32 = 10;
 const DEFAULT_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -130,9 +130,12 @@ pub struct SourceSettings {
     pub min_connections: u32,
     /// How long acquiring a connection may wait. Default 30 seconds.
     pub acquire_timeout: Duration,
-    /// How long a connection may sit idle before it is closed. Default none.
+    /// How long a connection may sit idle before it is closed. Unset leaves the sqlx default of
+    /// 10 minutes, except for an in-memory SQLite database, where unset means never: closing
+    /// its last connection would destroy the database.
     pub idle_timeout: Option<Duration>,
-    /// How long a connection may live. Default none.
+    /// How long a connection may live. Unset leaves the sqlx default of 30 minutes, except for
+    /// an in-memory SQLite database, where unset means forever, for the same reason.
     pub max_lifetime: Option<Duration>,
     /// Whether a connection is checked before it is handed out. Default true.
     pub test_before_acquire: bool,
@@ -360,15 +363,16 @@ fn driver_of(url: &str) -> Option<Driver> {
 }
 
 /// What the options of a SQLite URL say about an in-memory database.
-struct SqliteMemory {
-    in_memory: bool,
+pub(crate) struct SqliteMemory {
+    pub(crate) in_memory: bool,
     shared_cache: bool,
 }
 
 // sqlx already enables the shared cache for `:memory:`, so the one-connection rule is
-// conservative. Task 3: never `Display` a sqlx connect-option parse error, it echoes query
-// values; map it to a fixed `DataError`.
-fn sqlite_memory(url: &str) -> SqliteMemory {
+// conservative. The pool module uses `in_memory` to keep the connections of such a database
+// open. It never shows a sqlx connect-option parse error, because that error echoes query
+// values; it maps it to a fixed `DataError`.
+pub(crate) fn sqlite_memory(url: &str) -> SqliteMemory {
     let rest = url.split_once(':').map_or("", |(_, rest)| rest);
     let rest = rest.strip_prefix("//").unwrap_or(rest);
     let (path, query) = rest.split_once('?').unwrap_or((rest, ""));

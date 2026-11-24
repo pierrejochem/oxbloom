@@ -24,6 +24,9 @@ serde = { version = "1.0.229", features = ["derive"] }
 # (never ring), so a build without drivers has no TLS crates. The migrate and macros features
 # are left to the application.
 sqlx = { version = "0.9.1", default-features = false, features = ["runtime-tokio"] }
+# Already in the tree through sqlx: the runtime check before a pool is built and the timeout of
+# `DataSources::ping`.
+tokio = { version = "1.54.1", features = ["rt", "time"] }
 
 [dev-dependencies]
 tokio = { version = "1.54.1", features = ["macros", "rt"] }

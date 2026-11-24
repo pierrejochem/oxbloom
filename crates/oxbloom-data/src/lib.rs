@@ -17,8 +17,12 @@
 //! ```
 
 mod error;
+mod pool;
 mod settings;
+mod sources;
 
 pub use error::DataError;
+pub use pool::TlsMaterial;
 pub use settings::{DataSettings, Driver, PROPERTIES, SourceSettings, SslMode};
+pub use sources::DataSources;
 pub use sqlx;
