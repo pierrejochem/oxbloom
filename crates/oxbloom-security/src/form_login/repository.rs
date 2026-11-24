@@ -16,6 +16,9 @@ pub(crate) const SAVED_REQUEST_KEY: &str = "oxbloom.security.saved-request";
 
 /// The session key that holds the username of the logged-in principal, as a JSON string.
 pub(crate) use crate::session::PRINCIPAL_KEY;
+/// The prefix of the session keys that hold the OAuth2 tokens, one per registration. A login
+/// that is not an OAuth2 login removes them all.
+pub(crate) const OAUTH2_TOKENS_PREFIX: &str = "oxbloom.security.oauth2.tokens.";
 /// The session key that holds the seconds since the epoch of the last check of the user.
 pub(crate) const REVALIDATED_AT_KEY: &str = "oxbloom.security.revalidated-at";
 

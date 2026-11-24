@@ -970,8 +970,11 @@ impl fmt::Debug for DefaultJwtDecoder {
 /// Maps a verified [`Jwt`] to an [`Authentication`].
 ///
 /// The principal is `sub` (a non-empty string; otherwise the token is invalid). By default
-/// `scope` (space-delimited string) and `scp` (array) become `SCOPE_<x>` authorities. All claims
-/// are attached as [`Authentication::details`].
+/// `scope` (space-delimited string) and `scp` (array) become `SCOPE_<x>` authorities. The claims
+/// are attached as [`Authentication::details`], except those whose names start with `oauth2.` or
+/// `oxbloom.`: those names belong to details that only the framework sets (the OAuth2 login
+/// markers `oauth2.principal` and `oauth2.registration`, the remember-me marker), so a token
+/// cannot forge them. [`Jwt::claims`] still holds every claim.
 ///
 /// # Examples
 ///
@@ -1065,7 +1068,15 @@ impl JwtAuthenticationConverter {
                     .map(|v| GrantedAuthority::new(format!("{prefix}{v}"))),
             );
         }
-        Ok(Authentication::new(principal, authorities).with_details(jwt.claims().clone()))
+        // Claims named like framework details (`oauth2.principal`, `oauth2.registration`,
+        // `oxbloom.remembered`) are dropped, so a token cannot forge them.
+        let details = jwt
+            .claims()
+            .iter()
+            .filter(|(key, _)| !key.starts_with("oauth2.") && !key.starts_with("oxbloom."))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        Ok(Authentication::new(principal, authorities).with_details(details))
     }
 }
 
@@ -2081,5 +2092,29 @@ mod tests {
         assert!(!text.contains("Fixed"), "{text}");
         let clone = decoder.clone();
         assert_eq!(format!("{clone:?}"), text);
+    }
+
+    #[test]
+    fn framework_detail_claims_are_dropped_from_the_details() {
+        let mut claims = serde_json::Map::new();
+        claims.insert("sub".into(), json!("alice"));
+        claims.insert("email".into(), json!("alice@example.test"));
+        claims.insert("oauth2.principal".into(), json!(true));
+        claims.insert("oauth2.registration".into(), json!("idp"));
+        claims.insert("oxbloom.remembered".into(), json!(true));
+        let jwt = Jwt::new(
+            crate::JwtHeader::new(Algorithm::HS256),
+            claims,
+            Secret::new("t".into()),
+        );
+        let auth = JwtAuthenticationConverter::default().convert(&jwt).unwrap();
+        let details = auth.details();
+        assert!(!details.contains_key("oauth2.principal"));
+        assert!(!details.contains_key("oauth2.registration"));
+        assert!(!details.contains_key("oxbloom.remembered"));
+        assert_eq!(details.get("email"), Some(&json!("alice@example.test")));
+        assert_eq!(details.get("sub"), Some(&json!("alice")));
+        // The token itself keeps every claim.
+        assert!(jwt.claims().contains_key("oauth2.principal"));
     }
 }

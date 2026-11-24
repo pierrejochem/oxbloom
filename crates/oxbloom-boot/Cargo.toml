@@ -9,8 +9,10 @@ rust-version.workspace = true
 default = []
 web = ["dep:oxbloom-web", "dep:serde", "dep:tracing", "tokio/net"]
 # `oxbloom-web` for the `dyn Filter` of the session filter; `oxbloom-security` already depends on
-# it with the same features, so this builds nothing more.
-security = ["dep:oxbloom-security", "oxbloom-security/di", "dep:oxbloom-web"]
+# it with the same features, so this builds nothing more. `tracing` (already a dependency of
+# `oxbloom-security`) logs the warning for a `security.oauth2` section without the feature
+# `oauth2`.
+security = ["dep:oxbloom-security", "oxbloom-security/di", "dep:oxbloom-web", "dep:tracing"]
 logging = ["dep:oxbloom-logging", "dep:tracing", "oxbloom-actuator?/logging"]
 # With `security` as well, `security.jwt.jwks-ssl-bundle` builds the JWKS fetcher from a bundle,
 # which needs `oxbloom-security/jwks` (`ReqwestJwksFetcher::with_tls`).
@@ -19,12 +21,19 @@ ssl = ["web", "dep:oxbloom-ssl", "oxbloom-ssl/di", "oxbloom-web/tls", "dep:tokio
 actuator = ["web", "dep:oxbloom-actuator", "oxbloom-actuator/web"]
 # `TasksAutoConfiguration`: the `oxbloom-tasks` scheduler of the `dyn Scheduling` beans.
 tasks = ["dep:oxbloom-tasks"]
+# `HttpClientAutoConfiguration`: the `dyn HttpClient` bean of the `http.client` keys. The client
+# crate's `config` feature brings `reqwest` and `retry`, so `http.client.retry.*` works.
+http-client = ["dep:oxbloom-http-client", "oxbloom-http-client/config"]
+# `security.oauth2.*` metadata, OAuth2 login in `SecurityAutoConfiguration` over the
+# `dyn HttpClient` bean, and the OAuth2 client of `oxbloom-security`.
+oauth2 = ["security", "http-client", "oxbloom-security/oauth2", "dep:serde"]
 
 [dependencies]
 oxbloom-actuator = { version = "0.1.0", path = "../oxbloom-actuator", optional = true }
 oxbloom-config = { version = "0.1.0", path = "../oxbloom-config", features = ["di"] }
 oxbloom-core = { version = "0.1.0", path = "../oxbloom-core" }
 oxbloom-di = { version = "0.1.0", path = "../oxbloom-di" }
+oxbloom-http-client = { version = "0.1.0", path = "../oxbloom-http-client", optional = true }
 oxbloom-logging = { version = "0.1.0", path = "../oxbloom-logging", optional = true }
 oxbloom-macros = { version = "0.1.0", path = "../oxbloom-macros" }
 oxbloom-security = { version = "0.1.0", path = "../oxbloom-security", optional = true }
@@ -49,8 +58,10 @@ jsonwebtoken = { version = "12.0.0", features = ["rust_crypto"] }
 # without `ssl`. Feature-off coverage is the compile-only `cargo build -p oxbloom-boot
 # --no-default-features` (also with `--features logging`, `web`, `security` or `ssl`) and
 # `cargo test -p oxbloom-test --features web`, which runs `TestApp` against boot built with
-# `web` and without `security` or `ssl`.
-oxbloom-test = { path = "../oxbloom-test", features = ["web", "security", "tls"] }
+# `web` and without `security` or `ssl`. `oauth2` brings `FakeProvider` and `MockHttpClient`
+# for `tests/oauth2_login.rs`; it turns boot's `http-client` on (not boot's `oauth2`) in every
+# test build, so the `http-client`-off case is covered by the compile-only builds as well.
+oxbloom-test = { path = "../oxbloom-test", features = ["web", "security", "tls", "oauth2"] }
 oxbloom-web = { version = "0.1.0", path = "../oxbloom-web" }
 # Test certificates for `tests/autoconfigure_ssl.rs` are generated at test time; `aws-lc-rs`
 # only, no `ring`. HTTPS requests go through `RunningApp::client_tls`; a handshake-only rustls

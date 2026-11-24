@@ -29,6 +29,10 @@ pub(crate) use form::urlencoded_pairs;
 pub(crate) use handlers::{FormLoginEntryPoint, FormLoginHandlers, is_form};
 pub use redirect::is_safe_redirect_target;
 pub(crate) use redirect::path_of;
+#[cfg(feature = "oauth2")]
+pub(crate) use repository::{
+    OAUTH2_TOKENS_PREFIX, SAVED_REQUEST_KEY, epoch_seconds, take_saved_request,
+};
 pub(crate) use revalidate::Revalidation;
 pub use settings::FormLogin;
 pub(crate) use settings::is_valid_field_name;

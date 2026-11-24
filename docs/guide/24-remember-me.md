@@ -121,7 +121,7 @@ let http = HttpSecurity::new().authorize(|a| {
 
 A remembered user who meets a `fully_authenticated()` rule is an authenticated user that a rule refuses, so the answer is the 403 of the access denied handler, as for any rule that refuses a logged-in user. Your application can send such a user to the login page, where a login with the password replaces the remembered login. That login drops the remember-me cookie unless the user ticks the box again, because a password login without the box clears the cookie that the request carries. Basic and bearer count as fully authenticated.
 
-A JWT whose claims contain `oxbloom.remembered: true` is read as remembered, because the marker is read from the details of the authentication. That can only make `fully_authenticated()` refuse the token, so it is deny-only. If your tokens carry that claim for another reason, rename it. Oxbloom does not change the converter.
+A JWT claim named `oxbloom.remembered` has no effect: the JWT authentication converter drops every claim whose name starts with `oxbloom.` or `oauth2.` from the details, so a bearer token is never read as remembered (until Slice 9 part C such a claim made the token count as remembered, which was deny-only).
 
 ## Limits
 

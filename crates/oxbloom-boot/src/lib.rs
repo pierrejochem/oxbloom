@@ -101,6 +101,15 @@
 //! stops it first, and `RetryAutoConfiguration`, which makes the `tasks.retry.*` keys the
 //! process-wide defaults of every `#[retryable]` method.
 //!
+//! Cargo feature `http-client` adds `HttpClientAutoConfiguration`, which registers the
+//! `Arc<dyn HttpClient>` bean of the `http.client.*` keys (with `ssl`, `http.client.ssl-bundle`
+//! names the bundle for TLS) and a failure report for an invalid `http.client` key.
+//!
+//! Cargo feature `oauth2` (implies `security` and `http-client`) adds OAuth2 login to
+//! `SecurityAutoConfiguration` from the `security.oauth2.*` keys, and
+//! `OAuth2ClientAutoConfiguration`, which registers an `oxbloom_security::OAuth2Client` bean for
+//! the same registrations over the `dyn HttpClient` bean.
+//!
 //! Cargo feature `logging` installs the `oxbloom_logging` subscriber, configured by the
 //! `logging.*` keys, and registers its `LoggingSystem` as a bean so levels can be changed at
 //! runtime. Turn it off with `OxbloomApplicationBuilder::logging(false)` or
@@ -147,7 +156,12 @@ mod analyzers;
 mod app;
 mod arguments;
 mod autoconfig;
-#[cfg(any(feature = "security", feature = "web", feature = "tasks"))]
+#[cfg(any(
+    feature = "security",
+    feature = "web",
+    feature = "tasks",
+    feature = "http-client"
+))]
 mod autoconfigure;
 mod banner;
 mod error;
@@ -170,9 +184,18 @@ pub use arguments::ApplicationArguments;
 pub use autoconfig::{AutoConfiguration, AutoConfigurations, ConfigRef};
 #[cfg(feature = "actuator")]
 pub use autoconfigure::ActuatorAutoConfiguration;
+#[cfg(feature = "http-client")]
+pub use autoconfigure::HttpClientAutoConfiguration;
+#[cfg(feature = "oauth2")]
+pub use autoconfigure::OAuth2ClientAutoConfiguration;
 #[cfg(feature = "ssl")]
 pub use autoconfigure::SslAutoConfiguration;
-#[cfg(any(feature = "security", feature = "web", feature = "tasks"))]
+#[cfg(any(
+    feature = "security",
+    feature = "web",
+    feature = "tasks",
+    feature = "http-client"
+))]
 pub use autoconfigure::auto_configurations;
 #[cfg(feature = "security")]
 pub use autoconfigure::{

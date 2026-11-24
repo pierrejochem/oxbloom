@@ -350,6 +350,20 @@ impl Session {
         }
     }
 
+    /// Removes every key that starts with `prefix`, reserved keys included. For Oxbloom's own
+    /// families of keys, such as the OAuth2 tokens of every registration.
+    pub(crate) fn remove_reserved_prefix(&self, prefix: &str) {
+        let mut state = self.lock();
+        let before = state.data.values().len();
+        state
+            .data
+            .values_mut()
+            .retain(|key, _| !key.starts_with(prefix));
+        if state.data.values().len() != before {
+            state.dirty = true;
+        }
+    }
+
     /// Ends the session: its values are dropped now, the stored session is deleted and the
     /// cookie expired at the end of the request.
     ///

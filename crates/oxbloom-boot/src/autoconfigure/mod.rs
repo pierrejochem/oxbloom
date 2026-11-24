@@ -8,8 +8,14 @@
 
 #[cfg(feature = "actuator")]
 mod actuator;
+#[cfg(feature = "http-client")]
+mod http_client;
 #[cfg(feature = "security")]
 mod jwt;
+#[cfg(feature = "oauth2")]
+mod oauth2;
+#[cfg(feature = "oauth2")]
+mod oauth2_client;
 #[cfg(feature = "security")]
 mod password;
 #[cfg(feature = "web")]
@@ -27,8 +33,16 @@ mod tasks;
 
 #[cfg(feature = "actuator")]
 pub use actuator::ActuatorAutoConfiguration;
+#[cfg(feature = "http-client")]
+pub use http_client::HttpClientAutoConfiguration;
 #[cfg(feature = "security")]
 pub use jwt::JwtDecoderAutoConfiguration;
+#[cfg(feature = "oauth2")]
+pub(crate) use oauth2::{
+    BASE_URL as OAUTH2_BASE_URL, FAILURE_URL as OAUTH2_FAILURE_URL, OAuth2LoginError,
+};
+#[cfg(feature = "oauth2")]
+pub use oauth2_client::OAuth2ClientAutoConfiguration;
 #[cfg(feature = "security")]
 pub use password::PasswordEncoderAutoConfiguration;
 #[cfg(feature = "web")]
@@ -54,7 +68,8 @@ use crate::autoconfig::AutoConfigurations;
 /// `SslAutoConfiguration`; with `actuator`, `ActuatorAutoConfiguration`; with `web`,
 /// `RequestLogAutoConfiguration` and then `WebServerAutoConfiguration` (after the others when
 /// several features are on); with `tasks`, `TasksAutoConfiguration` and then
-/// `RetryAutoConfiguration` last. Remove one with
+/// `RetryAutoConfiguration`; with `http-client`, `HttpClientAutoConfiguration`; with `oauth2`,
+/// `OAuth2ClientAutoConfiguration` last. Remove one with
 /// [`exclude`](crate::OxbloomApplicationBuilder::exclude).
 ///
 /// # Examples
@@ -63,13 +78,15 @@ use crate::autoconfig::AutoConfigurations;
 /// use oxbloom_boot::{Banner, OxbloomApplication, OxbloomApplicationBuilder, auto_configurations};
 /// use oxbloom_config::Config;
 ///
-/// // `security` adds four auto-configurations, `ssl` one, `actuator` one, `web` two and
-/// // `tasks` two.
+/// // `security` adds four auto-configurations, `ssl` one, `actuator` one, `web` two, `tasks`
+/// // two, `http-client` one and `oauth2` one.
 /// let expected = 4 * usize::from(cfg!(feature = "security"))
 ///     + usize::from(cfg!(feature = "ssl"))
 ///     + usize::from(cfg!(feature = "actuator"))
 ///     + 2 * usize::from(cfg!(feature = "web"))
-///     + 2 * usize::from(cfg!(feature = "tasks"));
+///     + 2 * usize::from(cfg!(feature = "tasks"))
+///     + usize::from(cfg!(feature = "http-client"))
+///     + usize::from(cfg!(feature = "oauth2"));
 /// assert_eq!(auto_configurations().len(), expected);
 ///
 /// # tokio::runtime::Builder::new_current_thread().build()?.block_on(async {
@@ -101,10 +118,12 @@ use crate::autoconfig::AutoConfigurations;
 ///     // 4 `security.users` keys, 12 `security.session` keys, 10 `security.form-login` keys,
 ///     // 4 `security.csrf` keys, 9 `security.headers` keys and 6 `security.remember-me` keys
 ///     // (the last four listed by `SecurityAutoConfiguration`, so excluding it hides them).
-///     assert_eq!(keys(all(), "security."), 59);
-///     assert_eq!(keys(all().exclude::<PasswordEncoderAutoConfiguration>(), "security."), 49);
+///     // The `oauth2` feature adds 15 `security.oauth2` keys to the same list.
+///     let oauth2 = if cfg!(feature = "oauth2") { 15 } else { 0 };
+///     assert_eq!(keys(all(), "security."), 59 + oauth2);
+///     assert_eq!(keys(all().exclude::<PasswordEncoderAutoConfiguration>(), "security."), 49 + oauth2);
 ///     assert_eq!(keys(all(), "security.session."), 12);
-///     assert_eq!(keys(all().exclude::<SessionAutoConfiguration>(), "security."), 47);
+///     assert_eq!(keys(all().exclude::<SessionAutoConfiguration>(), "security."), 47 + oauth2);
 ///     assert_eq!(keys(all(), "security.form-login."), 10);
 ///     assert_eq!(keys(all().exclude::<SecurityAutoConfiguration>(), "security.form-login."), 0);
 ///     assert_eq!(keys(all(), "security.csrf."), 4);
@@ -143,6 +162,12 @@ use crate::autoconfig::AutoConfigurations;
 ///     assert_eq!(keys(all().exclude::<TasksAutoConfiguration>(), "tasks."), 6);
 ///     assert_eq!(keys(all().exclude::<RetryAutoConfiguration>(), "tasks."), 5);
 /// }
+/// #[cfg(feature = "http-client")]
+/// {
+///     use oxbloom_boot::HttpClientAutoConfiguration;
+///     assert_eq!(keys(all(), "http.client."), 12);
+///     assert_eq!(keys(all().exclude::<HttpClientAutoConfiguration>(), "http.client."), 0);
+/// }
 /// # let _ = (keys, all);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// # })?;
@@ -168,5 +193,9 @@ pub fn auto_configurations() -> AutoConfigurations {
     let list = list
         .add::<TasksAutoConfiguration>()
         .add::<RetryAutoConfiguration>();
+    #[cfg(feature = "http-client")]
+    let list = list.add::<HttpClientAutoConfiguration>();
+    #[cfg(feature = "oauth2")]
+    let list = list.add::<OAuth2ClientAutoConfiguration>();
     list
 }

@@ -15,7 +15,8 @@ use super::origin::same_origin;
 use super::page::login_page;
 use super::redirect::path_of;
 use super::repository::{
-    load_authentication, save_request, store_authentication, store_principal, take_saved_request,
+    OAUTH2_TOKENS_PREFIX, load_authentication, save_request, store_authentication, store_principal,
+    take_saved_request,
 };
 use super::revalidate::{Revalidated, Revalidation, revalidate};
 use super::settings::FormLogin;
@@ -187,6 +188,22 @@ impl FormLoginHandlers {
             remember_me,
             clock,
         }
+    }
+
+    /// The form login settings: the OAuth2 login shares the default success URL.
+    #[cfg(feature = "oauth2")]
+    pub(crate) fn settings(&self) -> &FormLogin {
+        &self.settings
+    }
+
+    /// The `Set-Cookie` that clears the remember-me cookie of `req`, when remember-me is on and
+    /// the request carries one. A login that issues no cookie, such as an OAuth2 login, sends it
+    /// so a cookie left from an earlier user cannot log that user in again.
+    #[cfg(feature = "oauth2")]
+    pub(crate) fn stale_remember_me_cookie(&self, req: &Request) -> Option<HeaderValue> {
+        let runtime = self.remember_me.as_ref()?;
+        remember_me_token(runtime, req)?;
+        Some(clear_cookie(&runtime.settings, &CookieScope::of(req)))
     }
 
     /// The CSRF settings, when the check is on.
@@ -380,7 +397,11 @@ impl FormLoginHandlers {
             Err(error) => return self.failure(&error, username_len),
         };
         let principal = authentication.principal().to_string();
-        if self.establish(&session, &authentication).await.is_err() {
+        if self
+            .establish(&session, &authentication, None)
+            .await
+            .is_err()
+        {
             return redirect(&self.settings.failure_url, "/");
         }
         let cookie = match (&self.remember_me, remember_me) {
@@ -433,15 +454,38 @@ impl FormLoginHandlers {
         cookie
     }
 
-    /// Logs `authentication` in to `session`, for a password login and an auto login alike: a
-    /// new session id, a new CSRF token when the check is on, the authentication, the principal
-    /// key and the revalidation time from one read of the clock, then the session limit. A
-    /// failed write logs one fixed text, invalidates the session and gives `Err`.
-    async fn establish(
+    /// Logs `authentication` in to `session`, for a password login, an auto login and an OAuth2
+    /// login alike: a new session id, a new CSRF token when the check is on, the
+    /// authentication, the principal key and the revalidation time from one read of the clock,
+    /// then the session limit. A failed write logs one fixed text, invalidates the session and
+    /// gives `Err`.
+    ///
+    /// `oauth2_registration` is the registration of an OAuth2 login and `None` for every other
+    /// login. It decides the principal key, which the per-user session index and the session
+    /// limit use: the bare principal for a password or remember-me login, and
+    /// `oauth2:<registration>:<principal>` for an OAuth2 login, so an OAuth2 user never shares
+    /// the sessions of a password user with the same name. A login that is not an OAuth2 login
+    /// also removes the OAuth2 tokens of an earlier login in the session.
+    ///
+    /// With the feature `oauth2`, a login that is not an OAuth2 login is refused when its
+    /// principal starts with `oauth2:`, so a password user can never take the key of an OAuth2
+    /// user. The refusal logs at debug level, leaves the session untouched and gives `Err`,
+    /// which the caller answers like any failed login.
+    pub(crate) async fn establish(
         &self,
         session: &Session,
         authentication: &Authentication,
+        oauth2_registration: Option<&str>,
     ) -> Result<(), ()> {
+        #[cfg(feature = "oauth2")]
+        if oauth2_registration.is_none() && authentication.principal().starts_with("oauth2:") {
+            tracing::debug!(
+                target: "oxbloom::security",
+                "a login whose principal starts with oauth2: was refused, because that prefix \
+                 is reserved for the session keys of OAuth2 users"
+            );
+            return Err(());
+        }
         // The id of the session the login replaces, read before the rotation removes it.
         let replaced_id = session.id();
         // A new id first, so a planted or stolen anonymous id never carries the login.
@@ -452,7 +496,13 @@ impl FormLoginHandlers {
         }
         // One read of the clock, so the login time and the revalidation time are the same.
         let now = self.clock.now();
-        let principal = authentication.principal().to_string();
+        let principal = match oauth2_registration {
+            Some(registration) => format!("oauth2:{registration}:{}", authentication.principal()),
+            None => {
+                session.remove_reserved_prefix(OAUTH2_TOKENS_PREFIX);
+                authentication.principal().to_string()
+            }
+        };
         if store_authentication(session, authentication, now).is_err()
             || store_principal(session, &principal, now).is_err()
         {
@@ -495,7 +545,7 @@ impl FormLoginHandlers {
         };
         // The same authentication a password login of this user builds, then the marker.
         let authentication = authentication_of(&user).remembered();
-        match self.establish(&session, &authentication).await {
+        match self.establish(&session, &authentication, None).await {
             Ok(()) => AutoLogin::LoggedIn(authentication),
             Err(()) => AutoLogin::Unavailable,
         }

@@ -1570,6 +1570,7 @@ dependencies = [
  "oxbloom-config",
  "oxbloom-core",
  "oxbloom-di",
+ "oxbloom-http-client",
  "oxbloom-logging",
  "oxbloom-macros",
  "oxbloom-security",
@@ -1625,6 +1626,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxbloom-http-client"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "form_urlencoded",
+ "http",
+ "oxbloom-config",
+ "oxbloom-tasks",
+ "rcgen",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-rustls",
+]
+
+[[package]]
 name = "oxbloom-logging"
 version = "0.1.0"
 dependencies = [
@@ -1670,10 +1689,11 @@ dependencies = [
  "oxbloom-config",
  "oxbloom-core",
  "oxbloom-di",
+ "oxbloom-http-client",
  "oxbloom-macros",
+ "oxbloom-test",
  "oxbloom-web",
  "rcgen",
- "reqwest",
  "rustls",
  "serde",
  "serde_json",
@@ -1727,6 +1747,9 @@ dependencies = [
 name = "oxbloom-test"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "aws-lc-rs",
+ "base64",
  "bytes",
  "http",
  "http-body-util",
@@ -1737,6 +1760,7 @@ dependencies = [
  "oxbloom-config",
  "oxbloom-core",
  "oxbloom-di",
+ "oxbloom-http-client",
  "oxbloom-security",
  "oxbloom-web",
  "rcgen",

@@ -327,6 +327,8 @@ pub struct SecurityFilterChain {
     challenges: Challenges,
     form_login: Option<FormLoginHandlers>,
     headers: HeadersConfig,
+    #[cfg(feature = "oauth2")]
+    oauth2_login: Option<crate::oauth2::OAuth2LoginHandlers>,
 }
 
 impl SecurityFilterChain {
@@ -347,7 +349,19 @@ impl SecurityFilterChain {
             challenges,
             form_login,
             headers,
+            #[cfg(feature = "oauth2")]
+            oauth2_login: None,
         }
+    }
+
+    /// Adds the OAuth2 login endpoints. `build` passes them only together with form login.
+    #[cfg(feature = "oauth2")]
+    pub(crate) fn with_oauth2_login(
+        mut self,
+        oauth2_login: Option<crate::oauth2::OAuth2LoginHandlers>,
+    ) -> Self {
+        self.oauth2_login = oauth2_login;
+        self
     }
 
     /// Whether the request is authorized. `HEAD` is evaluated as `GET` too, because the router
@@ -400,6 +414,16 @@ impl SecurityFilterChain {
         if let Some(form) = &self.form_login {
             if let Some(res) = form.handle_post(&req, self.manager.as_ref()).await {
                 return (res, false, None);
+            }
+            // The OAuth2 endpoints are open and answered here too. Their future is boxed, so it
+            // adds nothing to the size of this one.
+            #[cfg(feature = "oauth2")]
+            if let Some(answer) = self
+                .oauth2_login
+                .as_ref()
+                .and_then(|oauth2| oauth2.handle(&req, form))
+            {
+                return (answer.await, false, None);
             }
             if form.token_endpoint_request(&req)
                 && let Some(res) = form.token_endpoint(&req)
