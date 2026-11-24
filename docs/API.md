@@ -6707,6 +6707,35 @@ assert_eq!(idp.resolved_redirect_uri("https://app.example/"), "https://app.examp
 assert!(!format!("{idp:?}").contains("s3cret-value"));
 ```
 
+#### `OAuth2Client`, `AccessToken` and `TokenError`
+
+`OAuth2Client::new(settings, client)` gets access tokens for the application itself, with the client credentials grant (RFC 6749 section 4.4), at the providers of the registrations in an `OAuth2Settings`. `client_credentials(registration_id)` posts `grant_type=client_credentials` and the registration's scopes (no `scope` field when there are none) with the client authentication of the registration, and returns an `AccessToken { value: Secret<String>, expires_at: SystemTime }`. The token is cached per registration until `skew` (default 30 seconds, `.skew(Duration)`) before it expires. A token without `expires_in` counts as valid for 60 seconds, and a token that is within the skew of its expiry when it arrives (for example `expires_in = 0`) is returned but not kept, so the next call asks again. Callers that arrive while a request is in flight wait for it and take its outcome, so there is one request at a time per registration; a failed request is not cached and the next call tries again at once. `invalidate(registration_id)` drops the cached token (use it when a service refused the token early). A registration with `client-authentication = none` is refused with `TokenError::Invalid`, because a public client has nothing to authenticate with. `.clock(Arc<dyn Clock>)` replaces the system clock (tests pass a `ManualClock`). The client is `Send + Sync` and cheap to clone; the clones share the cache. Provider calls follow the same rules as the login: they go through the given `HttpClient` and carry the 10 second timeout described above.
+
+`TokenError` is non-exhaustive with fixed text and no URL, body or token: `UnknownRegistration`, `Provider(&'static str)` (an RFC 6749 error code from an allow-list, or `unknown`), `Http`, `Discovery`, `ReauthenticationRequired` (reserved for the refresh of a user token) and `Invalid`. `AccessToken`'s `Debug` shows the expiry and hides the token.
+
+```rust
+let fake = FakeProvider::new("https://idp.example.test");
+let mut settings = OAuth2Settings::default();
+settings.providers.insert("idp".into(), ProviderConfig {
+    issuer_uri: Some("https://idp.example.test".into()),
+    ..ProviderConfig::default()
+});
+settings.registrations.push(ClientRegistration {
+    id: "billing".into(),
+    client_id: "orders-service".into(),
+    client_secret: Some(Secret::new("orders-secret".into())),
+    scopes: vec!["invoices.read".into()],
+    redirect_uri: String::new(),
+    client_authentication: ClientAuthentication::Basic,
+    provider: "idp".into(),
+});
+let client = OAuth2Client::new(settings, fake.client());
+let token = client.client_credentials("billing").await?;
+client.client_credentials("billing").await?; // from the cache
+assert_eq!(fake.token_requests().len(), 1);
+assert!(!format!("{token:?}").contains(token.value.expose()));
+```
+
 #### The boot keys and the build errors in boot
 
 With the feature `oauth2` of `oxbloom-boot`, `SecurityAutoConfiguration` configures OAuth2 login when `security.oauth2.client.registration` has an entry (see `SecurityAutoConfiguration` in section 4.8). The two boot keys are `security.oauth2.base-url` (required then; an absolute `https` URL, `http` only for a loopback host, with no path beyond an optional `/`, no query and no fragment) and `security.oauth2.failure-url` (optional; a local path outside the two endpoints). The startup failure report names the key for every configuration error (for example `security.oauth2.client.registration.idp.redirect-uri` for a redirect URI that does not lead to the fixed callback path) and leaves out the value; `OAuth2LoginWithoutFormLogin` becomes a report that says to set `security.form-login.enabled = true`, and a missing `HttpClient` bean a report that names `HttpClientAutoConfiguration`. `SecurityAutoConfiguration::properties()` lists 14 `security.oauth2.*` keys with the feature.
@@ -6730,7 +6759,7 @@ user-name-attribute = "id"
 
 #### `FakeProvider`, `FakeUser`, `Fault` and `TokenRequest` (feature `oauth2` of `oxbloom-test`)
 
-`FakeProvider::new(issuer)` is an OpenID Connect provider over a `MockHttpClient` with a fresh ES256 key: `/.well-known/openid-configuration`, `/jwks`, `POST /token` and `/userinfo` under the issuer (not `/authorize`, where only the browser goes). `client()` returns its `Arc<MockHttpClient>` (always the same one), `issuer()`, `clock(Arc<dyn Clock>)` takes the token times from a test clock, `issue_code(FakeUser) -> String` registers a code that works once, and `token_requests()` returns the token requests (`TokenRequest::field`, `fields`, `authorization`; `Debug` hides the values). By default the token endpoint checks nothing but the code; the expectations turn on checks: `expect_nonce(nonce)` (the nonce of the id tokens of codes issued from now on), `expect_pkce(challenge)` (the S256 of `code_verifier` must equal it, else `invalid_grant`), `expect_redirect_uri(uri)` (exact match, else `invalid_grant`) and `expect_client_secret(secret)` (from Basic or `client_secret`, else `invalid_client`). `misbehave(Fault)` adds a fault that stays in force: `WrongIssuer`, `WrongAudience`, `WrongAzp`, `Expired`, `NotYetValid`, `WrongNonce`, `AlgNone`, `Hs256WithPublicKey`, `MissingSub`, `TokenEndpointError(code)`, `TokenEndpointStatus(status)`, `OversizedBody`, `DiscoveryIssuerMismatch` and `UserinfoError`. `FakeUser::new(sub)` with `email`, `name`, `attr(key, value)` and `scope`; its user info is the attributes plus `sub`.
+`FakeProvider::new(issuer)` is an OpenID Connect provider over a `MockHttpClient` with a fresh ES256 key: `/.well-known/openid-configuration`, `/jwks`, `POST /token` and `/userinfo` under the issuer (not `/authorize`, where only the browser goes). `client()` returns its `Arc<MockHttpClient>` (always the same one), `issuer()`, `clock(Arc<dyn Clock>)` takes the token times from a test clock, `issue_code(FakeUser) -> String` registers a code that works once, and `token_requests()` returns the token requests (`TokenRequest::field`, `fields`, `authorization`; `Debug` hides the values). By default the token endpoint checks nothing but the code; the expectations turn on checks: `expect_nonce(nonce)` (the nonce of the id tokens of codes issued from now on), `expect_pkce(challenge)` (the S256 of `code_verifier` must equal it, else `invalid_grant`), `expect_redirect_uri(uri)` (exact match, else `invalid_grant`) and `expect_client_secret(secret)` (from Basic or `client_secret`, else `invalid_client`). `misbehave(Fault)` adds a fault that stays in force: `WrongIssuer`, `WrongAudience`, `WrongAzp`, `Expired`, `NotYetValid`, `WrongNonce`, `AlgNone`, `Hs256WithPublicKey`, `MissingSub`, `TokenEndpointError(code)`, `TokenEndpointStatus(status)`, `OversizedBody`, `DiscoveryIssuerMismatch` and `UserinfoError`. `FakeUser::new(sub)` with `email`, `name`, `attr(key, value)` and `scope`; its user info is the attributes plus `sub`. The token endpoint serves the grants `authorization_code`, `client_credentials` (an access token only, with the requested `scope` echoed) and `refresh_token` (an unknown refresh token is `invalid_grant`). `access_token_lifetime(Option<u64>)` sets the `expires_in` of every access token (default 3600, `None` leaves it out) and `rotate_refresh_tokens(bool)` chooses whether a refresh issues a new refresh token (default) or keeps the old one valid; every access token is new and random.
 
 ```rust
 let fake = FakeProvider::new("https://idp.example.test");
