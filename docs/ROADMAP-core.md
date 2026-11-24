@@ -960,7 +960,7 @@ Rulings made during Slice 8:
 - `oxbloom-test` feature `security` enables an optional `oxbloom-security` dependency, because `with_authentication` names its types.
 - The `.stderr` files of the UI cases were generated and read by hand.
 
-### Security Slice 9 part A: HTTP client (`oxbloom-http-client`) — delivered, part B delivered, part C follows
+### Security Slice 9 part A: HTTP client (`oxbloom-http-client`) — delivered (Slice 9 done with parts B and C)
 Done on 2026-11-23 (group A of Slice 9, which is also the module slice M1); the design is the Slice 9 spec `2026-11-23-oauth2-design.md` (part A) and the plan is `2026-11-23-oauth2.md` (both local files under `docs/superpowers`, named here without a link), usage is in the guide chapter `docs/guide/26-http-client.md` and `docs/API.md` (section 4.14), the decisions are in ADR 0093. The next parts are OAuth2 and OIDC login (group B, guide chapter 27) and the OAuth2 client (group C, guide chapter 28); the roadmap chapter is now 29, renamed with `git mv`.
 
 Delivered:
@@ -996,7 +996,7 @@ Known minors after the Slice 9 part A reviews (none changes behavior):
 
 Gate numbers at the end of Slice 9 part A: `cargo test --workspace --all-features --no-fail-fast` 3708 passed, 0 failed, 8 ignored (3562 before part A; counted by summing the `test result` lines, doctests included); `make check-examples` 79 passed, 0 failed; clippy `-D warnings` and `cargo fmt --check` clean; the boot stack probes are unchanged at 238 KB passing and 237 KB overflowing (exit 101) with no features, and 239 KB passing and 238 KB overflowing (exit 101) with all features; the seventeen `cargo build -p oxbloom-boot --no-default-features` builds (none, `logging`, `web`, `security`, `ssl`, `actuator`, `actuator,logging`, `actuator,ssl`, `actuator,security`, `tasks`, `tasks,logging`, `tasks,ssl`, `tasks,security`, `tasks,actuator`, `http-client`, `http-client,ssl` and `http-client,security`), the four `oxbloom-security` builds with `--no-default-features` (no features, `di`, `jwks`, `di,jwks`) and the six `oxbloom-http-client` builds (no default features, `json`, `reqwest`, `retry`, default and all features) pass; `cargo tree -i ring --workspace --all-features` finds no `ring` (cargo prints "nothing to print"). The gate runs with `CARGO_INCREMENTAL=0` and removes the incremental cache between stages, because the 16 GB tmpfs overflowed twice with the new feature variants.
 
-### Security Slice 9 part B: OAuth2 and OpenID Connect login (`oxbloom-security`, `oxbloom-boot`, `oxbloom-test`) — delivered, part C follows
+### Security Slice 9 part B: OAuth2 and OpenID Connect login (`oxbloom-security`, `oxbloom-boot`, `oxbloom-test`) — delivered (part C delivered too)
 Done on 2026-11-24 (group B of Slice 9); the design is the Slice 9 spec `2026-11-23-oauth2-design.md` (part B) and the plan is `2026-11-23-oauth2.md` (both local files under `docs/superpowers`, named here without a link), usage is in the guide chapter `docs/guide/27-oauth2-login.md` and `docs/API.md` (section 4.15, and `SecurityAutoConfiguration` in section 4.8), the decisions are in ADR 0094. The next part is the OAuth2 client (group C, guide chapter 28).
 
 Delivered:
@@ -1032,6 +1032,45 @@ Known minors after the Slice 9 part B reviews (none changes behavior):
 - Task 9: the loop check of the failure URL is literal (dot segments and encodings are a developer misconfiguration, documented); untested: an OAuth2 login of registration B removes the tokens of registration A, and a remember-me auto login clears the tokens; `StoredTokens::remove` is dead code kept for part C.
 
 Gate numbers at the end of Slice 9 part B: `cargo test --workspace --all-features --no-fail-fast` 3997 passed, 0 failed, 8 ignored (3708 before part B; counted by summing the `test result` lines, doctests included); `make check-examples` 79 passed, 0 failed; clippy `-D warnings` and `cargo fmt --check` clean; the boot stack probes are unchanged at 238 KB passing and 237 KB overflowing (exit 101) with no features, and 239 KB passing and 238 KB overflowing (exit 101) with all features; the twenty-one `cargo build -p oxbloom-boot --no-default-features` builds (the seventeen of part A plus `oauth2`, `oauth2,ssl`, `oauth2,actuator` and `oauth2,tasks`), the eight `oxbloom-security` builds with `--no-default-features` (no features, `di`, `jwks`, `di,jwks`, `oauth2`, `oauth2,di`, `oauth2,jwks` and `oauth2,di,jwks`) and the six `oxbloom-http-client` builds pass; `cargo tree -i ring --workspace --all-features` finds no `ring` (cargo prints "nothing to print").
+
+### Security Slice 9 part C: OAuth2 client (`oxbloom-security`, `oxbloom-boot`, `oxbloom-test`) — done
+Done on 2026-11-24 (group C of Slice 9, which completes Slice 9); the design is the Slice 9 spec `2026-11-23-oauth2-design.md` (part C, "Delivery") and the plan is `2026-11-23-oauth2.md` (both local files under `docs/superpowers`, named here without a link), usage is in the guide chapter `docs/guide/28-oauth2-client.md` and `docs/API.md` (section 4.15, and `auto_configurations()` and `SecurityAutoConfiguration` in section 4.8), the decisions are in ADR 0095.
+
+Delivered:
+- `OAuth2Client` (feature `oauth2` of `oxbloom-security`) over the `OAuth2Settings` of the login and any `HttpClient`: `new`, `clock`, `skew` (default 30 seconds), `client_credentials` with one cached token per registration, single-flight requests whose failure is shared with the callers that waited and not kept, a 60 second validity for a token without `expires_in`, a token due on arrival returned once and not stored, and a public registration refused; `invalidate` and the compare-and-invalidate `invalidate_token` (ruling R22). `AccessToken` (`#[non_exhaustive]`, `Debug` hides the value) and `TokenError` (`Copy`, fixed text, an RFC 6749 error code allow-list, `ReauthenticationRequired`).
+- `access_token_for(&request, registration_id)`: the logged-in user's tokens from the session, behind the binding check (`oauth2.principal = true` and `oauth2.registration`), refreshed with the refresh token grant when due; a genuine `invalid_grant` or a due token without a refresh token removes the tokens and asks for a new login, other failures keep them. Refreshes are serialized per (registration, SHA-256 of the refresh token), and a bounded rotation record (256 records, 10 minutes on the client's clock) lets a concurrent request or a stale session copy adopt the rotated tokens instead of spending the token again (ruling R25); the record is checked again once the lock is held. The refresh runs in a spawned task, so a dropped request does not lose a rotated refresh token.
+- `ClientCredentialsInterceptor`, `BearerRetryClient` (one retry after a 401, with `invalidate_token`) and `UserTokenInterceptor` (built per request); a token failure becomes the fixed-text `HttpClientError::InvalidRequest`, with the reason at debug level.
+- `FakeProvider` serves the `client_credentials` and `refresh_token` grants, with `access_token_lifetime` and `rotate_refresh_tokens`.
+- Boot (feature `oauth2`): `OAuth2ClientAutoConfiguration` registers the `OAuth2Client` bean when `security.oauth2.client.registration` exists, over the `dyn HttpClient` bean (the same startup error as the login without one) and the clock bean, and backs off for an application bean; it is last in `auto_configurations()` and needs no ordering edge. The `security.oauth2` section is parsed once into a lazy bean that the login and the client share.
+- Boot-level tests in `crates/oxbloom-boot/tests/oauth2_client.rs` (the bean, no registrations, the application bean, client credentials through a `BearerRetryClient` in a handler with one token request for several calls, the refresh of a logged-in user's token through the bean with the session update, the binding check against a password login, the startup failures) and `oauth2_client_logs.rs` (no client secret or token in the debug logs of the client flows).
+- ADR 0095 (cache, user tokens, interceptors, boot wiring), the guide chapter 28, the API sections; the status and security guide pages, AGENT.md and both roadmaps are updated.
+
+Usage pointers: with the boot feature `oauth2`, configure a registration under `security.oauth2.client.registration.<id>` and inject `Arc<OAuth2Client>`; wrap the `dyn HttpClient` bean in a `BearerRetryClient` for calls as the application, and use `access_token_for` or a per-request `UserTokenInterceptor` for calls on behalf of the logged-in user. Tests use `FakeProvider` as the `HttpClient` bean and a `MockHttpClient` as the downstream service.
+
+Limits that users must know (also in the guide): a client-credentials-only registration still needs the login fields of its provider (ruling R24); with `SecurityAutoConfiguration` running, the registrations also turn on OAuth2 login, so form login, the session table and `security.oauth2.base-url` are required (or the application brings its own `SecurityFilterChain`); provider calls use the shared client with a 10 second timeout per request; a token lifetime no longer than the skew means a request on every call; a failed discovery is remembered for 5 seconds and a failed token request has no backoff; the rotation record is per process, holds copies of renewed tokens for up to 10 minutes, needs sticky sessions or a non-rotating provider behind a load balancer, and is not purged by a logout; login tokens without `expires_in` are never refreshed early; `UserTokenInterceptor` is per request and maps every token error to `InvalidRequest`; one 401 retry, also for a `POST`; the login and the client keep separate discovery caches; `TokenError` is `Copy`.
+
+Parked, not yet scheduled:
+- The device code grant.
+- Token exchange (RFC 8693).
+- Token revocation.
+- A persistent token store.
+- Dynamic client registration.
+- RP-initiated logout.
+- Provider presets.
+- One shared `MetadataCache` for the login and the client (each provider is discovered twice per hour).
+- Clamping the skew to the token lifetime.
+- Data-carrying `TokenError` variants (the enum is `Copy`).
+- Per-registration grant types and configuration validation for machine-to-machine providers (ruling R24), which would also let boot keep client-credentials-only registrations out of the login.
+- Warn-level logging of configuration-class failures (M6 of the part B review, ruling R19), a `ClientRegistration` constructor and `invalidate_all` helpers.
+- A cluster-wide rotation record.
+
+Known minors after the Slice 9 part C reviews (none changes behavior):
+- Task 11: the slot of a registration keeps the outcome of its last request, a token included, in memory until the next request (documented in ADR 0095).
+- Task 12: the branch where the refreshed tokens cannot be written to the session is untested; the doc-hidden test hooks `__waiting_callers`, `__refresh_waiters`, `__refresh_locks`, `__rotation_records` and `__test_support::session()` are public but not a stable API; the interceptors cannot tell a token failure from an invalid request by type (a dedicated `HttpClientError` variant could come later).
+- Task 13: with the record checked again at the lock, the adoption of a rotated record on `invalid_grant` is a backstop that no in-process sequence is known to reach, so its old test became the test of the adoption at the lock and the branch has no test of its own; a parse failure of `security.oauth2` is now a `DiError::Creation` for `OAuth2Settings` instead of `SecurityFilterChain` (the startup failure report is unchanged).
+- Resolved from part B: `StoredTokens::remove` is used by the refresh, no longer dead code.
+
+Gate numbers at the end of Slice 9 part C: to be filled by the controller.
 
 ### C10: Test support (`oxbloom-test`)
 
@@ -1092,7 +1131,7 @@ Deferred minors from the C10b reviews:
 6. **C4 Conditions and auto-configuration** (C4a, the mechanism, and C4b, auto-configuring the existing wiring with property metadata, done).
 7. **C10 Test support** (C10a, the context runner and clock, and C10b, `TestApp`, `TestClient` and slicing, done).
 8. **C7 SSL bundles** (done) and **C8 Availability, info and health** (done), **C9a Tasks and scheduling** (done) and **C9b Retry** (done).
-9. Security Slice 8 (method security, done) and 9 (OAuth2 login and client; part A, the HTTP client and module M1, is done), then `oxbloom-ai`, database, jobs and the rest of `IDEA.md`.
+9. Security Slice 8 (method security, done) and 9 (the HTTP client and module M1, OAuth2 login and the OAuth2 client, done). Next candidates, on the user's request: `oxbloom-ai`, the database module (`oxbloom-data`, M3), jobs and the rest of `IDEA.md`.
 10. **C11 Service connections** after the database and queue crates exist.
 
 ## Open questions for the design steps

@@ -58,7 +58,7 @@
     ["06-conditions", "branch"], ["07-logging", "file"], ["08-security", "shield"],
     ["09-errors", "alert"], ["10-json", "braces"], ["11-cors", "globe"],
     ["12-compression", "archive"], ["13-static", "folder"], ["14-example", "code"],
-    ["15-http", "network"], ["16-ssl", "shield"], ["17-actuator", "activity"], ["18-tasks", "clock"], ["19-password", "key"], ["20-sessions", "lock"], ["21-form-login", "shield"], ["22-csrf", "shield"], ["23-session-management", "lock"], ["24-remember-me", "key"], ["25-method-security", "shield"], ["26-http-client", "network"], ["27-oauth2-login", "key"], ["29-roadmap", "map"], ["API", "book"], ["ROADMAP-core", "map"],
+    ["15-http", "network"], ["16-ssl", "shield"], ["17-actuator", "activity"], ["18-tasks", "clock"], ["19-password", "key"], ["20-sessions", "lock"], ["21-form-login", "shield"], ["22-csrf", "shield"], ["23-session-management", "lock"], ["24-remember-me", "key"], ["25-method-security", "shield"], ["26-http-client", "network"], ["27-oauth2-login", "key"], ["28-oauth2-client", "key"], ["29-roadmap", "map"], ["API", "book"], ["ROADMAP-core", "map"],
     ["ROADMAP-modules", "map"],
   ];
   function iconFor(href) {

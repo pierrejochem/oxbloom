@@ -1,6 +1,6 @@
 # OAuth2 login
 
-Oxbloom can log users in through an external identity provider with the OAuth2 authorization code flow and PKCE. It supports OpenID Connect providers, whose id token says who the user is, and plain OAuth2 providers such as GitHub, whose user-info endpoint does. A user who comes back from the provider is an ordinary session user, exactly like after a form login: the session id changes, the `Authentication` is stored in the session, logout and the saved request work, and the session limit applies. This is security Slice 9, part B. It builds on [Form login](21-form-login.md#form-login), [Sessions](20-sessions.md#sessions) and the [HTTP client](26-http-client.md#http-client).
+Oxbloom can log users in through an external identity provider with the OAuth2 authorization code flow and PKCE. It supports OpenID Connect providers, whose id token says who the user is, and plain OAuth2 providers such as GitHub, whose user-info endpoint does. A user who comes back from the provider is an ordinary session user, exactly like after a form login: the session id changes, the `Authentication` is stored in the session, logout and the saved request work, and the session limit applies. This is security Slice 9, part B. It builds on [Form login](21-form-login.md#form-login), [Sessions](20-sessions.md#sessions) and the [HTTP client](26-http-client.md#http-client). To call other services with the tokens of the logged-in user, or with tokens of the application itself, see [OAuth2 client](28-oauth2-client.md#oauth2-client).
 
 ```toml
 # Cargo.toml

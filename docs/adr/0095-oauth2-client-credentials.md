@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-11-24
-- **Source:** the security Slice 9 design spec `2026-11-23-oauth2-design.md`, part C (a local file, not linked), its plan `2026-11-23-oauth2.md`, Tasks 11 and 12
+- **Source:** the security Slice 9 design spec `2026-11-23-oauth2-design.md`, part C (a local file, not linked), its plan `2026-11-23-oauth2.md`, Tasks 11, 12 and 13
 
 ## Context
 
@@ -42,6 +42,14 @@ Under normal operation a rotated refresh token is sent to the provider at most o
 
 **Interceptors.** `ClientCredentialsInterceptor` adds the client credentials token and never retries. `BearerRetryClient` wraps an `HttpClient`, adds the same token and, on a 401, drops the answer, calls `invalidate_token` with the refused token (ruling R22: compare-and-invalidate, never the unconditional `invalidate`, so a late 401 cannot discard a fresh token and N refused callers cause one refetch) and sends a clone of the request exactly once more. One retry only: a second 401 with a fresh token means the token is not the problem. The retry also applies to `POST` and other methods that are not idempotent, because a 401 means the service refused the request before processing it; a service that processes a request and then answers 401 must not be put behind this client. `UserTokenInterceptor` never retries, because a refused user token can only be fixed by the user. The interceptor trait returns an `HttpClientError`, so every `TokenError` becomes the fixed-text `HttpClientError::InvalidRequest` (no new variant was added to `oxbloom-http-client`); the `TokenError` is logged at debug level, and callers that need it call `client_credentials` or `access_token_for` first. The `Debug` output of the interceptors shows the registration id only.
 
+**No persistent token store.** Client credentials tokens live in the memory of the process, one per registration, and the user's tokens live in the session and end with it. There is no store that survives a restart or is shared between instances, and no token revocation at logout; both are parked.
+
+### Boot wiring (Task 13)
+
+**`OAuth2ClientAutoConfiguration` registers the client bean.** With the boot feature `oauth2`, it registers one `OAuth2Client` (fetched as `Arc<OAuth2Client>`) when the configuration has the table `security.oauth2.client.registration`, and backs off (`on_missing_bean`) when the application registers its own. The client sends its requests through the `dyn HttpClient` bean, takes the `dyn Clock` bean when there is one and keeps the default skew. Without an `HttpClient` bean the startup fails with the same `OAuth2LoginError::WithoutHttpClient` as the login, so the existing analyzer reports it; no new error kind was needed. It reads no keys of its own and adds no property metadata. It is last in `auto_configurations()`, after `HttpClientAutoConfiguration`, but needs no ordering edge: it does not condition on the `HttpClient` bean, it takes it as an optional argument that the container resolves when the client is created, as the login wiring does (tested with the bean of `HttpClientAutoConfiguration` and with an application bean).
+
+**The settings are parsed once.** `SecurityAutoConfiguration` registers the parsed `security.oauth2` section as a lazy, crate-private bean, and both the OAuth2 login of the chain and the client read it, so they cannot disagree about the registrations. The bean is lazy, so an application whose own `SecurityFilterChain` replaces the boot chain and that has no client does not parse the section, as before. When `SecurityAutoConfiguration` is excluded, the client parses the section itself with the same helper. A parse failure is a `DiError::Creation` for `OAuth2Settings` (it used to name `SecurityFilterChain`) whose source is the `ConfigError` naming the key; the analyzers find the `ConfigError` in the cause chain, so the report is unchanged.
+
 ## Consequences
 
 - Many tasks can call `client_credentials` freely: they share one token and one request per expiry.
@@ -55,3 +63,4 @@ Under normal operation a rotated refresh token is sent to the provider at most o
 - A login token without `expires_in` is used until the downstream service answers 401; it is not refreshed early.
 - Token errors in the interceptors cannot be told apart from an invalid request by type; the debug log and a direct call of the client tell them apart.
 - `UserTokenInterceptor` kept past its request finds an empty session and fails every call, by design.
+- A registration in the configuration feeds both the login and the client. With `SecurityAutoConfiguration` running, a client-only application still needs form login, the session table and `security.oauth2.base-url`, and every registration can start a login; an application without a login registers its own `SecurityFilterChain` or excludes `SecurityAutoConfiguration`. Together with the login fields that the configuration checks demand of every provider (ruling R24), this is parked for a per-registration grant types key.
