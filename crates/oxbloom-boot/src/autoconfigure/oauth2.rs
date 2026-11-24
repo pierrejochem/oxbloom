@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use oxbloom_config::{Config, ConfigError};
 use oxbloom_core::Clock;
+use oxbloom_di::DiError;
 use oxbloom_http_client::HttpClient;
 use oxbloom_security::{
     HttpSecurity, OAuth2Login, OAuth2Settings, SecurityBuildError, is_safe_redirect_target,
@@ -17,7 +18,7 @@ pub(crate) const BASE_URL: &str = "security.oauth2.base-url";
 /// Where a failed OAuth2 login goes; the failure URL of form login when unset.
 pub(crate) const FAILURE_URL: &str = "security.oauth2.failure-url";
 const SECTION: &str = "security.oauth2";
-const REGISTRATIONS: &str = "security.oauth2.client.registration";
+pub(crate) const REGISTRATIONS: &str = "security.oauth2.client.registration";
 /// The fixed path prefixes of the two OAuth2 login endpoints.
 const START_PREFIX: &str = "/oauth2/authorization/";
 const CALLBACK_PREFIX: &str = "/login/oauth2/code/";
@@ -47,6 +48,10 @@ struct RawClient {
 
 /// The checked `security.oauth2` section: the settings of the registrations and providers,
 /// and the two boot keys as written.
+///
+/// It is parsed once per application: `SecurityAutoConfiguration` registers it as a lazy bean
+/// (see [`oauth2_properties`]), and both the OAuth2 login of the chain and the OAuth2 client of
+/// `OAuth2ClientAutoConfiguration` read that bean, so they see the same registrations.
 pub(crate) struct OAuth2Properties {
     settings: OAuth2Settings,
     base_url: Option<String>,
@@ -83,16 +88,21 @@ impl OAuth2Properties {
         !self.settings.registrations.is_empty()
     }
 
+    /// The registrations and providers of `security.oauth2.client`.
+    pub(crate) fn settings(&self) -> &OAuth2Settings {
+        &self.settings
+    }
+
     /// Turns on `oauth2_login` with the registrations, the providers, the base URL, the failure
     /// URL, the client and the clock bean. Needs a registration (see
     /// [`has_registrations`](Self::has_registrations)), `base-url` and the client.
     pub(crate) fn apply(
-        self,
+        &self,
         http: HttpSecurity,
         client: Option<Arc<dyn HttpClient>>,
         clock: Option<Arc<dyn Clock>>,
     ) -> Result<HttpSecurity, OAuth2Failure> {
-        let base_url = self.base_url.ok_or_else(|| {
+        let base_url = self.base_url.clone().ok_or_else(|| {
             OAuth2Failure::Config(ConfigError::Missing {
                 key: BASE_URL.to_owned(),
             })
@@ -111,8 +121,8 @@ impl OAuth2Properties {
                 )));
             }
         }
-        let settings = self.settings;
-        let failure_url = self.failure_url;
+        let settings = self.settings.clone();
+        let failure_url = self.failure_url.clone();
         Ok(http.oauth2_login(move |_| {
             let mut login = OAuth2Login::new(client).base_url(&base_url);
             for registration in settings.registrations {
@@ -130,6 +140,14 @@ impl OAuth2Properties {
             login
         }))
     }
+}
+
+/// The bean factory of the shared [`OAuth2Properties`], and the parse that
+/// `OAuth2ClientAutoConfiguration` falls back to when `SecurityAutoConfiguration` is excluded.
+/// A bad section fails with a `DiError::Creation` for `OAuth2Settings` whose source is the
+/// `ConfigError` naming the key, never the value or the secret.
+pub(crate) fn oauth2_properties(config: Arc<Config>) -> Result<OAuth2Properties, DiError> {
+    OAuth2Properties::from_config(&config).map_err(DiError::creation_from::<OAuth2Settings>)
 }
 
 /// A startup failure of the OAuth2 part: a configuration error that names its key, or one of

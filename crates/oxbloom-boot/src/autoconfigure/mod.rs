@@ -14,6 +14,8 @@ mod http_client;
 mod jwt;
 #[cfg(feature = "oauth2")]
 mod oauth2;
+#[cfg(feature = "oauth2")]
+mod oauth2_client;
 #[cfg(feature = "security")]
 mod password;
 #[cfg(feature = "web")]
@@ -39,6 +41,8 @@ pub use jwt::JwtDecoderAutoConfiguration;
 pub(crate) use oauth2::{
     BASE_URL as OAUTH2_BASE_URL, FAILURE_URL as OAUTH2_FAILURE_URL, OAuth2LoginError,
 };
+#[cfg(feature = "oauth2")]
+pub use oauth2_client::OAuth2ClientAutoConfiguration;
 #[cfg(feature = "security")]
 pub use password::PasswordEncoderAutoConfiguration;
 #[cfg(feature = "web")]
@@ -64,8 +68,9 @@ use crate::autoconfig::AutoConfigurations;
 /// `SslAutoConfiguration`; with `actuator`, `ActuatorAutoConfiguration`; with `web`,
 /// `RequestLogAutoConfiguration` and then `WebServerAutoConfiguration` (after the others when
 /// several features are on); with `tasks`, `TasksAutoConfiguration` and then
-/// `RetryAutoConfiguration`; with `http-client`, `HttpClientAutoConfiguration` last. Remove
-/// one with [`exclude`](crate::OxbloomApplicationBuilder::exclude).
+/// `RetryAutoConfiguration`; with `http-client`, `HttpClientAutoConfiguration`; with `oauth2`,
+/// `OAuth2ClientAutoConfiguration` last. Remove one with
+/// [`exclude`](crate::OxbloomApplicationBuilder::exclude).
 ///
 /// # Examples
 ///
@@ -74,13 +79,14 @@ use crate::autoconfig::AutoConfigurations;
 /// use oxbloom_config::Config;
 ///
 /// // `security` adds four auto-configurations, `ssl` one, `actuator` one, `web` two, `tasks`
-/// // two and `http-client` one.
+/// // two, `http-client` one and `oauth2` one.
 /// let expected = 4 * usize::from(cfg!(feature = "security"))
 ///     + usize::from(cfg!(feature = "ssl"))
 ///     + usize::from(cfg!(feature = "actuator"))
 ///     + 2 * usize::from(cfg!(feature = "web"))
 ///     + 2 * usize::from(cfg!(feature = "tasks"))
-///     + usize::from(cfg!(feature = "http-client"));
+///     + usize::from(cfg!(feature = "http-client"))
+///     + usize::from(cfg!(feature = "oauth2"));
 /// assert_eq!(auto_configurations().len(), expected);
 ///
 /// # tokio::runtime::Builder::new_current_thread().build()?.block_on(async {
@@ -189,5 +195,7 @@ pub fn auto_configurations() -> AutoConfigurations {
         .add::<RetryAutoConfiguration>();
     #[cfg(feature = "http-client")]
     let list = list.add::<HttpClientAutoConfiguration>();
+    #[cfg(feature = "oauth2")]
+    let list = list.add::<OAuth2ClientAutoConfiguration>();
     list
 }

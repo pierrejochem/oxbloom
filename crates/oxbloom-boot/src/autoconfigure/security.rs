@@ -181,7 +181,9 @@ pub trait SecurityCustomizer: Send + Sync {
 /// `oauth2_login`: then the customizer wins and the base URL is not required. The keys are
 /// checked either way: an unknown key under `security.oauth2` or a bad registration fails the
 /// startup with a `ConfigError` that names the full key and never holds the value or the
-/// client secret. With registrations:
+/// client secret. The section is parsed once, into a lazy bean that the OAuth2 client of
+/// `OAuth2ClientAutoConfiguration` reads too, so the login and the client see the same
+/// registrations. With registrations:
 ///
 /// - `security.oauth2.base-url` is required (a `ConfigError::Missing`), and must be an absolute
 ///   `https` URL (`http` only for a loopback host) with no path beyond an optional `/`, no
@@ -256,6 +258,11 @@ pub struct SecurityAutoConfiguration;
 
 impl Configuration for SecurityAutoConfiguration {
     fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        // The `security.oauth2` section, parsed once for the OAuth2 login of the chain and the
+        // `OAuth2Client` of `OAuth2ClientAutoConfiguration`; lazy, so it is read only when one
+        // of them is created.
+        #[cfg(feature = "oauth2")]
+        let builder = builder.try_bean(super::oauth2::oauth2_properties).lazy();
         builder
             .try_bean(security_filter_chain)
             .on_missing_bean::<SecurityFilterChain>()
@@ -317,14 +324,13 @@ fn security_filter_chain(
     users: Option<Arc<dyn UserDetailsService>>,
     clock: Option<Arc<dyn Clock>>,
     #[cfg(feature = "oauth2")] client: Option<Arc<dyn oxbloom_http_client::HttpClient>>,
+    #[cfg(feature = "oauth2")] oauth2: Arc<super::oauth2::OAuth2Properties>,
 ) -> Result<SecurityFilterChain, DiError> {
     let creation = DiError::creation_from::<SecurityFilterChain>;
     #[cfg(not(feature = "oauth2"))]
     if has_oauth2_section(&config) {
         tracing::warn!(target: "oxbloom::boot", "{OAUTH2_WITHOUT_FEATURE}");
     }
-    #[cfg(feature = "oauth2")]
-    let oauth2 = super::oauth2::OAuth2Properties::from_config(&config).map_err(creation)?;
     #[cfg(feature = "oauth2")]
     let oauth2_clock = clock.clone();
     let basic = HttpBasicSettings::from_config(&config).map_err(creation)?;
