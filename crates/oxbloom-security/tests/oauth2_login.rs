@@ -1873,3 +1873,69 @@ async fn every_provider_request_of_a_login_has_a_10_second_timeout() {
         assert!(seen.iter().any(|s| s == kind), "{kind}: {seen:?}");
     }
 }
+
+/// Answers every request whose URL ends with `suffix` with a 302 to another host, and passes
+/// the others to the fake provider's client.
+struct Redirecting {
+    suffix: &'static str,
+    inner: OnceLock<Arc<oxbloom_test::MockHttpClient>>,
+    seen: Mutex<Vec<String>>,
+}
+
+const ELSEWHERE: &str = "https://elsewhere.example.test/stolen";
+
+#[async_trait]
+impl HttpClient for Redirecting {
+    async fn execute(&self, request: OutRequest) -> Result<OutResponse, HttpClientError> {
+        self.seen.lock().unwrap().push(request.url().to_owned());
+        if request.url().ends_with(self.suffix) {
+            let mut headers = http::HeaderMap::new();
+            headers.insert(header::LOCATION, ELSEWHERE.parse().unwrap());
+            return Ok(OutResponse::new(
+                http::StatusCode::FOUND,
+                headers,
+                Vec::new(),
+            ));
+        }
+        self.inner.get().unwrap().execute(request).await
+    }
+}
+
+#[tokio::test]
+async fn a_redirect_from_the_token_userinfo_or_jwks_endpoint_fails_the_login() {
+    for (suffix, id) in [("/token", "idp"), ("/userinfo", "plain"), ("/jwks", "idp")] {
+        let client = Arc::new(Redirecting {
+            suffix,
+            inner: OnceLock::new(),
+            seen: Mutex::new(Vec::new()),
+        });
+        let env = Env::with(Options {
+            client: Some(client.clone()),
+            ..Options::default()
+        });
+        client.inner.set(env.fake.client()).ok().unwrap();
+        let b = env.browser();
+        let res = b.log_in(id, alice().attr("login", "alice-gh")).await;
+        assert_failure(&res, suffix);
+        assert_eq!(b.whoami().await, "anonymous", "{suffix}");
+        assert_eq!(b.session().await["tokens"], Value::Null, "{suffix}");
+        let seen = client.seen.lock().unwrap().clone();
+        assert!(
+            seen.iter().any(|url| url.ends_with(suffix)),
+            "{suffix}: {seen:?}"
+        );
+        // The redirect target is never requested.
+        assert!(
+            !seen.iter().any(|url| url.starts_with(ELSEWHERE)),
+            "{suffix}: {seen:?}"
+        );
+        assert!(
+            !env.fake
+                .client()
+                .requests()
+                .iter()
+                .any(|r| r.url().starts_with(ELSEWHERE)),
+            "{suffix}"
+        );
+    }
+}
