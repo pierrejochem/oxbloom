@@ -3,7 +3,9 @@
 use super::ClientRegistration;
 
 /// Builds the URL the browser is sent to at the provider's authorization endpoint. Every
-/// parameter is percent-encoded; an existing query on the endpoint is kept.
+/// parameter is percent-encoded; an existing query on the endpoint is kept. An empty scope
+/// list leaves out the `scope` parameter, so the provider applies its default scopes (RFC 6749
+/// section 3.3); an OpenID Connect login always has `openid`, so it never sends an empty list.
 pub(crate) fn authorization_url(
     authorization_endpoint: &str,
     registration: &ClientRegistration,
@@ -17,11 +19,15 @@ pub(crate) fn authorization_url(
         ("response_type", "code".to_owned()),
         ("client_id", registration.client_id.clone()),
         ("redirect_uri", redirect_uri.to_owned()),
-        ("scope", scopes.join(" ")),
+    ];
+    if !scopes.is_empty() {
+        params.push(("scope", scopes.join(" ")));
+    }
+    params.extend([
         ("state", state.to_owned()),
         ("code_challenge", challenge.to_owned()),
         ("code_challenge_method", "S256".to_owned()),
-    ];
+    ]);
     if let Some(nonce) = nonce {
         params.push(("nonce", nonce.to_owned()));
     }
@@ -119,6 +125,26 @@ mod tests {
             "c",
         );
         assert!(url.starts_with("https://idp.example/a?tenant=1&response_type=code&"));
+    }
+
+    #[test]
+    fn an_empty_scope_list_omits_the_scope_parameter() {
+        let url = authorization_url(
+            "https://idp.example/a",
+            &registration(),
+            "https://x/cb",
+            &[],
+            "s",
+            None,
+            "c",
+        );
+        assert!(!url.contains("scope="), "{url}");
+        assert_eq!(
+            url,
+            "https://idp.example/a?response_type=code&client_id=my%20client%26id\
+             &redirect_uri=https%3A%2F%2Fx%2Fcb&state=s&code_challenge=c\
+             &code_challenge_method=S256"
+        );
     }
 
     #[test]

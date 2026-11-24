@@ -209,6 +209,65 @@ mod tests {
     }
 
     #[test]
+    fn take_on_malformed_json_under_the_key_is_none_and_cleans_up() {
+        let s = session();
+        pending("a").store(&s).unwrap();
+        s.set_reserved(&key_for("a"), &serde_json::json!({"registration": 7}))
+            .unwrap();
+        assert_eq!(Pending::take(&s, "a", t0(), TEN), None);
+        assert_eq!(s.get::<serde_json::Value>(&key_for("a")).unwrap(), None);
+        assert!(read_index(&s).is_empty());
+        assert_eq!(s.get::<Vec<String>>(INDEX_KEY).unwrap(), None);
+    }
+
+    #[test]
+    fn take_on_a_stale_record_outside_the_index_removes_it_and_keeps_the_index() {
+        let s = session();
+        pending("a").store(&s).unwrap();
+        // A record left behind without an index entry, as after a failed index write.
+        s.set_reserved(&key_for("stale"), &pending("stale"))
+            .unwrap();
+        assert_eq!(
+            Pending::take(&s, "stale", t0(), TEN),
+            Some(pending("stale"))
+        );
+        assert_eq!(s.get::<Pending>(&key_for("stale")).unwrap(), None);
+        assert_eq!(read_index(&s), vec!["a".to_owned()]);
+        assert_eq!(Pending::take(&s, "stale", t0(), TEN), None);
+    }
+
+    #[test]
+    fn the_index_holds_exactly_five_entries_after_the_sixth_state() {
+        let s = session();
+        for i in 1..=6 {
+            pending(&format!("s{i}")).store(&s).unwrap();
+        }
+        let index = read_index(&s);
+        assert_eq!(index.len(), MAX_PENDING);
+        assert_eq!(index, vec!["s2", "s3", "s4", "s5", "s6"]);
+    }
+
+    #[test]
+    fn a_now_earlier_than_created_at_counts_as_age_zero() {
+        let s = session();
+        pending("a").store(&s).unwrap();
+        let earlier = t0() - Duration::from_secs(3600);
+        assert_eq!(Pending::take(&s, "a", earlier, TEN), Some(pending("a")));
+    }
+
+    #[test]
+    fn debug_output_with_no_nonce_shows_none_and_hides_the_rest() {
+        let mut p = pending("the-state");
+        p.verifier = "the-verifier".into();
+        p.nonce = None;
+        let text = format!("{p:?}");
+        assert!(text.contains("nonce: None"), "{text}");
+        for secret in ["the-state", "the-verifier"] {
+            assert!(!text.contains(secret), "{text}");
+        }
+    }
+
+    #[test]
     fn debug_output_hides_verifier_state_and_nonce() {
         let mut p = pending("the-state");
         p.verifier = "the-verifier".into();
