@@ -9,7 +9,7 @@ oxbloom-security = { version = "0.1", features = ["oauth2"] }           # HttpSe
 oxbloom-test = { version = "0.1", features = ["oauth2"] }               # FakeProvider (dev-dependency)
 ```
 
-The boot feature `oauth2` turns on `security` and `http-client`, so the provider requests go through the `dyn HttpClient` bean of `HttpClientAutoConfiguration` (see [Configuration and the bean](26-http-client.md#configuration-and-the-bean)). The decisions are in [ADR 0094](../adr/0094-oauth2-login.md) and the public items are in the [API reference](../API.md#415-oauth2-login). The design is a local file under `docs/superpowers`, so this page names it without a link.
+The boot feature `oauth2` turns on `security` and `http-client`, so the provider requests go through the `dyn HttpClient` bean of `HttpClientAutoConfiguration` (see [Configuration and the bean](26-http-client.md#configuration-and-the-bean)). Without the feature, boot does not read `security.oauth2`; when the configuration has that section anyway, `SecurityAutoConfiguration` logs one warning at startup (target `oxbloom::boot`) that names the key and the feature. The decisions are in [ADR 0094](../adr/0094-oauth2-login.md) and the public items are in the [API reference](../API.md#415-oauth2-login). The design is a local file under `docs/superpowers`, so this page names it without a link.
 
 ## How a login runs
 

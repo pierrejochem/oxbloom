@@ -287,6 +287,19 @@ impl AutoConfiguration for SecurityAutoConfiguration {
     }
 }
 
+/// The startup warning when `security.oauth2` is configured but the feature `oauth2` is off,
+/// so the section would otherwise be ignored without a word. Fixed text, no value.
+#[cfg_attr(feature = "oauth2", allow(dead_code))]
+const OAUTH2_WITHOUT_FEATURE: &str = "the configuration has a security.oauth2 section, but the \
+     feature `oauth2` of oxbloom-boot is off, so OAuth2 login is not configured: enable the \
+     feature or remove the section";
+
+/// Whether the configuration holds any key under `security.oauth2`.
+#[cfg_attr(feature = "oauth2", allow(dead_code))]
+fn has_oauth2_section(config: &Config) -> bool {
+    !config.keys("security.oauth2").is_empty()
+}
+
 /// The chain from the customizers, or the closed default, plus the decoder when there is one
 /// and HTTP Basic over the provider beans when `security.http-basic.enabled` is `true`. The
 /// headers, the session limit, the revalidation, remember-me and the clock are set before the
@@ -306,6 +319,10 @@ fn security_filter_chain(
     #[cfg(feature = "oauth2")] client: Option<Arc<dyn oxbloom_http_client::HttpClient>>,
 ) -> Result<SecurityFilterChain, DiError> {
     let creation = DiError::creation_from::<SecurityFilterChain>;
+    #[cfg(not(feature = "oauth2"))]
+    if has_oauth2_section(&config) {
+        tracing::warn!(target: "oxbloom::boot", "{OAUTH2_WITHOUT_FEATURE}");
+    }
     #[cfg(feature = "oauth2")]
     let oauth2 = super::oauth2::OAuth2Properties::from_config(&config).map_err(creation)?;
     #[cfg(feature = "oauth2")]
@@ -864,3 +881,29 @@ static SECURITY: [PropertyMetadata; 29] = [
          the command line; set it in a file or an environment variable.",
     ),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_security_oauth2_section_is_found_whatever_it_holds() {
+        let has = |toml: &str| has_oauth2_section(&Config::from_str(toml).unwrap());
+        assert!(!has(""));
+        assert!(!has("[security]\nhttp-basic.enabled = true\n"));
+        assert!(has(
+            "[security.oauth2]\nbase-url = \"https://app.example\"\n"
+        ));
+        assert!(has(
+            "[security.oauth2.client.registration.idp]\nclient-id = \"app\"\n"
+        ));
+        // A key that only starts with the same letters is another section.
+        assert!(!has("[security]\noauth2x = 1\n"));
+    }
+
+    #[test]
+    fn the_warning_names_the_key_and_the_feature_and_no_value() {
+        assert!(OAUTH2_WITHOUT_FEATURE.contains("security.oauth2"));
+        assert!(OAUTH2_WITHOUT_FEATURE.contains("feature `oauth2`"));
+    }
+}

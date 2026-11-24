@@ -9,8 +9,10 @@ rust-version.workspace = true
 default = []
 web = ["dep:oxbloom-web", "dep:serde", "dep:tracing", "tokio/net"]
 # `oxbloom-web` for the `dyn Filter` of the session filter; `oxbloom-security` already depends on
-# it with the same features, so this builds nothing more.
-security = ["dep:oxbloom-security", "oxbloom-security/di", "dep:oxbloom-web"]
+# it with the same features, so this builds nothing more. `tracing` (already a dependency of
+# `oxbloom-security`) logs the warning for a `security.oauth2` section without the feature
+# `oauth2`.
+security = ["dep:oxbloom-security", "oxbloom-security/di", "dep:oxbloom-web", "dep:tracing"]
 logging = ["dep:oxbloom-logging", "dep:tracing", "oxbloom-actuator?/logging"]
 # With `security` as well, `security.jwt.jwks-ssl-bundle` builds the JWKS fetcher from a bundle,
 # which needs `oxbloom-security/jwks` (`ReqwestJwksFetcher::with_tls`).
