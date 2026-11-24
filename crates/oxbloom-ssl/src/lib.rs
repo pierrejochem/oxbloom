@@ -50,6 +50,7 @@ use arc_swap::ArcSwap;
 use oxbloom_config::Config;
 use oxbloom_core::{Clock, SystemClock};
 use rustls::client::ResolvesClientCert;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::server::{ClientHello, ResolvesServerCert};
 use rustls::sign::CertifiedKey;
 use rustls::{ClientConfig, ServerConfig, SignatureScheme};
@@ -595,6 +596,78 @@ impl SslBundle {
         self.inner.material.load().trust.is_some()
     }
 
+    /// All trust anchors of the bundle as concatenated `CERTIFICATE` PEM blocks, or `None`
+    /// when the bundle has no trust store ([`has_trust`](SslBundle::has_trust) is false).
+    ///
+    /// The blocks are encoded from the DER of the certificates the bundle loaded, so they work
+    /// for bundles from PEM and from PKCS#12. A reload changes the result. It is meant for
+    /// drivers that take PEM material, such as database clients.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_config::Config;
+    /// use oxbloom_ssl::SslBundles;
+    ///
+    /// # let generated = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])?;
+    /// # let ca_pem = generated.cert.pem();
+    /// let config = Config::from_str(&format!("[ssl.bundle.pem.client]\ntrust = '''\n{ca_pem}'''"))?;
+    /// let client = SslBundles::from_config(&config)?.get("client")?;
+    /// let pem = client.trust_pem().expect("the bundle has a trust store");
+    /// assert!(pem.starts_with(b"-----BEGIN CERTIFICATE-----"));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn trust_pem(&self) -> Option<Vec<u8>> {
+        let material = self.inner.material.load();
+        material.trust.as_ref()?;
+        Some(certificates_pem(&material.trust_certs))
+    }
+
+    /// The identity of the bundle as PEM: the certificate chain, leaf first, as concatenated
+    /// `CERTIFICATE` blocks, and the private key. `None` when the bundle has no identity
+    /// ([`has_identity`](SslBundle::has_identity) is false).
+    ///
+    /// The key keeps its own encoding under the matching label: a PKCS#8 key is written as
+    /// `PRIVATE KEY`, a PKCS#1 RSA key as `RSA PRIVATE KEY` and a SEC1 EC key as
+    /// `EC PRIVATE KEY`, so no key is ever converted or dropped. Drivers such as sqlx read all
+    /// three labels. A key from a PKCS#12 file is always PKCS#8.
+    ///
+    /// The second value is plain secret key material in an ordinary `Vec<u8>`: callers must
+    /// not log it, and should drop it as soon as the driver has read it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_config::Config;
+    /// use oxbloom_ssl::SslBundles;
+    ///
+    /// # let generated = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])?;
+    /// # let (cert, key) = (generated.cert.pem(), generated.signing_key.serialize_pem());
+    /// let config = Config::from_str(&format!(
+    ///     "[ssl.bundle.pem.web]\ncertificate = '''\n{cert}'''\nprivate-key = '''\n{key}'''"
+    /// ))?;
+    /// let web = SslBundles::from_config(&config)?.get("web")?;
+    /// let (chain, key) = web.identity_pem().expect("the bundle has an identity");
+    /// assert!(chain.starts_with(b"-----BEGIN CERTIFICATE-----"));
+    /// assert!(key.starts_with(b"-----BEGIN PRIVATE KEY-----"));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn identity_pem(&self) -> Option<(Vec<u8>, Vec<u8>)> {
+        let material = self.inner.material.load();
+        let identity = material.identity.as_ref()?;
+        let key = material.key.as_ref()?;
+        let label = match key {
+            PrivateKeyDer::Pkcs1(_) => "RSA PRIVATE KEY",
+            PrivateKeyDer::Sec1(_) => "EC PRIVATE KEY",
+            // `PrivateKeyDer` is non-exhaustive: every other kind is PKCS#8.
+            _ => "PRIVATE KEY",
+        };
+        Some((
+            certificates_pem(&identity.cert),
+            pem_block(label, key.secret_der()),
+        ))
+    }
+
     /// The subject and validity dates of every certificate of the bundle: the identity chain,
     /// leaf first, then the trust certificates, each distinct certificate once. A reload
     /// changes the list.
@@ -745,6 +818,22 @@ impl fmt::Debug for SslBundle {
             .field("trust", &self.has_trust())
             .finish()
     }
+}
+
+/// `certs` as concatenated `CERTIFICATE` PEM blocks.
+fn certificates_pem(certs: &[CertificateDer<'_>]) -> Vec<u8> {
+    certs
+        .iter()
+        .flat_map(|cert| pem_block("CERTIFICATE", cert.as_ref()))
+        .collect()
+}
+
+/// One PEM block with `label` around `der`.
+fn pem_block(label: &str, der: &[u8]) -> Vec<u8> {
+    // The label is one of ours and the encoder only fails on an invalid label.
+    pem_rfc7468::encode_string(label, pem_rfc7468::LineEnding::LF, der)
+        .expect("a valid PEM label")
+        .into_bytes()
 }
 
 /// Resolves the bundle's current identity at each handshake, on the server and the client

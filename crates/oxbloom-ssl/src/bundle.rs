@@ -19,6 +19,12 @@ use crate::validity::{self, CertValidity, Warnings};
 pub(crate) struct Material {
     pub(crate) identity: Option<Arc<CertifiedKey>>,
     pub(crate) trust: Option<Arc<RootCertStore>>,
+    /// The DER of the trust certificates, kept for the PEM accessors: a root store keeps only
+    /// the parsed anchors.
+    pub(crate) trust_certs: Vec<CertificateDer<'static>>,
+    /// The private key of the identity, kept for the PEM accessors: a certified key keeps only
+    /// a signing key.
+    pub(crate) key: Option<PrivateKeyDer<'static>>,
     /// The identity chain, leaf first, then the trust certificates, each certificate once.
     pub(crate) validity: Vec<CertValidity>,
     pub(crate) warned: Warnings,
@@ -28,16 +34,22 @@ impl Material {
     /// The material of `identity` and `trust`, where `trust_certs` are the certificates of
     /// the trust store.
     fn new(
-        identity: Option<Arc<CertifiedKey>>,
+        identity: Option<(Arc<CertifiedKey>, PrivateKeyDer<'static>)>,
         trust: Option<Arc<RootCertStore>>,
         trust_certs: &[CertificateDer<'static>],
     ) -> Material {
+        let (identity, key) = match identity {
+            Some((identity, key)) => (Some(identity), Some(key)),
+            None => (None, None),
+        };
         let chain = identity.iter().flat_map(|key| key.cert.iter());
         let validity = validity::of_certificates(chain.chain(trust_certs));
         let warned = Warnings::new(validity.len());
         Material {
             identity,
             trust,
+            trust_certs: trust_certs.to_vec(),
+            key,
             validity,
             warned,
         }
@@ -69,7 +81,8 @@ pub(crate) fn load(bundle: &BundleSource) -> Result<Material, SslError> {
                             bundle: bundle.name.clone(),
                             key: bundle.key("private-key"),
                         })?;
-                    Some(certified_key(bundle, chain, key)?)
+                    let kept = key.clone_key();
+                    Some((certified_key(bundle, chain, key)?, kept))
                 }
                 // Settings rejects one without the other.
                 _ => None,
@@ -263,7 +276,7 @@ fn pkcs12(bundle: &BundleSource, data: &[u8], password: &str) -> Result<Material
                 .into_iter()
                 .map(|i| certs[i].clone())
                 .collect();
-            Some(certified_key(bundle, chain, key())?)
+            Some((certified_key(bundle, chain, key())?, key()))
         }
     };
 

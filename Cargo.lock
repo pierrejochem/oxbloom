@@ -1964,6 +1964,7 @@ dependencies = [
  "oxbloom-core",
  "oxbloom-di",
  "p12-keystore",
+ "pem-rfc7468",
  "rcgen",
  "rustls",
  "rustls-pki-types",
