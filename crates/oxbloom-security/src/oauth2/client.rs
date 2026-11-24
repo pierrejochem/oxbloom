@@ -19,27 +19,62 @@ const DEFAULT_SKEW: Duration = Duration::from_secs(30);
 
 /// An access token and the time it expires. `Debug` shows the expiry and never the token.
 ///
+/// The struct is `#[non_exhaustive]`: read the fields, and get a token from
+/// [`OAuth2Client::client_credentials`].
+///
 /// # Examples
 ///
 /// ```
-/// use std::time::SystemTime;
-/// use oxbloom_config::Secret;
-/// use oxbloom_security::AccessToken;
-///
-/// let token = AccessToken {
-///     value: Secret::new("at-123".to_owned()),
-///     expires_at: SystemTime::now(),
+/// use std::sync::Arc;
+/// use oxbloom_security::{
+///     ClientAuthentication, ClientRegistration, OAuth2Client, OAuth2Settings, ProviderConfig,
 /// };
+/// use oxbloom_config::Secret;
+/// use oxbloom_test::FakeProvider;
+///
+/// # tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(async {
+/// let fake = FakeProvider::new("https://idp.example.test");
+/// let provider = ProviderConfig {
+///     issuer_uri: Some("https://idp.example.test".into()),
+///     ..ProviderConfig::default()
+/// };
+/// let registration = ClientRegistration {
+///     id: "billing".into(),
+///     client_id: "orders-service".into(),
+///     client_secret: Some(Secret::new("orders-secret".into())),
+///     scopes: Vec::new(),
+///     redirect_uri: String::new(),
+///     client_authentication: ClientAuthentication::Basic,
+///     provider: "idp".into(),
+/// };
+/// let settings = OAuth2Settings {
+///     registrations: vec![registration],
+///     providers: [("idp".to_owned(), provider)].into(),
+/// };
+/// let token = OAuth2Client::new(settings, fake.client()).client_credentials("billing").await?;
 /// // Use `value.expose()` for the `Authorization: Bearer` header only.
-/// assert_eq!(token.value.expose(), "at-123");
-/// assert!(!format!("{token:?}").contains("at-123"));
+/// let header = format!("Bearer {}", token.value.expose());
+/// assert!(header.len() > "Bearer ".len());
+/// assert!(token.expires_at > std::time::SystemTime::now());
+/// assert!(!format!("{token:?}").contains(token.value.expose()));
+/// # Ok::<(), oxbloom_security::TokenError>(())
+/// # })?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct AccessToken {
     /// The token, to be sent as `Authorization: Bearer <value>`.
     pub value: Secret<String>,
     /// When the provider says the token expires.
     pub expires_at: SystemTime,
+}
+
+impl AccessToken {
+    /// A token with this value and expiry; the client builds its tokens with it.
+    pub(crate) fn new(value: Secret<String>, expires_at: SystemTime) -> AccessToken {
+        AccessToken { value, expires_at }
+    }
 }
 
 impl fmt::Debug for AccessToken {
@@ -54,6 +89,9 @@ impl fmt::Debug for AccessToken {
 /// Why an access token could not be had. The text is fixed: no variant carries a URL, a
 /// token, a code or a response body. [`Provider`](Self::Provider) holds an RFC 6749 error code
 /// from an allow-list, or `unknown`.
+///
+/// The enum is `Copy` today, so a variant that carries data that is not `Copy` (a message, a
+/// source error) would be a breaking change; none is planned.
 ///
 /// # Examples
 ///
@@ -264,8 +302,11 @@ impl OAuth2Client {
     /// token without `expires_in` counts as valid for 60 seconds, and one that is within the
     /// skew of its expiry when it arrives (for example `expires_in = 0`) is returned but not
     /// kept, so the next call asks again. Callers that arrive while a request is in flight
-    /// wait for it, so there is one request at a time per registration; a failed request is
-    /// not cached and the next call tries again at once.
+    /// wait for it, so there is one request at a time per registration; a failed token
+    /// request is not cached and has no backoff, so the next call tries again at once. The
+    /// provider metadata is different: a failed discovery is remembered for 5 seconds by the
+    /// metadata cache of the client, so within 5 seconds of a failed discovery a call can
+    /// return [`TokenError::Discovery`] (or `Http`) without any request.
     ///
     /// # Errors
     ///
@@ -315,9 +356,11 @@ impl OAuth2Client {
             .await
     }
 
-    /// Drops the cached token of `registration_id`, so the next call to
-    /// [`client_credentials`](Self::client_credentials) asks the provider for a new one. Call
-    /// it when a service refused the token before it expired. An unknown id is ignored.
+    /// Drops the cached token of `registration_id` whatever it is, so the next call to
+    /// [`client_credentials`](Self::client_credentials) asks the provider for a new one. Use it
+    /// for an explicit full reset; to react to a service that refused a token, use
+    /// [`invalidate_token`](Self::invalidate_token). A request that is in flight still answers
+    /// its callers, but its token is not kept. An unknown id is ignored.
     ///
     /// # Examples
     ///
@@ -331,6 +374,72 @@ impl OAuth2Client {
     /// ```
     pub fn invalidate(&self, registration_id: &str) {
         self.cache.invalidate(registration_id);
+    }
+
+    /// Drops the cached token of `registration_id` only if it is `refused`: the same expiry and
+    /// the same value (compared in constant time). Call it when a service answered 401 to a
+    /// request that carried `refused` (an HTTP interceptor that adds the token to requests is the
+    /// natural place).
+    ///
+    /// When the cached token is a different one, because another caller already replaced it,
+    /// or there is none, nothing happens. So a late 401 for an old token cannot discard a
+    /// fresh token, and many callers that were refused with the same token cause one new
+    /// request between them. An unknown id is ignored.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use oxbloom_config::Secret;
+    /// use oxbloom_security::{
+    ///     ClientAuthentication, ClientRegistration, OAuth2Client, OAuth2Settings, ProviderConfig,
+    /// };
+    /// use oxbloom_test::FakeProvider;
+    ///
+    /// # tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(async {
+    /// let fake = FakeProvider::new("https://idp.example.test");
+    /// let provider = ProviderConfig {
+    ///     issuer_uri: Some("https://idp.example.test".into()),
+    ///     ..ProviderConfig::default()
+    /// };
+    /// let registration = ClientRegistration {
+    ///     id: "billing".into(),
+    ///     client_id: "orders-service".into(),
+    ///     client_secret: Some(Secret::new("orders-secret".into())),
+    ///     scopes: Vec::new(),
+    ///     redirect_uri: String::new(),
+    ///     client_authentication: ClientAuthentication::Basic,
+    ///     provider: "idp".into(),
+    /// };
+    /// let settings = OAuth2Settings {
+    ///     registrations: vec![registration],
+    ///     providers: [("idp".to_owned(), provider)].into(),
+    /// };
+    /// let client = OAuth2Client::new(settings, fake.client());
+    /// let refused = client.client_credentials("billing").await?;
+    /// // The service answered 401 to `refused`: the next call gets a new token.
+    /// client.invalidate_token("billing", &refused);
+    /// let fresh = client.client_credentials("billing").await?;
+    /// assert_ne!(refused.value.expose(), fresh.value.expose());
+    /// // A second, late 401 for the old token does not discard the fresh one.
+    /// client.invalidate_token("billing", &refused);
+    /// let again = client.client_credentials("billing").await?;
+    /// assert_eq!(fresh.value.expose(), again.value.expose());
+    /// assert_eq!(fake.token_requests().len(), 2);
+    /// # Ok::<(), oxbloom_security::TokenError>(())
+    /// # })?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn invalidate_token(&self, registration_id: &str, refused: &AccessToken) {
+        self.cache.invalidate_token(registration_id, refused);
+    }
+
+    /// The number of callers of `registration_id` waiting for a token request: a test hook,
+    /// not a stable API.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn __waiting_callers(&self, registration_id: &str) -> usize {
+        self.cache.waiting(registration_id)
     }
 
     /// One token request: resolves the provider metadata, then asks the token endpoint.
@@ -368,10 +477,7 @@ impl OAuth2Client {
             .expires_at(now)
             .or_else(|| now.checked_add(DEFAULT_VALIDITY))
             .unwrap_or(now);
-        AccessToken {
-            value: tokens.access_token,
-            expires_at,
-        }
+        AccessToken::new(tokens.access_token, expires_at)
     }
 }
 

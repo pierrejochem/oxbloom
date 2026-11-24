@@ -643,3 +643,31 @@ async fn an_unknown_refresh_token_is_invalid_grant() {
     let (_, body) = token_body(&fake, grant(&[("grant_type", "password")])).await;
     assert_eq!(body["error"], "unsupported_grant_type");
 }
+
+#[tokio::test]
+async fn a_refresh_token_presented_by_another_client_is_invalid_grant() {
+    let fake = FakeProvider::new(ISSUER);
+    let code = fake.issue_code(FakeUser::new("alice"));
+    // Issued to the client `app`.
+    let (_, first) = token_body(&fake, token_request(&code)).await;
+    let refresh = first["refresh_token"].as_str().unwrap().to_owned();
+    let other = Request::post(format!("{ISSUER}/token"))
+        .header(
+            "authorization",
+            &format!("Basic {}", STANDARD.encode("intruder:secret")),
+        )
+        .body(Body::Form(vec![
+            ("grant_type".into(), "refresh_token".into()),
+            ("refresh_token".into(), refresh.clone()),
+        ]));
+    let (status, body) = token_body(&fake, other).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "invalid_grant");
+    // The refusal did not use the token up: its owner can still refresh.
+    let (status, _) = token_body(
+        &fake,
+        grant(&[("grant_type", "refresh_token"), ("refresh_token", &refresh)]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+}

@@ -1020,6 +1020,7 @@ Parked, not yet scheduled:
 - A configurable callback path, and deployments under a path prefix (a base URL with a path).
 - A default login page that lists the registrations.
 - HEAD support on the two endpoints.
+- One shared `MetadataCache` for `OAuth2Login` and `OAuth2Client` (each has its own, so both together discover a provider twice per hour); clamping the client's token skew to the lifetime the provider issues; data-carrying `TokenError` variants (the enum is `Copy`); configuration validation for machine-to-machine providers (a provider used only for client credentials currently needs `authorization-uri`, `user-info-uri` and `user-name-attribute`).
 - PS256 in the JWKS key lookup (and so in the id token algorithms).
 - Authority mapping per registration (`SCOPE_*` tied to a provider, custom authority claims).
 

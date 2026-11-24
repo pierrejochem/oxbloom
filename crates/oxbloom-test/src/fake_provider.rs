@@ -377,16 +377,23 @@ struct Shared {
 ///
 /// It generates an ES256 key pair at construction and answers, under the issuer:
 /// `/.well-known/openid-configuration` (the discovery document), `/jwks` (the public key),
-/// `POST /token` (the grants `authorization_code`, `client_credentials` and `refresh_token`) and `/userinfo` (the user info for a bearer
-/// access token). `/authorize` is not served: the browser goes there, not the client.
+/// `POST /token` (the grants `authorization_code`, `client_credentials` and `refresh_token`)
+/// and `/userinfo` (the user info for a bearer access token). `/authorize` is not served: the
+/// browser goes there, not the client.
 ///
 /// [`issue_code`](Self::issue_code) registers a code for a [`FakeUser`]; the next token request
 /// with that code gets an access token, a refresh token and an id token whose `aud` is the
 /// client id of the token request (from HTTP Basic or the `client_id` field) and whose `nonce`
 /// is the one set with [`expect_nonce`](Self::expect_nonce) before the code was issued, or,
 /// when none was set then, the one set when the code is exchanged. A code works once; an
-/// unknown code gets `invalid_grant`. A `client_credentials` request gets an access token only (no refresh token, no id token) and echoes the requested `scope`; a `refresh_token` request with a refresh token the fake issued gets a new access token and, by default, a new refresh token (see [`rotate_refresh_tokens`](Self::rotate_refresh_tokens)), and any other refresh token gets `invalid_grant`. Every access token is new and random, and [`access_token_lifetime`](Self::access_token_lifetime) sets the `expires_in` of all of them. [`misbehave`](Self::misbehave) adds a [`Fault`]. The key
-/// id, the codes and the tokens are random per instance.
+/// unknown code gets `invalid_grant`. A `client_credentials` request gets an access token only
+/// (no refresh token, no id token) and echoes the requested `scope`. A `refresh_token` request
+/// with a refresh token the fake issued to the same client gets a new access token and, by
+/// default, a new refresh token (see [`rotate_refresh_tokens`](Self::rotate_refresh_tokens));
+/// any other refresh token gets `invalid_grant`. Every access token is new and random, and
+/// [`access_token_lifetime`](Self::access_token_lifetime) sets the `expires_in` of all of them.
+/// [`misbehave`](Self::misbehave) adds a [`Fault`]. The key id, the codes and the tokens are
+/// random per instance.
 ///
 /// By default the token endpoint does not check the PKCE verifier, the redirect URI or the
 /// client secret. [`expect_pkce`](Self::expect_pkce),
