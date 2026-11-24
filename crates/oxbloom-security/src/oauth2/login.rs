@@ -10,6 +10,7 @@ use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use http::{HeaderValue, StatusCode, header};
@@ -394,6 +395,7 @@ impl OAuth2Login {
             tokens: TokenEndpoint::new(client.clone()),
             id_tokens: IdTokenValidator::new(client.clone()),
             client,
+            no_session_logged: AtomicBool::new(false),
         })
     }
 }
@@ -420,18 +422,12 @@ pub(crate) struct OAuth2LoginHandlers {
     metadata: MetadataCache,
     tokens: TokenEndpoint,
     id_tokens: IdTokenValidator,
+    /// Whether the missing session filter was logged.
+    no_session_logged: AtomicBool,
 }
 
 /// The future of an answer of the OAuth2 endpoints, boxed so the chain future stays small.
 pub(crate) type Answer<'a> = Pin<Box<dyn Future<Output = Response> + Send + 'a>>;
-
-/// Logs that OAuth2 login found no session, which means the application has no session filter.
-fn no_session_error() {
-    tracing::error!(
-        target: "oxbloom::security",
-        "OAuth2 login has no session: add a SessionFilter to the application"
-    );
-}
 
 /// A 302 to `target`, with `Cache-Control: no-store`.
 fn found(target: HeaderValue) -> Response {
@@ -560,6 +556,18 @@ impl OAuth2LoginHandlers {
         })
     }
 
+    /// Logs, once per login settings, that OAuth2 login found no session, which means the
+    /// application has no session filter. Once, because every unauthenticated request to the
+    /// endpoints would log it again.
+    fn no_session_error(&self) {
+        if !self.no_session_logged.swap(true, Ordering::Relaxed) {
+            tracing::error!(
+                target: "oxbloom::security",
+                "OAuth2 login has no session: add a SessionFilter to the application"
+            );
+        }
+    }
+
     fn failure_redirect(&self) -> Response {
         found(
             HeaderValue::from_str(&self.failure_url)
@@ -615,7 +623,7 @@ impl OAuth2LoginHandlers {
         registration: &ClientRegistration,
     ) -> Result<Response, OAuth2Error> {
         let Some(session) = req.session() else {
-            no_session_error();
+            self.no_session_error();
             return Err(OAuth2Error::Pending);
         };
         let (provider, metadata) = self.metadata_for(registration).await?;
@@ -677,7 +685,7 @@ impl OAuth2LoginHandlers {
             .filter(|state| is_valid_state(state))
             .ok_or(OAuth2Error::Pending)?;
         let Some(session) = req.session() else {
-            no_session_error();
+            self.no_session_error();
             return Err(OAuth2Error::Pending);
         };
         // The pending login is removed before anything else, so a state works once.

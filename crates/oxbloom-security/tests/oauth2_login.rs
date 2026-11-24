@@ -1794,3 +1794,52 @@ async fn a_password_user_named_in_the_oauth2_namespace_cannot_log_in() {
     assert_eq!(location(&res), "/");
     assert_eq!(other.whoami().await, "alice");
 }
+
+#[test]
+fn the_missing_session_filter_is_logged_once_per_login_not_per_request() {
+    let buffer = LogBuffer::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(buffer.clone())
+        .with_max_level(tracing::Level::TRACE)
+        .with_ansi(false)
+        .finish();
+    let fake = FakeProvider::new(ISSUER);
+    let chain = HttpSecurity::new()
+        .form_login(|f| f)
+        .oauth2_login(|_| {
+            OAuth2Login::new(fake.client())
+                .registration(registration("idp", "idp", &[]))
+                .provider("idp", oidc_provider())
+                .base_url(BASE)
+        })
+        .authorize(|a| a.any_request().authenticated())
+        .build()
+        .unwrap();
+    let app = App::new().filter(chain);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    tracing::subscriber::with_default(subscriber, || {
+        runtime.block_on(async {
+            for target in [
+                "/oauth2/authorization/idp",
+                "/oauth2/authorization/idp",
+                "/login/oauth2/code/idp?state=abc&code=x",
+            ] {
+                let (path, query) = target.split_once('?').unwrap_or((target, ""));
+                let mut req = Request::new(HttpMethod::Get, path);
+                req.query = (!query.is_empty()).then(|| query.to_owned());
+                let res = app.handle(req).await;
+                // Every request still fails to the failure URL.
+                assert_failure(&res, target);
+            }
+        });
+    });
+    let text = buffer.text();
+    let errors = text
+        .lines()
+        .filter(|l| l.contains("OAuth2 login has no session"))
+        .count();
+    assert_eq!(errors, 1, "{text}");
+}
