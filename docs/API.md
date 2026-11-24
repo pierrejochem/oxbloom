@@ -6709,9 +6709,9 @@ assert!(!format!("{idp:?}").contains("s3cret-value"));
 
 #### `OAuth2Client`, `AccessToken` and `TokenError`
 
-`OAuth2Client::new(settings, client)` gets access tokens for the application itself, with the client credentials grant (RFC 6749 section 4.4), at the providers of the registrations in an `OAuth2Settings`. `client_credentials(registration_id)` posts `grant_type=client_credentials` and the registration's scopes (no `scope` field when there are none) with the client authentication of the registration, and returns an `AccessToken { value: Secret<String>, expires_at: SystemTime }`. The token is cached per registration until `skew` (default 30 seconds, `.skew(Duration)`) before it expires. A token without `expires_in` counts as valid for 60 seconds, and a token that is within the skew of its expiry when it arrives (for example `expires_in = 0`) is returned but not kept, so the next call asks again. Callers that arrive while a request is in flight wait for it and take its outcome, so there is one request at a time per registration; a failed token request is not cached and has no backoff, so the next call tries again at once; provider discovery keeps the 5 second failure backoff of its metadata cache, so within 5 seconds of a failed discovery a call can return `TokenError::Discovery` or `Http` without a request. `invalidate_token(registration_id, &refused)` drops the cached token only if it is the refused one (same expiry, constant-time equal value): call it when a service answered 401 to a request that carried `refused`; a late 401 for an old token does not discard a fresh one, and many callers refused with the same token cause one refetch (the interceptor of Task 12 uses it). `invalidate(registration_id)` is the unconditional reset. `AccessToken` is `#[non_exhaustive]`: read `value` and `expires_at`. The client has its own metadata cache, not the one of the login. A registration with `client-authentication = none` is refused with `TokenError::Invalid`, because a public client has nothing to authenticate with. `.clock(Arc<dyn Clock>)` replaces the system clock (tests pass a `ManualClock`). The client is `Send + Sync` and cheap to clone; the clones share the cache. Provider calls follow the same rules as the login: they go through the given `HttpClient` and carry the 10 second timeout described above.
+`OAuth2Client::new(settings, client)` gets access tokens for the application itself, with the client credentials grant (RFC 6749 section 4.4), at the providers of the registrations in an `OAuth2Settings`. `client_credentials(registration_id)` posts `grant_type=client_credentials` and the registration's scopes (no `scope` field when there are none) with the client authentication of the registration, and returns an `AccessToken { value: Secret<String>, expires_at: SystemTime }`. The token is cached per registration until `skew` (default 30 seconds, `.skew(Duration)`) before it expires. A token without `expires_in` counts as valid for 60 seconds, and a token that is within the skew of its expiry when it arrives (for example `expires_in = 0`) is returned but not kept, so the next call asks again. Callers that arrive while a request is in flight wait for it and take its outcome, so there is one request at a time per registration; a failed token request is not cached and has no backoff, so the next call tries again at once; provider discovery keeps the 5 second failure backoff of its metadata cache, so within 5 seconds of a failed discovery a call can return `TokenError::Discovery` or `Http` without a request. `invalidate_token(registration_id, &refused)` drops the cached token only if it is the refused one (same expiry, constant-time equal value): call it when a service answered 401 to a request that carried `refused`; a late 401 for an old token does not discard a fresh one, and many callers refused with the same token cause one refetch (`BearerRetryClient` uses it). `invalidate(registration_id)` is the unconditional reset. `AccessToken` is `#[non_exhaustive]`: read `value` and `expires_at`. The client has its own metadata cache, not the one of the login. A registration with `client-authentication = none` is refused with `TokenError::Invalid`, because a public client has nothing to authenticate with. `.clock(Arc<dyn Clock>)` replaces the system clock (tests pass a `ManualClock`). The client is `Send + Sync` and cheap to clone; the clones share the cache. Provider calls follow the same rules as the login: they go through the given `HttpClient` and carry the 10 second timeout described above.
 
-`TokenError` is non-exhaustive with fixed text and no URL, body or token: `UnknownRegistration`, `Provider(&'static str)` (an RFC 6749 error code from an allow-list, or `unknown`), `Http`, `Discovery`, `ReauthenticationRequired` (reserved for the refresh of a user token) and `Invalid`. `AccessToken`'s `Debug` shows the expiry and hides the token.
+`TokenError` is non-exhaustive with fixed text and no URL, body or token: `UnknownRegistration`, `Provider(&'static str)` (an RFC 6749 error code from an allow-list, or `unknown`), `Http`, `Discovery`, `ReauthenticationRequired` (the user of a request has to log in again, from `access_token_for`) and `Invalid`. `AccessToken`'s `Debug` shows the expiry and hides the token.
 
 ```rust
 let fake = FakeProvider::new("https://idp.example.test");
@@ -6735,6 +6735,43 @@ client.client_credentials("billing").await?; // from the cache
 assert_eq!(fake.token_requests().len(), 1);
 assert!(!format!("{token:?}").contains(token.value.expose()));
 client.invalidate_token("billing", &token); // after a 401 for `token`
+```
+
+#### `OAuth2Client::access_token_for`: the logged-in user's access token
+
+`access_token_for(&request, registration_id)` returns the access token of the user of an incoming `oxbloom_web::Request`: the token that the OAuth2 login stored in the session. Use it in a handler that calls an API of the provider on behalf of the user. It refuses with `TokenError::ReauthenticationRequired` unless the current authentication of the request is the OAuth2 login of that registration (`details` with `oauth2.principal = true` and `oauth2.registration = registration_id`), so tokens never reach a later password login in the same session or a user of another registration. The stored token is returned while its expiry minus the skew is in the future (a token stored without an expiry is used as it is and reported to expire 60 seconds from now). A due token is refreshed with `grant_type=refresh_token`, the stored refresh token and no `scope`, with the client authentication of the registration (a public client sends its `client_id` only) and the 10 second timeout; the new tokens go to the session (a new refresh token replaces the old one, a missing one keeps it, the id token and the scope of the login are kept). A new token without `expires_in` counts as valid for 60 seconds; with `expires_in = 0` it is returned once and the next call refreshes again. `ReauthenticationRequired` also comes for a request without a session, a session without tokens of the registration, a due token without a refresh token (the token is removed), and a refresh answered with `invalid_grant` (the tokens are removed); any other refresh failure leaves the tokens untouched and returns `Provider`, `Http`, `Discovery` or `Invalid`. Refreshes of one session and registration are serialized: a call that waited takes the tokens of the refresh it waited for, also from another request of the same session with its own copy of the session, so a rotated refresh token is never sent twice. The session filter stores the new tokens when the request ends.
+
+```rust
+async fn authorization(client: &OAuth2Client, req: &Request) -> Result<String, TokenError> {
+    let token = client.access_token_for(req, "idp").await?;
+    Ok(format!("Bearer {}", token.value.expose()))
+}
+// A request without the OAuth2 login of `idp` gets no token.
+let anonymous = Request::new(HttpMethod::Get, "/orders");
+assert_eq!(
+    authorization(&client, &anonymous).await.unwrap_err(),
+    TokenError::ReauthenticationRequired
+);
+```
+
+#### `ClientCredentialsInterceptor`, `BearerRetryClient` and `UserTokenInterceptor`
+
+Three ways to add `Authorization: Bearer <token>` to outgoing `oxbloom-http-client` requests; each replaces an `Authorization` header that is already there. `ClientCredentialsInterceptor::new(client, registration_id)` is an `Interceptor` for an `InterceptedClient` that adds the application's own token from `client_credentials`; it never retries. `BearerRetryClient::new(inner, client, registration_id)` is an `HttpClient` that adds the same token and, when the service answers 401, drops the body of that answer, calls `invalidate_token` with the refused token and sends a clone of the request exactly once more with a fresh token; the answer of the retry is returned as it is, and any other answer or error of `inner` is returned at once. The retry also covers `POST` and other methods that are not idempotent, because a 401 means the service did not process the request. `UserTokenInterceptor::for_request(client, &request, registration_id)` is an `Interceptor` that adds the token of the user of one incoming request from `access_token_for` (with its refresh and its authentication check); build it per incoming request, use it while that request is handled, and expect no retry. When no token can be had, the outgoing request is not sent and the error is `HttpClientError::InvalidRequest` with its fixed text (the reason is logged at debug level): call `client_credentials` or `access_token_for` first when you need the `TokenError`, for example to send the user to the login on `ReauthenticationRequired`. `Debug` of all three shows the registration id only.
+
+```rust
+let oauth2 = Arc::new(OAuth2Client::new(settings, fake.client()));
+// The application's own token, with one retry after a 401.
+let billing = BearerRetryClient::new(api.clone(), oauth2.clone(), "billing");
+let response = billing.execute(Request::get("https://billing.example.test/invoices")).await?;
+
+// The same token through an interceptor chain, without a retry.
+let http = InterceptedClient::new(api.clone())
+    .with(Arc::new(ClientCredentialsInterceptor::new(oauth2.clone(), "billing")));
+
+// In a handler: the logged-in user's token for a call to the provider's API.
+let user_http = InterceptedClient::new(api.clone())
+    .with(Arc::new(UserTokenInterceptor::for_request(oauth2.clone(), &req, "idp")));
+let profile = user_http.execute(Request::get("https://api.example.test/me")).await?;
 ```
 
 #### The boot keys and the build errors in boot
