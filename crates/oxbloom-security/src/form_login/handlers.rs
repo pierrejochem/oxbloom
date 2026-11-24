@@ -189,6 +189,22 @@ impl FormLoginHandlers {
         }
     }
 
+    /// The form login settings: the OAuth2 login shares the default success URL.
+    #[cfg(feature = "oauth2")]
+    pub(crate) fn settings(&self) -> &FormLogin {
+        &self.settings
+    }
+
+    /// The `Set-Cookie` that clears the remember-me cookie of `req`, when remember-me is on and
+    /// the request carries one. A login that issues no cookie, such as an OAuth2 login, sends it
+    /// so a cookie left from an earlier user cannot log that user in again.
+    #[cfg(feature = "oauth2")]
+    pub(crate) fn stale_remember_me_cookie(&self, req: &Request) -> Option<HeaderValue> {
+        let runtime = self.remember_me.as_ref()?;
+        remember_me_token(runtime, req)?;
+        Some(clear_cookie(&runtime.settings, &CookieScope::of(req)))
+    }
+
     /// The CSRF settings, when the check is on.
     pub(crate) fn csrf(&self) -> Option<&CsrfConfig> {
         self.csrf.as_ref()
@@ -433,11 +449,12 @@ impl FormLoginHandlers {
         cookie
     }
 
-    /// Logs `authentication` in to `session`, for a password login and an auto login alike: a
-    /// new session id, a new CSRF token when the check is on, the authentication, the principal
-    /// key and the revalidation time from one read of the clock, then the session limit. A
-    /// failed write logs one fixed text, invalidates the session and gives `Err`.
-    async fn establish(
+    /// Logs `authentication` in to `session`, for a password login, an auto login and an OAuth2
+    /// login alike: a new session id, a new CSRF token when the check is on, the
+    /// authentication, the principal key and the revalidation time from one read of the clock,
+    /// then the session limit. A failed write logs one fixed text, invalidates the session and
+    /// gives `Err`.
+    pub(crate) async fn establish(
         &self,
         session: &Session,
         authentication: &Authentication,

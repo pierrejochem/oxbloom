@@ -66,6 +66,16 @@ pub(crate) async fn revalidate(
     authentication: &Authentication,
     now: SystemTime,
 ) -> Revalidated {
+    // An OAuth2 principal has no user in the user service; its provider vouched for it.
+    #[cfg(feature = "oauth2")]
+    if authentication
+        .details()
+        .get(crate::oauth2::OAUTH2_PRINCIPAL_KEY)
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+    {
+        return Revalidated::Skipped;
+    }
     if !revalidation.due(load_revalidated_at(session), epoch_seconds(now)) {
         return Revalidated::Skipped;
     }

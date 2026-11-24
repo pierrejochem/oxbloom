@@ -51,7 +51,8 @@ pub enum SecurityBuildError {
     /// succeed.
     FormLoginWithoutProvider,
     /// A form login URL is not a safe redirect target, two URLs collide, or a form field name is
-    /// empty or has a character outside ASCII letters, digits, `_` and `-`.
+    /// empty or has a character outside ASCII letters, digits, `_` and `-`. The failure URL of
+    /// OAuth2 login follows the same redirect rule.
     InvalidFormLoginUrl,
     /// CSRF protection is on but form login is not configured, so there is no session flow to
     /// protect.
@@ -78,6 +79,55 @@ pub enum SecurityBuildError {
     /// name that is not an HTTP token, or a field name with a character outside ASCII letters,
     /// digits, `_` and `-`.
     InvalidRememberMe,
+    /// OAuth2 login is configured but form login is not. OAuth2 login shares the session, the
+    /// logout, the saved request and the success URL of form login. An application without
+    /// passwords turns on `form_login` (for example with its `login_page`) and adds no
+    /// `password_provider`; the password post then always fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_security::SecurityBuildError;
+    ///
+    /// let err = SecurityBuildError::OAuth2LoginWithoutFormLogin;
+    /// assert_eq!(err.to_string(), "oauth2 login configured without form login");
+    /// ```
+    OAuth2LoginWithoutFormLogin,
+    /// OAuth2 login has no registration, or a registration has an id outside `a` to `z`, `0`
+    /// to `9` and `-`, or names a provider that was not added.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_security::SecurityBuildError;
+    ///
+    /// let err = SecurityBuildError::OAuth2LoginWithoutRegistration;
+    /// assert_eq!(err.to_string(), "oauth2 login configured without a usable registration");
+    /// ```
+    OAuth2LoginWithoutRegistration,
+    /// OAuth2 login has no base URL, or one that is not an absolute `https` URL (`http` only
+    /// for a loopback host) without a query and a fragment. The redirect URI is built from it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_security::SecurityBuildError;
+    ///
+    /// let err = SecurityBuildError::OAuth2LoginWithoutBaseUrl;
+    /// assert_eq!(err.to_string(), "oauth2 login configured without a valid base url");
+    /// ```
+    OAuth2LoginWithoutBaseUrl,
+    /// OAuth2 login has no HTTP client for the provider requests.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_security::SecurityBuildError;
+    ///
+    /// let err = SecurityBuildError::OAuth2LoginWithoutClient;
+    /// assert_eq!(err.to_string(), "oauth2 login configured without an http client");
+    /// ```
+    OAuth2LoginWithoutClient,
 }
 
 impl fmt::Display for SecurityBuildError {
@@ -105,6 +155,12 @@ impl fmt::Display for SecurityBuildError {
             Self::InvalidRememberMe => {
                 "invalid remember-me secret, user service, lifetime, cookie name or field name"
             }
+            Self::OAuth2LoginWithoutFormLogin => "oauth2 login configured without form login",
+            Self::OAuth2LoginWithoutRegistration => {
+                "oauth2 login configured without a usable registration"
+            }
+            Self::OAuth2LoginWithoutBaseUrl => "oauth2 login configured without a valid base url",
+            Self::OAuth2LoginWithoutClient => "oauth2 login configured without an http client",
         })
     }
 }
@@ -142,6 +198,8 @@ pub struct HttpSecurity {
     revalidate: Option<(Duration, Arc<dyn UserDetailsService>)>,
     remember_me: Option<RememberMe>,
     clock: Arc<dyn Clock>,
+    #[cfg(feature = "oauth2")]
+    oauth2_login: Option<crate::OAuth2Login>,
 }
 
 impl Default for HttpSecurity {
@@ -179,6 +237,8 @@ impl HttpSecurity {
             revalidate: None,
             remember_me: None,
             clock: Arc::new(SystemClock),
+            #[cfg(feature = "oauth2")]
+            oauth2_login: None,
         }
     }
 
@@ -373,6 +433,116 @@ impl HttpSecurity {
     /// ```
     pub fn form_login(mut self, f: impl FnOnce(FormLogin) -> FormLogin) -> Self {
         self.form_login = Some(f(FormLogin::default()));
+        self
+    }
+
+    /// Turns on OAuth2 and OpenID Connect login (feature `oauth2`): `GET
+    /// /oauth2/authorization/{id}` sends the browser to the provider of the registration `id`,
+    /// and `GET /login/oauth2/code/{id}` is the callback that logs the user in. Both paths are
+    /// open, answered before the authorization rules, and any other method on them is a 405.
+    /// See [`OAuth2Login`](crate::OAuth2Login) for the settings.
+    ///
+    /// The start saves a PKCE verifier, a random `state` and, for an OpenID Connect provider,
+    /// a `nonce` in the session, and redirects to the authorization endpoint. The callback uses
+    /// the saved login once, exchanges the code, validates the id token or loads the user info,
+    /// and logs the user in as form login does: a new session id, the `Authentication` stored,
+    /// the session limit applied, then a redirect to the saved request or the default success
+    /// URL. The tokens are kept in the session under
+    /// `oxbloom.security.oauth2.tokens.<registration>`, so a server-side session store is the
+    /// better fit. Every failure redirects to the failure URL with no detail. An OAuth2 login
+    /// never issues a remember-me cookie, and revalidation skips its principal.
+    ///
+    /// OAuth2 login needs [`form_login`](Self::form_login), which gives it the session, the
+    /// logout, the saved request and the success URL, and a
+    /// [`SessionFilter`](crate::SessionFilter) whose cookie is sent on the provider's
+    /// redirect back (`SameSite=Lax`, the default; `Strict` loses the session). With OAuth2
+    /// login on, form login needs no password provider.
+    ///
+    /// `f` receives the current settings: on the first call ones without a client, so pass
+    /// [`OAuth2Login::new`](crate::OAuth2Login::new) or call
+    /// [`client`](crate::OAuth2Login::client); a later call tunes the result of an earlier one.
+    /// [`build`](Self::build) fails with [`SecurityBuildError::OAuth2LoginWithoutFormLogin`],
+    /// [`SecurityBuildError::OAuth2LoginWithoutClient`],
+    /// [`SecurityBuildError::OAuth2LoginWithoutRegistration`],
+    /// [`SecurityBuildError::OAuth2LoginWithoutBaseUrl`] and, for a failure URL that is not a
+    /// safe local target, [`SecurityBuildError::InvalidFormLoginUrl`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use oxbloom_config::Secret;
+    /// use oxbloom_security::{
+    ///     ClientAuthentication, ClientRegistration, HttpSecurity, InMemorySessionStore,
+    ///     OAuth2Login, ProviderConfig, SecurityBuildError, SessionBackend, SessionFilter,
+    ///     SessionSettings,
+    /// };
+    /// use oxbloom_test::FakeProvider;
+    /// use oxbloom_web::{App, HttpMethod, Request};
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let fake = FakeProvider::new("https://idp.example.test");
+    /// let login = |login: OAuth2Login| {
+    ///     login
+    ///         .registration(ClientRegistration {
+    ///             id: "idp".into(),
+    ///             client_id: "app".into(),
+    ///             client_secret: Some(Secret::new("app-secret".into())),
+    ///             scopes: vec!["email".into()],
+    ///             redirect_uri: "{base-url}/login/oauth2/code/{id}".into(),
+    ///             client_authentication: ClientAuthentication::Basic,
+    ///             provider: "idp".into(),
+    ///         })
+    ///         .provider("idp", ProviderConfig {
+    ///             issuer_uri: Some("https://idp.example.test".into()),
+    ///             ..ProviderConfig::default()
+    ///         })
+    ///         .base_url("https://app.example.test")
+    /// };
+    /// let chain = HttpSecurity::new()
+    ///     .form_login(|f| f)
+    ///     .oauth2_login(|_| login(OAuth2Login::new(fake.client())))
+    ///     .authorize(|a| a.any_request().authenticated())
+    ///     .build()?;
+    /// let settings = SessionSettings::default();
+    /// let store = InMemorySessionStore::new(&settings, Arc::new(oxbloom_core::SystemClock));
+    /// let sessions = SessionFilter::new(SessionBackend::Server(Arc::new(store)), settings)?;
+    /// let app = App::new().filter(sessions).filter(chain);
+    ///
+    /// // The start redirects to the provider, with PKCE, a state and a nonce.
+    /// let res = app.handle(Request::new(HttpMethod::Get, "/oauth2/authorization/idp")).await;
+    /// assert_eq!(res.status(), 302);
+    /// let location = res.headers()["location"].to_str()?;
+    /// assert!(location.starts_with("https://idp.example.test/authorize?response_type=code"));
+    /// assert!(location.contains("code_challenge_method=S256"));
+    ///
+    /// // A callback without a started login goes to the failure URL.
+    /// let mut callback = Request::new(HttpMethod::Get, "/login/oauth2/code/idp");
+    /// callback.query = Some("code=c&state=s".into());
+    /// let res = app.handle(callback).await;
+    /// assert_eq!(res.headers()["location"], "/login?error");
+    ///
+    /// // OAuth2 login needs form login.
+    /// let err = HttpSecurity::new()
+    ///     .oauth2_login(|_| login(OAuth2Login::new(fake.client())))
+    ///     .authorize(|a| a.any_request().authenticated())
+    ///     .build()
+    ///     .err();
+    /// assert_eq!(err, Some(SecurityBuildError::OAuth2LoginWithoutFormLogin));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(feature = "oauth2")]
+    pub fn oauth2_login(
+        mut self,
+        f: impl FnOnce(crate::OAuth2Login) -> crate::OAuth2Login,
+    ) -> Self {
+        let current = self
+            .oauth2_login
+            .take()
+            .unwrap_or_else(crate::OAuth2Login::empty);
+        self.oauth2_login = Some(f(current));
         self
     }
 
@@ -793,7 +963,8 @@ impl HttpSecurity {
     /// [`SecurityBuildError::InvalidRevalidateInterval`] for revalidation without form login or
     /// with a zero interval, [`SecurityBuildError::RememberMeWithoutFormLogin`] and
     /// [`SecurityBuildError::InvalidRememberMe`] for remember-me without form login or with a
-    /// missing or out-of-range setting, and [`SecurityBuildError::InvalidHeadersConfig`]
+    /// missing or out-of-range setting, the `OAuth2Login*` errors listed at `oauth2_login`
+    /// (feature `oauth2`), and [`SecurityBuildError::InvalidHeadersConfig`]
     /// when the header settings fail [`HeadersConfig::validate`].
     ///
     /// # Examples
@@ -849,9 +1020,21 @@ impl HttpSecurity {
                 return Err(SecurityBuildError::HttpBasicWithoutProvider);
             }
         }
+        #[cfg(feature = "oauth2")]
+        let oauth2_login = match (&self.form_login, self.oauth2_login) {
+            (None, Some(_)) => return Err(SecurityBuildError::OAuth2LoginWithoutFormLogin),
+            (_, login) => login
+                .map(|login| login.into_handlers(self.clock.clone()))
+                .transpose()?,
+        };
+        #[cfg(feature = "oauth2")]
+        let password_needed = oauth2_login.is_none();
+        #[cfg(not(feature = "oauth2"))]
+        let password_needed = true;
         if let Some(form) = &self.form_login {
             form.validate()?;
-            if !self.password_provider {
+            // With OAuth2 login on, form login may run without passwords.
+            if !self.password_provider && password_needed {
                 return Err(SecurityBuildError::FormLoginWithoutProvider);
             }
         }
@@ -910,7 +1093,7 @@ impl HttpSecurity {
             _ => entry_point,
         };
         let manager = (!self.providers.is_empty()).then(|| ProviderManager::new(self.providers));
-        Ok(SecurityFilterChain::new(
+        let chain = SecurityFilterChain::new(
             manager,
             authorize.rules,
             entry_point,
@@ -920,7 +1103,10 @@ impl HttpSecurity {
                 FormLoginHandlers::new(settings, csrf, limit, revalidation, remember_me, self.clock)
             }),
             self.headers,
-        ))
+        );
+        #[cfg(feature = "oauth2")]
+        let chain = chain.with_oauth2_login(oauth2_login);
+        Ok(chain)
     }
 }
 

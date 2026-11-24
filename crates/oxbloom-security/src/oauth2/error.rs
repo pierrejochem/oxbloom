@@ -81,9 +81,42 @@ pub(crate) fn allowed_code(code: &str) -> &'static str {
         .unwrap_or("unknown")
 }
 
+/// The RFC 6749 section 4.1.2.1 error codes of an authorization response that are logged;
+/// every other code is `unknown`.
+const AUTHORIZATION_CODES: [&str; 7] = [
+    "invalid_request",
+    "unauthorized_client",
+    "access_denied",
+    "unsupported_response_type",
+    "invalid_scope",
+    "server_error",
+    "temporarily_unavailable",
+];
+
+/// The allow-listed authorization response code equal to `code`, or `unknown`.
+pub(crate) fn allowed_authorization_code(code: &str) -> &'static str {
+    AUTHORIZATION_CODES
+        .iter()
+        .find(|allowed| **allowed == code)
+        .copied()
+        .unwrap_or("unknown")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_allow_listed_authorization_codes_are_kept() {
+        assert_eq!(allowed_authorization_code("access_denied"), "access_denied");
+        assert_eq!(
+            allowed_authorization_code("temporarily_unavailable"),
+            "temporarily_unavailable"
+        );
+        assert_eq!(allowed_authorization_code("invalid_grant"), "unknown");
+        assert_eq!(allowed_authorization_code("ACCESS_DENIED"), "unknown");
+        assert_eq!(allowed_authorization_code("<script>"), "unknown");
+    }
 
     #[test]
     fn only_allow_listed_codes_are_kept() {

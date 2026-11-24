@@ -99,6 +99,28 @@ impl FailureAnalyzer for SecurityAnalyzer {
                  1 minute and 365 days, and plain names such as `OXBLOOM_REMEMBER_ME` and \
                  `remember-me`.",
             ),
+            SecurityBuildError::OAuth2LoginWithoutFormLogin => (
+                "OAuth2 login is configured but form login is not.",
+                "Configure `form_login` as well; it gives OAuth2 login the session, the logout, \
+                 the saved request and the success URL, and needs no password provider then.",
+            ),
+            SecurityBuildError::OAuth2LoginWithoutRegistration => (
+                "OAuth2 login has no usable registration: none was added, an id has a character \
+                 outside `a` to `z`, `0` to `9` and `-`, or a registration names a provider that \
+                 was not added.",
+                "Add at least one registration, use ids such as `github`, and add the provider \
+                 that each registration names.",
+            ),
+            SecurityBuildError::OAuth2LoginWithoutBaseUrl => (
+                "OAuth2 login has no valid base URL for its redirect URI.",
+                "Set the external base URL of the application, an absolute `https` URL (`http` \
+                 only for a loopback host) without a query or a fragment, such as \
+                 `https://app.example`.",
+            ),
+            SecurityBuildError::OAuth2LoginWithoutClient => (
+                "OAuth2 login has no HTTP client for the provider requests.",
+                "Pass an `HttpClient` to `OAuth2Login::new` or `OAuth2Login::client`.",
+            ),
         };
         Some(FailureAnalysis::new(description, action))
     }
@@ -401,6 +423,30 @@ mod tests {
             SecurityBuildError::InvalidRememberMe,
             "A remember-me setting is missing or out of range: a secret shorter than 32 bytes, a missing secret or user service, a lifetime outside 1 minute to 365 days, a cookie name that is not an HTTP token, or a field name not made of ASCII letters, digits, `_` and `-`.",
             "Set secrets of at least 32 bytes and a `UserDetailsService`, a lifetime between 1 minute and 365 days, and plain names such as `OXBLOOM_REMEMBER_ME` and `remember-me`.",
+        );
+    }
+
+    #[test]
+    fn oauth2_login_texts() {
+        check(
+            SecurityBuildError::OAuth2LoginWithoutFormLogin,
+            "OAuth2 login is configured but form login is not.",
+            "Configure `form_login` as well; it gives OAuth2 login the session, the logout, the saved request and the success URL, and needs no password provider then.",
+        );
+        check(
+            SecurityBuildError::OAuth2LoginWithoutRegistration,
+            "OAuth2 login has no usable registration: none was added, an id has a character outside `a` to `z`, `0` to `9` and `-`, or a registration names a provider that was not added.",
+            "Add at least one registration, use ids such as `github`, and add the provider that each registration names.",
+        );
+        check(
+            SecurityBuildError::OAuth2LoginWithoutBaseUrl,
+            "OAuth2 login has no valid base URL for its redirect URI.",
+            "Set the external base URL of the application, an absolute `https` URL (`http` only for a loopback host) without a query or a fragment, such as `https://app.example`.",
+        );
+        check(
+            SecurityBuildError::OAuth2LoginWithoutClient,
+            "OAuth2 login has no HTTP client for the provider requests.",
+            "Pass an `HttpClient` to `OAuth2Login::new` or `OAuth2Login::client`.",
         );
     }
 

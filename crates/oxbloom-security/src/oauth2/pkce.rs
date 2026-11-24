@@ -22,7 +22,8 @@ impl Verifier {
         Verifier(random_token(32))
     }
 
-    /// Wraps a verifier that was stored earlier.
+    /// Wraps a known verifier, such as the RFC 7636 test vector.
+    #[cfg(test)]
     pub(crate) fn from_string(value: String) -> Verifier {
         Verifier(value)
     }

@@ -3,28 +3,31 @@
 //! This module holds the registration model and its configuration keys,
 //! `security.oauth2.client.registration.<id>.*` and `security.oauth2.client.provider.<id>.*`,
 //! and the steps of a login: provider metadata, the token exchange, id token validation, the
-//! user info and the mapping to an `Authentication`.
+//! user info and the mapping to an `Authentication`, and the login endpoints of the security
+//! chain.
 
-#[allow(dead_code)]
 mod authorization;
 mod error;
 mod id_token;
+mod login;
 mod metadata;
-#[allow(dead_code)]
 mod pending;
-#[allow(dead_code)]
 mod pkce;
 mod registration;
 mod settings;
+mod stored;
 mod token;
 mod user;
 
 pub use error::OAuth2Error;
 pub use id_token::{IdTokenClaims, IdTokenValidator};
+pub use login::OAuth2Login;
+pub(crate) use login::OAuth2LoginHandlers;
 pub use metadata::{MetadataCache, ProviderMetadata};
 pub use registration::{ClientAuthentication, ClientRegistration, ProviderConfig};
 pub use settings::OAuth2Settings;
 pub use token::{TokenEndpoint, TokenResponse};
+pub(crate) use user::PRINCIPAL_KEY as OAUTH2_PRINCIPAL_KEY;
 pub use user::{UserInfo, authentication_from};
 
 /// The largest provider answer read: 1 MiB, as for a JWKS.

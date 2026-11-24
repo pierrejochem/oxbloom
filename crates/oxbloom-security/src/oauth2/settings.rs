@@ -91,7 +91,7 @@ fn table<T: serde::de::DeserializeOwned>(
     }
 }
 
-fn is_valid_id(id: &str) -> bool {
+pub(crate) fn is_valid_id(id: &str) -> bool {
     !id.is_empty()
         && id
             .bytes()
@@ -183,7 +183,7 @@ fn redirect_template_is_valid(template: &str, id: &str) -> bool {
 }
 
 /// RFC 6749 section 3.3: `%x21 / %x23-5B / %x5D-7E`.
-fn is_scope_token(token: &str) -> bool {
+pub(crate) fn is_scope_token(token: &str) -> bool {
     !token.is_empty()
         && token
             .bytes()

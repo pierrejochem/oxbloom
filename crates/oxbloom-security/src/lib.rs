@@ -143,7 +143,9 @@ pub use jwt::{
 pub use matcher::RequestMatcher;
 pub use method_security::{__private, AccessDenied, spawn};
 #[cfg(feature = "oauth2")]
-pub use oauth2::{ClientAuthentication, ClientRegistration, OAuth2Settings, ProviderConfig};
+pub use oauth2::{
+    ClientAuthentication, ClientRegistration, OAuth2Login, OAuth2Settings, ProviderConfig,
+};
 
 /// The steps of an OAuth2 login, reachable for the integration tests and the doc examples
 /// (feature `oauth2`); not a stable API. The login filter of the security chain uses them.
