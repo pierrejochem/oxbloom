@@ -144,6 +144,16 @@ pub use matcher::RequestMatcher;
 pub use method_security::{__private, AccessDenied, spawn};
 #[cfg(feature = "oauth2")]
 pub use oauth2::{ClientAuthentication, ClientRegistration, OAuth2Settings, ProviderConfig};
+
+/// The steps of an OAuth2 login, reachable for the integration tests and the doc examples
+/// (feature `oauth2`); not a stable API. The login filter of the security chain uses them.
+#[cfg(feature = "oauth2")]
+#[doc(hidden)]
+pub mod __test_support {
+    pub use crate::oauth2::{
+        MetadataCache, OAuth2Error, ProviderMetadata, TokenEndpoint, TokenResponse,
+    };
+}
 pub use oxbloom_macros::{method_security, post_authorize, post_filter, pre_authorize, pre_filter};
 pub use password::{
     ARGON2_ID, Argon2PasswordEncoder, DelegatingPasswordEncoder, PasswordEncoder,

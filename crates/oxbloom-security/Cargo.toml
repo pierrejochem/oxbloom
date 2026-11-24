@@ -40,8 +40,9 @@ tokio = { version = "1.54.1", features = ["rt", "sync", "time"] }
 tracing = "0.1.44"
 
 [dev-dependencies]
-# `MockHttpClient` for `tests/jwks_http_client.rs` (an integration test, so no dev-dependency cycle).
-oxbloom-test = { path = "../oxbloom-test", features = ["http-client"] }
+# `MockHttpClient` for `tests/jwks_http_client.rs` and `FakeProvider` for the `tests/oauth2_*.rs`
+# tests (integration tests, so no dev-dependency cycle).
+oxbloom-test = { path = "../oxbloom-test", features = ["http-client", "oauth2"] }
 # A local HTTPS JWKS server for `tests/jwks_tls.rs`, with a private CA generated at test time;
 # `aws-lc-rs` only, no `ring`.
 rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs", "pem"] }

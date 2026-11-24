@@ -114,7 +114,7 @@ fn is_loopback_host(host: &str) -> bool {
 
 /// An absolute `https` URL with a host and no credentials, or `http` for a loopback host,
 /// without a fragment and with a valid port. `allow_query` is `false` for an issuer.
-fn is_acceptable_endpoint(value: &str, allow_query: bool) -> bool {
+pub(crate) fn is_acceptable_endpoint(value: &str, allow_query: bool) -> bool {
     if value.contains('#') {
         return false;
     }

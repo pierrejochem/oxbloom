@@ -1,16 +1,47 @@
 //! OAuth2 and OpenID Connect client support (feature `oauth2`).
 //!
 //! This module holds the registration model and its configuration keys,
-//! `security.oauth2.client.registration.<id>.*` and `security.oauth2.client.provider.<id>.*`.
+//! `security.oauth2.client.registration.<id>.*` and `security.oauth2.client.provider.<id>.*`,
+//! and the steps of a login: provider metadata, the token exchange, id token validation, the
+//! user info and the mapping to an `Authentication`.
 
 #[allow(dead_code)]
 mod authorization;
+mod error;
+mod metadata;
 #[allow(dead_code)]
 mod pending;
 #[allow(dead_code)]
 mod pkce;
 mod registration;
 mod settings;
+mod token;
 
+pub use error::OAuth2Error;
+pub use metadata::{MetadataCache, ProviderMetadata};
 pub use registration::{ClientAuthentication, ClientRegistration, ProviderConfig};
 pub use settings::OAuth2Settings;
+pub use token::{TokenEndpoint, TokenResponse};
+
+/// The largest provider answer read: 1 MiB, as for a JWKS.
+pub(crate) const MAX_BODY_BYTES: usize = 1_048_576;
+
+/// Compares two secrets (a nonce, a state) in constant time with respect to their content.
+#[allow(dead_code)]
+pub(crate) fn constant_time_eq(a: &str, b: &str) -> bool {
+    aws_lc_rs::constant_time::verify_slices_are_equal(a.as_bytes(), b.as_bytes()).is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::constant_time_eq;
+
+    #[test]
+    fn constant_time_eq_compares_content_and_length() {
+        assert!(constant_time_eq("nonce-1", "nonce-1"));
+        assert!(constant_time_eq("", ""));
+        assert!(!constant_time_eq("nonce-1", "nonce-2"));
+        assert!(!constant_time_eq("nonce", "nonce-1"));
+        assert!(!constant_time_eq("", "x"));
+    }
+}
