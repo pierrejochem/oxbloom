@@ -342,9 +342,18 @@ struct Issued {
     nonce: Option<String>,
 }
 
+/// A refresh token that has been issued and not yet used up.
+struct Refreshable {
+    user: FakeUser,
+    client_id: String,
+}
+
 struct State {
     codes: HashMap<String, Issued>,
     access_tokens: HashMap<String, FakeUser>,
+    refresh_tokens: HashMap<String, Refreshable>,
+    access_lifetime: Option<u64>,
+    rotate_refresh: bool,
     faults: Vec<Fault>,
     nonce: Option<String>,
     token_requests: Vec<TokenRequest>,
@@ -368,7 +377,7 @@ struct Shared {
 ///
 /// It generates an ES256 key pair at construction and answers, under the issuer:
 /// `/.well-known/openid-configuration` (the discovery document), `/jwks` (the public key),
-/// `POST /token` (the authorization code grant) and `/userinfo` (the user info for a bearer
+/// `POST /token` (the grants `authorization_code`, `client_credentials` and `refresh_token`) and `/userinfo` (the user info for a bearer
 /// access token). `/authorize` is not served: the browser goes there, not the client.
 ///
 /// [`issue_code`](Self::issue_code) registers a code for a [`FakeUser`]; the next token request
@@ -376,7 +385,7 @@ struct Shared {
 /// client id of the token request (from HTTP Basic or the `client_id` field) and whose `nonce`
 /// is the one set with [`expect_nonce`](Self::expect_nonce) before the code was issued, or,
 /// when none was set then, the one set when the code is exchanged. A code works once; an
-/// unknown code gets `invalid_grant`. [`misbehave`](Self::misbehave) adds a [`Fault`]. The key
+/// unknown code gets `invalid_grant`. A `client_credentials` request gets an access token only (no refresh token, no id token) and echoes the requested `scope`; a `refresh_token` request with a refresh token the fake issued gets a new access token and, by default, a new refresh token (see [`rotate_refresh_tokens`](Self::rotate_refresh_tokens)), and any other refresh token gets `invalid_grant`. Every access token is new and random, and [`access_token_lifetime`](Self::access_token_lifetime) sets the `expires_in` of all of them. [`misbehave`](Self::misbehave) adds a [`Fault`]. The key
 /// id, the codes and the tokens are random per instance.
 ///
 /// By default the token endpoint does not check the PKCE verifier, the redirect URI or the
@@ -450,6 +459,9 @@ impl FakeProvider {
             state: Mutex::new(State {
                 codes: HashMap::new(),
                 access_tokens: HashMap::new(),
+                refresh_tokens: HashMap::new(),
+                access_lifetime: Some(LIFETIME),
+                rotate_refresh: true,
                 faults: Vec::new(),
                 nonce: None,
                 token_requests: Vec::new(),
@@ -607,6 +619,43 @@ impl FakeProvider {
         self
     }
 
+    /// Sets the lifetime in seconds that the token endpoint reports (`expires_in`) for the
+    /// access tokens it issues, in every grant; the default is 3600. `None` leaves
+    /// `expires_in` out of the answer. The id tokens keep their lifetime of 3600 seconds. The
+    /// fake does not enforce the lifetime itself: it only reports it, so a test moves its own
+    /// clock.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_test::FakeProvider;
+    ///
+    /// let fake = FakeProvider::new("https://idp.example.test");
+    /// fake.access_token_lifetime(Some(60));
+    /// fake.access_token_lifetime(None); // no `expires_in` at all
+    /// ```
+    pub fn access_token_lifetime(&self, seconds: Option<u64>) -> &Self {
+        self.shared.state().access_lifetime = seconds;
+        self
+    }
+
+    /// Sets whether the `refresh_token` grant issues a new refresh token and retires the one
+    /// used (the default, as many providers do), or keeps the old one valid and sends no new
+    /// one.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_test::FakeProvider;
+    ///
+    /// let fake = FakeProvider::new("https://idp.example.test");
+    /// fake.rotate_refresh_tokens(false);
+    /// ```
+    pub fn rotate_refresh_tokens(&self, rotate: bool) -> &Self {
+        self.shared.state().rotate_refresh = rotate;
+        self
+    }
+
     /// Adds a fault; every fault added stays in force.
     ///
     /// # Examples
@@ -740,60 +789,143 @@ impl Shared {
                 _ => {}
             }
         }
-        if recorded.field("grant_type") != Some("authorization_code") {
-            return oauth_error("unsupported_grant_type");
-        }
         if let Some(expected) = &state.expected_secret
             && client_secret(&recorded).as_deref() != Some(expected.as_str())
         {
             return oauth_error("invalid_client");
         }
+        let client_id = client_id(&recorded).unwrap_or_default();
+        let lifetime = state.access_lifetime;
+        let oversized = state.faults.contains(&Fault::OversizedBody);
+        let mut body = match recorded.field("grant_type") {
+            Some("authorization_code") => {
+                match self.authorization_code(&mut state, &recorded, &client_id) {
+                    Ok(body) => body,
+                    Err(code) => return oauth_error(code),
+                }
+            }
+            Some("client_credentials") => {
+                let access_token = random_token();
+                state
+                    .access_tokens
+                    .insert(access_token.clone(), FakeUser::new(&client_id));
+                let mut body = json!({"access_token": access_token, "token_type": "Bearer"});
+                if let Some(scope) = recorded.field("scope") {
+                    body["scope"] = json!(scope);
+                }
+                body
+            }
+            Some("refresh_token") => {
+                let rotate = state.rotate_refresh;
+                let entry = recorded.field("refresh_token").and_then(|token| {
+                    let known = state
+                        .refresh_tokens
+                        .get(token)
+                        .is_some_and(|entry| entry.client_id == client_id);
+                    if !known {
+                        None
+                    } else if rotate {
+                        state.refresh_tokens.remove(token)
+                    } else {
+                        state.refresh_tokens.get(token).map(|entry| Refreshable {
+                            user: entry.user.clone(),
+                            client_id: entry.client_id.clone(),
+                        })
+                    }
+                });
+                let Some(entry) = entry else {
+                    return oauth_error("invalid_grant");
+                };
+                let access_token = random_token();
+                state
+                    .access_tokens
+                    .insert(access_token.clone(), entry.user.clone());
+                let mut body = json!({
+                    "access_token": access_token,
+                    "token_type": "Bearer",
+                    "scope": recorded
+                        .field("scope")
+                        .or(entry.user.scope.as_deref())
+                        .unwrap_or("openid"),
+                });
+                if rotate {
+                    let refresh_token = random_token();
+                    state.refresh_tokens.insert(refresh_token.clone(), entry);
+                    body["refresh_token"] = json!(refresh_token);
+                }
+                body
+            }
+            _ => return oauth_error("unsupported_grant_type"),
+        };
+        drop(state);
+        if let Some(seconds) = lifetime {
+            body["expires_in"] = json!(seconds);
+        }
+        if oversized {
+            body["padding"] = Value::String("x".repeat(1024 * 1024 + 1024));
+        }
+        json_response(StatusCode::OK, &body)
+    }
+
+    /// The authorization code grant: checks the code and the expectations, and answers with an
+    /// access token, a refresh token and an id token. The caller adds the lifetime.
+    fn authorization_code(
+        &self,
+        state: &mut State,
+        recorded: &TokenRequest,
+        client_id: &str,
+    ) -> Result<Value, &'static str> {
         let Some(issued) = recorded
             .field("code")
             .and_then(|code| state.codes.remove(code))
         else {
-            return oauth_error("invalid_grant");
+            return Err("invalid_grant");
         };
         if let Some(expected) = &state.expected_challenge {
             let challenge = recorded
                 .field("code_verifier")
                 .map(|verifier| URL_SAFE_NO_PAD.encode(digest(&SHA256, verifier.as_bytes())));
             if challenge.as_deref() != Some(expected.as_str()) {
-                return oauth_error("invalid_grant");
+                return Err("invalid_grant");
             }
         }
         if let Some(expected) = &state.expected_redirect_uri
             && recorded.field("redirect_uri") != Some(expected.as_str())
         {
-            return oauth_error("invalid_grant");
+            return Err("invalid_grant");
         }
-        let client_id = client_id(&recorded).unwrap_or_default();
         let nonce = issued.nonce.or_else(|| state.nonce.clone());
         let now = state
             .clock
             .now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
-        let faults = state.faults.clone();
         let access_token = random_token();
+        let refresh_token = random_token();
         state
             .access_tokens
             .insert(access_token.clone(), issued.user.clone());
-        drop(state);
-
-        let id_token = self.id_token(&issued.user, &client_id, nonce.as_deref(), now, &faults);
-        let mut body = json!({
+        state.refresh_tokens.insert(
+            refresh_token.clone(),
+            Refreshable {
+                user: issued.user.clone(),
+                client_id: client_id.to_owned(),
+            },
+        );
+        let id_token = self.id_token(
+            &issued.user,
+            client_id,
+            nonce.as_deref(),
+            now,
+            &state.faults,
+        );
+        Ok(json!({
             "access_token": access_token,
             "token_type": "Bearer",
-            "expires_in": LIFETIME,
-            "refresh_token": random_token(),
+            "refresh_token": refresh_token,
             "id_token": id_token,
             "scope": issued.user.scope.as_deref().unwrap_or("openid"),
-        });
-        if faults.contains(&Fault::OversizedBody) {
-            body["padding"] = Value::String("x".repeat(1024 * 1024 + 1024));
-        }
-        json_response(StatusCode::OK, &body)
+        }))
     }
 
     fn id_token(

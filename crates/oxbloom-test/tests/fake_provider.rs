@@ -509,3 +509,137 @@ async fn without_a_nonce_at_issue_the_current_nonce_is_used() {
         "set-after-issue"
     );
 }
+
+fn grant(fields: &[(&str, &str)]) -> Request {
+    Request::post(format!("{ISSUER}/token"))
+        .header(
+            "authorization",
+            &format!("Basic {}", STANDARD.encode("app:secret")),
+        )
+        .body(Body::Form(
+            fields
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect(),
+        ))
+}
+
+async fn token_body(fake: &FakeProvider, request: Request) -> (StatusCode, Value) {
+    let response = fake.client().execute(request).await.unwrap();
+    (response.status(), response.json().unwrap())
+}
+
+#[tokio::test]
+async fn the_client_credentials_grant_issues_a_fresh_access_token_each_time() {
+    let fake = FakeProvider::new(ISSUER);
+    let request = || {
+        grant(&[
+            ("grant_type", "client_credentials"),
+            ("scope", "read write"),
+        ])
+    };
+    let (status, first) = token_body(&fake, request()).await;
+    let (_, second) = token_body(&fake, request()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(first["token_type"], "Bearer");
+    assert_eq!(first["scope"], "read write");
+    assert_eq!(first["expires_in"], 3600);
+    assert!(first.get("refresh_token").is_none());
+    assert!(first.get("id_token").is_none());
+    assert_ne!(first["access_token"], second["access_token"]);
+    assert_eq!(fake.token_requests().len(), 2);
+}
+
+#[tokio::test]
+async fn the_client_credentials_grant_without_scope_sends_no_scope() {
+    let fake = FakeProvider::new(ISSUER);
+    let (_, body) = token_body(&fake, grant(&[("grant_type", "client_credentials")])).await;
+    assert!(body.get("scope").is_none());
+}
+
+#[tokio::test]
+async fn the_access_token_lifetime_is_configurable_and_can_be_left_out() {
+    let fake = FakeProvider::new(ISSUER);
+    fake.access_token_lifetime(Some(90));
+    let (_, body) = token_body(&fake, grant(&[("grant_type", "client_credentials")])).await;
+    assert_eq!(body["expires_in"], 90);
+    fake.access_token_lifetime(None);
+    let (_, body) = token_body(&fake, grant(&[("grant_type", "client_credentials")])).await;
+    assert!(body.get("expires_in").is_none());
+    // The authorization code grant follows the same setting.
+    let code = fake.issue_code(FakeUser::new("alice"));
+    let (_, body) = token_body(&fake, token_request(&code)).await;
+    assert!(body.get("expires_in").is_none());
+}
+
+#[tokio::test]
+async fn the_expected_secret_applies_to_the_client_credentials_grant() {
+    let fake = FakeProvider::new(ISSUER);
+    fake.expect_client_secret("other");
+    let (status, body) = token_body(&fake, grant(&[("grant_type", "client_credentials")])).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "invalid_client");
+}
+
+#[tokio::test]
+async fn the_refresh_token_grant_rotates_by_default() {
+    let fake = FakeProvider::new(ISSUER);
+    let code = fake.issue_code(FakeUser::new("alice").scope("openid email"));
+    let (_, first) = token_body(&fake, token_request(&code)).await;
+    let refresh = first["refresh_token"].as_str().unwrap().to_owned();
+
+    let (status, second) = token_body(
+        &fake,
+        grant(&[("grant_type", "refresh_token"), ("refresh_token", &refresh)]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_ne!(second["access_token"], first["access_token"]);
+    assert_ne!(second["refresh_token"].as_str().unwrap(), refresh);
+    assert_eq!(second["scope"], "openid email");
+    assert!(second.get("id_token").is_none());
+
+    // The old refresh token is retired.
+    let (status, again) = token_body(
+        &fake,
+        grant(&[("grant_type", "refresh_token"), ("refresh_token", &refresh)]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(again["error"], "invalid_grant");
+}
+
+#[tokio::test]
+async fn without_rotation_the_refresh_token_stays_valid_and_none_is_sent() {
+    let fake = FakeProvider::new(ISSUER);
+    fake.rotate_refresh_tokens(false);
+    let code = fake.issue_code(FakeUser::new("alice"));
+    let (_, first) = token_body(&fake, token_request(&code)).await;
+    let refresh = first["refresh_token"].as_str().unwrap().to_owned();
+    for _ in 0..2 {
+        let (status, body) = token_body(
+            &fake,
+            grant(&[("grant_type", "refresh_token"), ("refresh_token", &refresh)]),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.get("refresh_token").is_none());
+    }
+}
+
+#[tokio::test]
+async fn an_unknown_refresh_token_is_invalid_grant() {
+    let fake = FakeProvider::new(ISSUER);
+    let (status, body) = token_body(
+        &fake,
+        grant(&[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", "made-up"),
+        ]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "invalid_grant");
+    let (_, body) = token_body(&fake, grant(&[("grant_type", "password")])).await;
+    assert_eq!(body["error"], "unsupported_grant_type");
+}
