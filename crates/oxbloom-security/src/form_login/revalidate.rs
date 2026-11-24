@@ -66,13 +66,18 @@ pub(crate) async fn revalidate(
     authentication: &Authentication,
     now: SystemTime,
 ) -> Revalidated {
-    // An OAuth2 principal has no user in the user service; its provider vouched for it.
+    // An OAuth2 principal has no user in the user service; its provider vouched for it. Both
+    // markers are needed, so details that carry only the flag do not escape revalidation.
     #[cfg(feature = "oauth2")]
     if authentication
         .details()
         .get(crate::oauth2::OAUTH2_PRINCIPAL_KEY)
         .and_then(serde_json::Value::as_bool)
         == Some(true)
+        && authentication
+            .details()
+            .get(crate::oauth2::OAUTH2_REGISTRATION_KEY)
+            .is_some_and(serde_json::Value::is_string)
     {
         return Revalidated::Skipped;
     }
@@ -228,6 +233,41 @@ mod tests {
         let stored: serde_json::Value = s.get(AUTHENTICATION_KEY).unwrap().unwrap();
         assert_eq!(stored["login"], 1000);
         assert_eq!(load_revalidated_at(&s), Some(2000));
+    }
+
+    #[cfg(feature = "oauth2")]
+    #[tokio::test]
+    async fn only_both_oauth2_markers_skip_the_check() {
+        let with = |details: serde_json::Value| {
+            let serde_json::Value::Object(details) = details else {
+                unreachable!()
+            };
+            Authentication::new("alice", [GrantedAuthority::new("ROLE_USER")]).with_details(details)
+        };
+        // Both markers: skipped, the session stays although the user is missing.
+        let (r, s, _) = setup(None);
+        let auth =
+            with(serde_json::json!({"oauth2.principal": true, "oauth2.registration": "idp"}));
+        assert!(matches!(
+            revalidate(&r, &s, &auth, at(2000)).await,
+            Revalidated::Skipped
+        ));
+        // The flag alone, a non-string registration or a false flag: checked, and ended.
+        for details in [
+            serde_json::json!({"oauth2.principal": true}),
+            serde_json::json!({"oauth2.principal": true, "oauth2.registration": 7}),
+            serde_json::json!({"oauth2.principal": "true", "oauth2.registration": "idp"}),
+            serde_json::json!({"oauth2.principal": false, "oauth2.registration": "idp"}),
+        ] {
+            let (r, s, _) = setup(None);
+            assert!(
+                matches!(
+                    revalidate(&r, &s, &with(details.clone()), at(2000)).await,
+                    Revalidated::Ended
+                ),
+                "{details}"
+            );
+        }
     }
 
     #[test]

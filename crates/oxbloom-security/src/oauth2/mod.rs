@@ -27,7 +27,9 @@ pub use metadata::{MetadataCache, ProviderMetadata};
 pub use registration::{ClientAuthentication, ClientRegistration, ProviderConfig};
 pub use settings::OAuth2Settings;
 pub use token::{TokenEndpoint, TokenResponse};
-pub(crate) use user::PRINCIPAL_KEY as OAUTH2_PRINCIPAL_KEY;
+pub(crate) use user::{
+    PRINCIPAL_KEY as OAUTH2_PRINCIPAL_KEY, REGISTRATION_KEY as OAUTH2_REGISTRATION_KEY,
+};
 pub use user::{UserInfo, authentication_from};
 
 /// The largest provider answer read: 1 MiB, as for a JWKS.

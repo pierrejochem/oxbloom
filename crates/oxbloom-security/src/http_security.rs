@@ -128,6 +128,22 @@ pub enum SecurityBuildError {
     /// assert_eq!(err.to_string(), "oauth2 login configured without an http client");
     /// ```
     OAuth2LoginWithoutClient,
+    /// An OAuth2 login setting is out of range: the redirect URI of a registration is not
+    /// exactly `{base-url}/login/oauth2/code/{id}`, the one fixed callback path (so two
+    /// registrations can never share one), or the pending login max age is zero.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_security::SecurityBuildError;
+    ///
+    /// let err = SecurityBuildError::InvalidOAuth2Login;
+    /// assert_eq!(
+    ///     err.to_string(),
+    ///     "invalid oauth2 login redirect uri or pending login max age"
+    /// );
+    /// ```
+    InvalidOAuth2Login,
 }
 
 impl fmt::Display for SecurityBuildError {
@@ -161,6 +177,9 @@ impl fmt::Display for SecurityBuildError {
             }
             Self::OAuth2LoginWithoutBaseUrl => "oauth2 login configured without a valid base url",
             Self::OAuth2LoginWithoutClient => "oauth2 login configured without an http client",
+            Self::InvalidOAuth2Login => {
+                "invalid oauth2 login redirect uri or pending login max age"
+            }
         })
     }
 }
@@ -1023,9 +1042,10 @@ impl HttpSecurity {
         #[cfg(feature = "oauth2")]
         let oauth2_login = match (&self.form_login, self.oauth2_login) {
             (None, Some(_)) => return Err(SecurityBuildError::OAuth2LoginWithoutFormLogin),
-            (_, login) => login
-                .map(|login| login.into_handlers(self.clock.clone()))
-                .transpose()?,
+            (Some(form), Some(login)) => {
+                Some(login.into_handlers(self.clock.clone(), &form.failure_url)?)
+            }
+            (_, None) => None,
         };
         #[cfg(feature = "oauth2")]
         let password_needed = oauth2_login.is_none();

@@ -17,7 +17,8 @@ use oxbloom_http_client::{
     HttpClient, HttpClientError, Request as OutRequest, Response as OutResponse,
 };
 use oxbloom_security::{
-    ClientAuthentication, ClientRegistration, HttpSecurity, InMemorySessionStore, OAuth2Login,
+    Argon2PasswordEncoder, ClientAuthentication, ClientRegistration, DaoAuthenticationProvider,
+    HttpSecurity, InMemorySessionStore, InMemoryUserDetailsService, OAuth2Login, PasswordEncoder,
     ProviderConfig, RequestSecurityExt, RequestSessionExt, SecurityBuildError, SessionBackend,
     SessionFilter, SessionSettings, SessionStore, UserDetails, UserDetailsError,
     UserDetailsService,
@@ -37,6 +38,8 @@ const TOKENS_KEY: &str = "oxbloom.security.oauth2.tokens.idp";
 const SAVED_KEY: &str = "oxbloom.security.saved-request";
 const ERROR_DESCRIPTION: &str = "FAKE-PROVIDER-ERROR-DESCRIPTION";
 const MAX_AGE: Duration = Duration::from_secs(600);
+const PRINCIPAL_KEY: &str = "oxbloom.security.principal";
+const PASSWORD: &str = "s3cret";
 
 fn start_time() -> SystemTime {
     SystemTime::UNIX_EPOCH + Duration::from_secs(1_800_000_000)
@@ -103,6 +106,7 @@ struct Options {
     remember_me: bool,
     revalidate: Option<Arc<Counting>>,
     extra: Vec<(ClientRegistration, ProviderConfig)>,
+    password: bool,
 }
 
 struct Env {
@@ -132,7 +136,20 @@ impl Env {
             .unwrap()
             .with_clock(Arc::new(clock.clone()));
         let extra = options.extra;
-        let mut security = HttpSecurity::new()
+        let mut security = HttpSecurity::new();
+        if options.password {
+            let encoder = Arc::new(Argon2PasswordEncoder::new(8, 1, 1).unwrap());
+            let users = InMemoryUserDetailsService::new(vec![
+                UserDetails::new("alice", encoder.encode(PASSWORD), []).roles(&["USER"]),
+                UserDetails::new("bob", encoder.encode(PASSWORD), []).roles(&["USER"]),
+            ])
+            .unwrap();
+            security = security.password_provider(Arc::new(DaoAuthenticationProvider::new(
+                Arc::new(users),
+                encoder,
+            )));
+        }
+        let mut security = security
             .form_login(|f| f)
             .clock(Arc::new(clock.clone()))
             .oauth2_login(|_| {
@@ -157,6 +174,8 @@ impl Env {
                     .get("/session")
                     .permit_all()
                     .get("/plant")
+                    .permit_all()
+                    .get("/csrf")
                     .permit_all()
                     .any_request()
                     .authenticated()
@@ -204,7 +223,11 @@ impl Env {
                     .unwrap()
                     .unwrap_or(Value::Null);
                 let saved = session.get::<Value>(SAVED_KEY).unwrap().unwrap_or(Value::Null);
-                json!({ "tokens": tokens, "saved": saved }).to_string()
+                let principal = session
+                    .get::<Value>(PRINCIPAL_KEY)
+                    .unwrap()
+                    .unwrap_or(Value::Null);
+                json!({ "tokens": tokens, "saved": saved, "principal": principal }).to_string()
             }))
             .unwrap()
             .route(Route::new(HttpMethod::Get, "/plant", |req: Request| async move {
@@ -214,6 +237,16 @@ impl Env {
                 }
                 "planted"
             }))
+            .unwrap()
+            .route(Route::new(
+                HttpMethod::Get,
+                "/csrf",
+                |req: Request| async move {
+                    req.csrf_token()
+                        .map(|t| t.as_str().to_owned())
+                        .unwrap_or_default()
+                },
+            ))
             .unwrap()
             .route(Route::new(HttpMethod::Get, "/orders", |_| async { "orders" }))
             .unwrap();
@@ -343,6 +376,18 @@ impl Browser<'_> {
 
     async fn session(&self) -> Value {
         serde_json::from_str(&self.text("/session").await).unwrap()
+    }
+
+    /// Logs in with the password of `username` and returns the response.
+    async fn password_log_in(&self, username: &str) -> Response {
+        let token = self.text("/csrf").await;
+        let mut req = self.request(HttpMethod::Post, "/login");
+        req.headers.insert(
+            header::CONTENT_TYPE,
+            "application/x-www-form-urlencoded".parse().unwrap(),
+        );
+        req.body = format!("username={username}&password={PASSWORD}&_csrf={token}").into();
+        self.send(req).await
     }
 
     /// Starts a login and returns the parameters of the authorization URL.
@@ -1384,4 +1429,235 @@ fn logs() -> LogBuffer {
         logs
     })
     .clone()
+}
+
+// ---------------------------------------------------------------------------------------------
+// Fix round 1
+// ---------------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_live_state_and_code_of_another_browser_are_refused() {
+    let env = Env::new();
+    let attacker = env.browser();
+    let victim = env.browser();
+    let params = attacker.start("idp").await;
+    env.fake.expect_nonce(&params["nonce"]);
+    let code = env.fake.issue_code(FakeUser::new("attacker-user"));
+    let callback = [("code", code.as_str()), ("state", params["state"].as_str())];
+    // The victim loads the attacker's callback, before and after starting its own login.
+    assert_failure(
+        &victim.callback("idp", &callback).await,
+        "victim, no login started",
+    );
+    assert_eq!(victim.whoami().await, "anonymous");
+    let _ = victim.start("idp").await;
+    assert_failure(
+        &victim.callback("idp", &callback).await,
+        "victim, own login started",
+    );
+    assert_eq!(victim.whoami().await, "anonymous");
+    assert!(env.fake.token_requests().is_empty());
+    // The attacker's pending login is untouched and still works in the attacker's browser.
+    let res = attacker.callback("idp", &callback).await;
+    assert_eq!(location(&res), "/");
+    assert_eq!(attacker.whoami().await, "attacker-user");
+}
+
+#[tokio::test]
+async fn an_oauth2_login_does_not_share_the_session_limit_with_a_password_user() {
+    let env = Env::with(Options {
+        password: true,
+        session_limit: Some(1),
+        ..Options::default()
+    });
+    let password = env.browser();
+    let res = password.password_log_in("alice").await;
+    assert_eq!(location(&res), "/", "{res:?}");
+    assert_eq!(password.whoami().await, "alice");
+    assert_eq!(password.session().await["principal"], "alice");
+    // An OAuth2 user whose principal is also `alice`.
+    let first = env.browser();
+    first.log_in("idp", alice()).await;
+    assert_eq!(first.whoami().await, "alice");
+    assert_eq!(first.session().await["principal"], "oauth2:idp:alice");
+    assert_eq!(password.whoami().await, "alice");
+    // The OAuth2 user's own sessions are still limited.
+    let second = env.browser();
+    second.log_in("idp", alice()).await;
+    assert_eq!(second.whoami().await, "alice");
+    assert_eq!(first.whoami().await, "anonymous");
+    assert_eq!(password.whoami().await, "alice");
+}
+
+#[tokio::test]
+async fn a_password_login_after_an_oauth2_login_removes_the_tokens() {
+    let env = Env::with(Options {
+        password: true,
+        ..Options::default()
+    });
+    let b = env.browser();
+    b.log_in("idp", alice()).await;
+    assert_ne!(b.session().await["tokens"], Value::Null);
+    let res = b.password_log_in("bob").await;
+    assert_eq!(location(&res), "/", "{res:?}");
+    assert_eq!(b.whoami().await, "bob");
+    let session = b.session().await;
+    assert_eq!(session["tokens"], Value::Null);
+    assert_eq!(session["principal"], "bob");
+}
+
+#[tokio::test]
+async fn an_oidc_token_response_without_an_id_token_is_a_failure() {
+    let provider = ProviderConfig {
+        authorization_uri: Some(format!("{ISSUER}/authorize")),
+        token_uri: Some(format!("{ISSUER}/token-without-id-token")),
+        jwk_set_uri: Some(format!("{ISSUER}/jwks")),
+        ..ProviderConfig::default()
+    };
+    let env = Env::with(Options {
+        extra: vec![(registration("noid", "noid", &[]), provider)],
+        ..Options::default()
+    });
+    env.fake.client().on(
+        Method::POST,
+        &format!("{ISSUER}/token-without-id-token"),
+        MockResponse::status(200).json(&json!({"access_token": "at", "token_type": "Bearer"})),
+    );
+    let b = env.browser();
+    let params = b.start("noid").await;
+    assert!(params.contains_key("nonce"));
+    let res = b
+        .callback("noid", &[("code", "a-code"), ("state", &params["state"])])
+        .await;
+    assert_failure(&res, "no id token");
+    assert_eq!(b.whoami().await, "anonymous");
+    assert_eq!(b.session().await["tokens"], Value::Null);
+}
+
+fn build_with(
+    form: impl FnOnce(oxbloom_security::FormLogin) -> oxbloom_security::FormLogin,
+    f: impl FnOnce(OAuth2Login) -> OAuth2Login,
+) -> Result<oxbloom_security::SecurityFilterChain, SecurityBuildError> {
+    let fake = FakeProvider::new(ISSUER);
+    HttpSecurity::new()
+        .form_login(form)
+        .oauth2_login(|_| {
+            f(OAuth2Login::new(fake.client())
+                .provider("idp", oidc_provider())
+                .base_url(BASE))
+        })
+        .authorize(|a| a.any_request().authenticated())
+        .build()
+}
+
+#[tokio::test]
+async fn the_redirect_uri_must_be_the_callback_path_of_the_registration() {
+    let invalid = Some(SecurityBuildError::InvalidOAuth2Login);
+    let with_uri = |uri: &str| {
+        let mut r = registration("idp", "idp", &[]);
+        r.redirect_uri = uri.to_owned();
+        r
+    };
+    // The default template, and the same URI written out, pass; a trailing slash on the base
+    // URL is dropped as in the template.
+    assert!(build_with(|f| f, |l| l.registration(registration("idp", "idp", &[]))).is_ok());
+    assert!(
+        build_with(
+            |f| f,
+            |l| l.registration(with_uri("https://app.example.test/login/oauth2/code/idp"))
+        )
+        .is_ok()
+    );
+    assert!(
+        build_with(
+            |f| f,
+            |l| l
+                .base_url("https://app.example.test/")
+                .registration(registration("idp", "idp", &[]))
+        )
+        .is_ok()
+    );
+    for uri in [
+        "{base-url}/elsewhere/{id}",
+        "https://app.example.test/login/oauth2/code/other",
+        "https://evil.example.test/login/oauth2/code/idp",
+        "{base-url}/login/oauth2/code/{id}?x=1",
+    ] {
+        assert_eq!(
+            build_with(|f| f, |l| l.registration(with_uri(uri))).err(),
+            invalid,
+            "{uri}"
+        );
+    }
+    // Two registrations that share one redirect URI.
+    let mut shared = registration("second", "idp", &[]);
+    shared.redirect_uri = "{base-url}/login/oauth2/code/idp".into();
+    assert_eq!(
+        build_with(
+            |f| f,
+            |l| l
+                .registration(registration("idp", "idp", &[]))
+                .registration(shared)
+        )
+        .err(),
+        invalid
+    );
+}
+
+#[tokio::test]
+async fn a_zero_pending_max_age_fails_the_build() {
+    assert_eq!(
+        build_with(
+            |f| f,
+            |l| l
+                .registration(registration("idp", "idp", &[]))
+                .pending_max_age(Duration::ZERO)
+        )
+        .err(),
+        Some(SecurityBuildError::InvalidOAuth2Login)
+    );
+}
+
+#[tokio::test]
+async fn a_failure_url_on_an_oauth2_endpoint_fails_the_build() {
+    for url in ["/oauth2/authorization/idp", "/login/oauth2/code/idp?error"] {
+        assert_eq!(
+            build_with(
+                |f| f,
+                |l| l
+                    .registration(registration("idp", "idp", &[]))
+                    .failure_url(url)
+            )
+            .err(),
+            Some(SecurityBuildError::InvalidFormLoginUrl),
+            "{url}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_failure_url_follows_form_login_unless_set() {
+    let chain = build_with(
+        |f| f.failure_url("/signin?bad"),
+        |l| l.registration(registration("idp", "idp", &[])),
+    )
+    .unwrap();
+    let app = App::new().filter(chain);
+    let res = app
+        .handle(Request::new(HttpMethod::Get, "/oauth2/authorization/nope"))
+        .await;
+    assert_eq!(location(&res), "/signin?bad");
+    let chain = build_with(
+        |f| f.failure_url("/signin?bad"),
+        |l| {
+            l.registration(registration("idp", "idp", &[]))
+                .failure_url("/oauth-failed")
+        },
+    )
+    .unwrap();
+    let app = App::new().filter(chain);
+    let res = app
+        .handle(Request::new(HttpMethod::Get, "/oauth2/authorization/nope"))
+        .await;
+    assert_eq!(location(&res), "/oauth-failed");
 }

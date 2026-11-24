@@ -11,11 +11,9 @@ use std::time::SystemTime;
 use serde::{Deserialize, Serialize};
 
 use super::TokenResponse;
-use crate::form_login::epoch_seconds;
+use crate::form_login::{OAUTH2_TOKENS_PREFIX as TOKENS_PREFIX, epoch_seconds};
 use crate::{Session, SessionError};
 
-/// The prefix of the per-registration keys.
-const TOKENS_PREFIX: &str = "oxbloom.security.oauth2.tokens.";
 /// The version of the stored value.
 const VERSION: u32 = 1;
 
@@ -100,6 +98,8 @@ impl StoredTokens {
     }
 
     /// Removes the tokens of `registration`.
+    // Used by the OAuth2 client when a refresh fails.
+    #[allow(dead_code)]
     pub(crate) fn remove(session: &Session, registration: &str) {
         session.remove_reserved(&key_for(registration));
     }

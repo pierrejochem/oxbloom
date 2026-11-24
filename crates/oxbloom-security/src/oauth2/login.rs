@@ -30,7 +30,8 @@ use super::{
     constant_time_eq,
 };
 use crate::form_login::{
-    FormLoginHandlers, SAVED_REQUEST_KEY, take_saved_request, urlencoded_pairs,
+    FormLoginHandlers, OAUTH2_TOKENS_PREFIX, SAVED_REQUEST_KEY, take_saved_request,
+    urlencoded_pairs,
 };
 use crate::{RequestSessionExt, SecurityBuildError, Session, is_safe_redirect_target};
 
@@ -40,8 +41,6 @@ const START_PREFIX: &str = "/oauth2/authorization/";
 const CALLBACK_PREFIX: &str = "/login/oauth2/code/";
 /// The longest `state` accepted from the query string.
 const MAX_STATE_LEN: usize = 64;
-/// The default failure URL.
-const DEFAULT_FAILURE_URL: &str = "/login?error";
 /// How long a started login may take by default.
 const DEFAULT_PENDING_MAX_AGE: Duration = Duration::from_secs(600);
 
@@ -52,6 +51,20 @@ const DEFAULT_PENDING_MAX_AGE: Duration = Duration::from_secs(600);
 /// [`ClientRegistration`] with its [`ProviderConfig`], and the base URL of the application,
 /// from which the redirect URI is built (it is never guessed from the `Host` header).
 /// `Debug` shows the registration ids and the provider names, never a secret.
+///
+/// Notes on the result of a login:
+///
+/// - The callback path is fixed: `/login/oauth2/code/{id}`. The redirect URI of every
+///   registration must be exactly `{base-url}/login/oauth2/code/{id}`, or the build fails.
+/// - The `SCOPE_*` authorities come from the scopes the provider granted and are not tied to a
+///   registration: a provider of low trust that grants a scope named `admin` produces
+///   `SCOPE_admin`. Rules that must trust one provider should also check the
+///   `oauth2.registration` detail.
+/// - The session limit and the per-user session index count an OAuth2 user under the key
+///   `oauth2:<registration>:<principal>`, never under the bare principal, so an OAuth2 user
+///   and a password user with the same name never evict each other's sessions. An application
+///   that calls [`SessionRegistry::invalidate_all`](crate::SessionRegistry::invalidate_all) or
+///   `sessions_of` for an OAuth2 user passes that key, for example `"oauth2:github:alice"`.
 ///
 /// # Examples
 ///
@@ -86,7 +99,7 @@ pub struct OAuth2Login {
     registrations: Vec<ClientRegistration>,
     providers: BTreeMap<String, ProviderConfig>,
     base_url: Option<String>,
-    failure_url: String,
+    failure_url: Option<String>,
     clock: Option<Arc<dyn Clock>>,
     pending_max_age: Duration,
 }
@@ -115,15 +128,15 @@ impl OAuth2Login {
             registrations: Vec::new(),
             providers: BTreeMap::new(),
             base_url: None,
-            failure_url: DEFAULT_FAILURE_URL.to_owned(),
+            failure_url: None,
             clock: None,
             pending_max_age: DEFAULT_PENDING_MAX_AGE,
         }
     }
 
     /// Settings that send the provider requests (discovery, the token exchange, the key set
-    /// and the user info) through `client`, with no registration yet, the failure URL
-    /// `/login?error` and a pending login that is valid for 10 minutes.
+    /// and the user info) through `client`, with no registration yet, the failure URL of form
+    /// login and a pending login that is valid for 10 minutes.
     ///
     /// # Examples
     ///
@@ -239,8 +252,10 @@ impl OAuth2Login {
         self
     }
 
-    /// Where every failed login is redirected, `/login?error` by default. It must be a safe
-    /// local redirect target (see [`is_safe_redirect_target`]).
+    /// Where every failed login is redirected. Without it, the failure URL of form login is
+    /// used (`/login?error` by default). It must be a safe local redirect target (see
+    /// [`is_safe_redirect_target`]) and must not be one of the two OAuth2 endpoints, which
+    /// would loop.
     ///
     /// # Examples
     ///
@@ -254,7 +269,7 @@ impl OAuth2Login {
     /// ```
     #[must_use]
     pub fn failure_url(mut self, failure_url: &str) -> Self {
-        self.failure_url = failure_url.to_owned();
+        self.failure_url = Some(failure_url.to_owned());
         self
     }
 
@@ -279,7 +294,7 @@ impl OAuth2Login {
     }
 
     /// How long a started login stays valid, 10 minutes by default. A callback after that is
-    /// a failure.
+    /// a failure. Zero fails the build.
     ///
     /// # Examples
     ///
@@ -299,10 +314,12 @@ impl OAuth2Login {
     }
 
     /// Checks the settings and builds the handlers. `default_clock` is the clock of the
-    /// builder. Logs one warning per registration whose provider has a key set and no issuer.
+    /// builder and `form_failure_url` the failure URL of form login. Logs one warning per
+    /// registration whose provider has a key set and no issuer.
     pub(crate) fn into_handlers(
         self,
         default_clock: Arc<dyn Clock>,
+        form_failure_url: &str,
     ) -> Result<OAuth2LoginHandlers, SecurityBuildError> {
         let client = self
             .client
@@ -316,8 +333,25 @@ impl OAuth2Login {
             .base_url
             .filter(|url| is_acceptable_endpoint(url, false))
             .ok_or(SecurityBuildError::OAuth2LoginWithoutBaseUrl)?;
-        if !is_safe_redirect_target(&self.failure_url)
-            || HeaderValue::from_str(&self.failure_url).is_err()
+        let base_url = base_url.trim_end_matches('/').to_owned();
+        // The callback path is fixed, so the redirect URI must lead to it exactly. With unique
+        // ids this also keeps two registrations from sharing one redirect URI.
+        let leads_to_callback = |r: &ClientRegistration| {
+            r.resolved_redirect_uri(&base_url) == format!("{base_url}{CALLBACK_PREFIX}{}", r.id)
+        };
+        if !self.registrations.iter().all(leads_to_callback) || self.pending_max_age.is_zero() {
+            return Err(SecurityBuildError::InvalidOAuth2Login);
+        }
+        let failure_url = self
+            .failure_url
+            .unwrap_or_else(|| form_failure_url.to_owned());
+        let on_an_endpoint = |url: &str| {
+            let path = crate::form_login::path_of(url);
+            path.starts_with(START_PREFIX) || path.starts_with(CALLBACK_PREFIX)
+        };
+        if !is_safe_redirect_target(&failure_url)
+            || HeaderValue::from_str(&failure_url).is_err()
+            || on_an_endpoint(&failure_url)
         {
             return Err(SecurityBuildError::InvalidFormLoginUrl);
         }
@@ -339,8 +373,8 @@ impl OAuth2Login {
                 .map(|r| (r.id.clone(), r))
                 .collect(),
             providers: self.providers,
-            base_url: base_url.trim_end_matches('/').to_owned(),
-            failure_url: self.failure_url,
+            base_url,
+            failure_url,
             clock: self.clock.unwrap_or(default_clock),
             max_age: self.pending_max_age,
             metadata: MetadataCache::new(),
@@ -753,13 +787,16 @@ impl OAuth2LoginHandlers {
         pending: Pending,
         authentication: crate::Authentication,
     ) -> Response {
-        // Tokens of an earlier login in this session never stay next to the new login.
-        for id in self.registrations.keys() {
-            StoredTokens::remove(session, id);
-        }
+        // Tokens of an earlier login in this session never stay next to the new login, also
+        // those of a registration that is no longer configured.
+        session.remove_reserved_prefix(OAUTH2_TOKENS_PREFIX);
         // The session's saved request is spent; the one captured at the start is used.
         let _ = take_saved_request(session);
-        if form.establish(session, &authentication).await.is_err() {
+        if form
+            .establish(session, &authentication, Some(&registration.id))
+            .await
+            .is_err()
+        {
             // `establish` logged the failure and ended the session.
             return self.failure_redirect();
         }

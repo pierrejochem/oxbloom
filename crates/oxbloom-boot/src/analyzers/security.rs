@@ -121,6 +121,13 @@ impl FailureAnalyzer for SecurityAnalyzer {
                 "OAuth2 login has no HTTP client for the provider requests.",
                 "Pass an `HttpClient` to `OAuth2Login::new` or `OAuth2Login::client`.",
             ),
+            SecurityBuildError::InvalidOAuth2Login => (
+                "An OAuth2 login setting is out of range: a redirect URI is not \
+                 `{base-url}/login/oauth2/code/{id}` of its own registration, or the pending \
+                 login max age is zero.",
+                "Leave `redirect-uri` at its default or point it at \
+                 `{base-url}/login/oauth2/code/{id}`, and use a pending login max age above zero.",
+            ),
         };
         Some(FailureAnalysis::new(description, action))
     }
@@ -447,6 +454,11 @@ mod tests {
             SecurityBuildError::OAuth2LoginWithoutClient,
             "OAuth2 login has no HTTP client for the provider requests.",
             "Pass an `HttpClient` to `OAuth2Login::new` or `OAuth2Login::client`.",
+        );
+        check(
+            SecurityBuildError::InvalidOAuth2Login,
+            "An OAuth2 login setting is out of range: a redirect URI is not `{base-url}/login/oauth2/code/{id}` of its own registration, or the pending login max age is zero.",
+            "Leave `redirect-uri` at its default or point it at `{base-url}/login/oauth2/code/{id}`, and use a pending login max age above zero.",
         );
     }
 
