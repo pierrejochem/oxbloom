@@ -7,14 +7,24 @@ pub(crate) const DEFAULT_REDIRECT_URI: &str = "{base-url}/login/oauth2/code/{id}
 
 /// How the client proves its identity at the token endpoint.
 ///
+/// The enum is `#[non_exhaustive]`, so a `match` outside this crate needs a wildcard arm and a
+/// later method (such as a private key JWT) is not a breaking change.
+///
 /// # Examples
 ///
 /// ```
 /// use oxbloom_security::ClientAuthentication;
 ///
 /// assert_eq!(ClientAuthentication::default(), ClientAuthentication::Basic);
+///
+/// let needs_secret = match ClientAuthentication::Post {
+///     ClientAuthentication::None => false,
+///     _ => true,
+/// };
+/// assert!(needs_secret);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum ClientAuthentication {
     /// HTTP Basic with the client id and secret. The default.
     #[default]
