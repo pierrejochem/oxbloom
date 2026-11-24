@@ -9,6 +9,8 @@ use jsonwebtoken::{DecodingKey, Validation};
 use oxbloom_http_client::HttpClient;
 use serde_json::{Map, Value};
 
+use super::metadata::ASYMMETRIC;
+use super::settings::is_acceptable_endpoint;
 use super::{ClientRegistration, OAuth2Error, ProviderMetadata, constant_time_eq};
 use crate::{JwksSource, ReqwestJwksFetcher};
 
@@ -157,9 +159,10 @@ impl IdTokenValidator {
 
     /// Validates `id_token` for `registration` at the time `now` and returns its claims.
     ///
-    /// The header `alg` must be one of [`ProviderMetadata::id_token_algorithms`], which only
-    /// ever holds `RS256`, `RS384`, `RS512`, `ES256`, `ES384` or `PS256`, so `none` and HMAC
-    /// are refused whatever the header says. The key is the one with the header's `kid` in the
+    /// The header `alg` must be one of [`ProviderMetadata::id_token_algorithms`] and one of
+    /// `RS256`, `RS384`, `RS512`, `ES256` and `ES384` (checked again here, so a hand-built
+    /// metadata cannot widen the list), so `none` and HMAC are refused whatever the header
+    /// says. The key set URI is checked again as well: `https`, or `http` for a loopback host. The key is the one with the header's `kid` in the
     /// provider's key set, and the signature must verify with it. Then: `iss` equals the
     /// issuer exactly (for a provider without an issuer it must be present); `aud` contains
     /// the client id; `azp`, when present and always when `aud` has several entries, equals
@@ -232,7 +235,10 @@ impl IdTokenValidator {
     ) -> Result<IdTokenClaims, OAuth2Error> {
         const INVALID: OAuth2Error = OAuth2Error::InvalidIdToken;
         let header = jsonwebtoken::decode_header(id_token).map_err(|_| INVALID)?;
-        if !metadata.id_token_algorithms.contains(&header.alg) || header.crit.is_some() {
+        if !metadata.id_token_algorithms.contains(&header.alg)
+            || !ASYMMETRIC.contains(&header.alg)
+            || header.crit.is_some()
+        {
             return Err(INVALID);
         }
         let kid = header.kid.as_deref().ok_or(INVALID)?;
@@ -268,9 +274,13 @@ impl IdTokenValidator {
         if let Some(source) = sources.get(jwks_uri) {
             return Ok(source.clone());
         }
+        // The metadata checks this too; a hand-built `ProviderMetadata` must not skip it.
+        if !is_acceptable_endpoint(jwks_uri, true) {
+            return Err(OAuth2Error::InvalidIdToken);
+        }
         let fetcher = Arc::new(ReqwestJwksFetcher::with_client(self.client.clone()));
         let mut builder = JwksSource::builder(fetcher, jwks_uri);
-        // The metadata only lets `http` through for a loopback host.
+        // `is_acceptable_endpoint` only lets `http` through for a loopback host.
         if jwks_uri
             .get(..7)
             .is_some_and(|s| s.eq_ignore_ascii_case("http://"))
@@ -351,9 +361,276 @@ fn check_claims(
         return Err(INVALID);
     }
 
+    if !claims
+        .get("sub")
+        .and_then(Value::as_str)
+        .is_some_and(|sub| !sub.is_empty())
+    {
+        return Err(INVALID);
+    }
+
     let found = claims.get("nonce").and_then(Value::as_str).ok_or(INVALID)?;
     if !constant_time_eq(found, nonce) {
         return Err(INVALID);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    use async_trait::async_trait;
+    use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use jsonwebtoken::Algorithm;
+    use oxbloom_config::Secret;
+    use oxbloom_http_client::{HttpClientError, Request, Response};
+    use serde_json::json;
+
+    use super::*;
+    use crate::ClientAuthentication;
+
+    const NOW: u64 = 1_800_000_000;
+
+    /// Counts the requests and answers none, so a test sees whether the key set was fetched.
+    #[derive(Default)]
+    struct Counting(AtomicUsize);
+
+    #[async_trait]
+    impl HttpClient for Counting {
+        async fn execute(&self, _request: Request) -> Result<Response, HttpClientError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Err(HttpClientError::Network)
+        }
+    }
+
+    fn registration() -> ClientRegistration {
+        ClientRegistration {
+            id: "idp".into(),
+            client_id: "app".into(),
+            client_secret: Some(Secret::new("s".into())),
+            scopes: vec!["openid".into()],
+            redirect_uri: "https://app.example/cb".into(),
+            client_authentication: ClientAuthentication::Basic,
+            provider: "idp".into(),
+        }
+    }
+
+    fn metadata(issuer: Option<&str>) -> ProviderMetadata {
+        ProviderMetadata {
+            issuer: issuer.map(str::to_owned),
+            authorization_endpoint: "https://idp.example.test/authorize".into(),
+            token_endpoint: "https://idp.example.test/token".into(),
+            userinfo_endpoint: None,
+            jwks_uri: Some("https://idp.example.test/jwks".into()),
+            id_token_algorithms: vec![Algorithm::RS256, Algorithm::ES256],
+            resolved_at: UNIX_EPOCH,
+        }
+    }
+
+    fn claims(value: Value) -> Map<String, Value> {
+        let Value::Object(map) = value else {
+            panic!("an object")
+        };
+        map
+    }
+
+    fn valid() -> Map<String, Value> {
+        claims(json!({
+            "iss": "https://idp.example.test",
+            "sub": "alice",
+            "aud": "app",
+            "exp": NOW + 300,
+            "iat": NOW,
+            "nonce": "n-1",
+        }))
+    }
+
+    fn check(claims: &Map<String, Value>, issuer: Option<&str>) -> Result<(), OAuth2Error> {
+        check_claims(
+            claims,
+            &registration(),
+            &metadata(issuer),
+            "n-1",
+            UNIX_EPOCH + Duration::from_secs(NOW),
+        )
+    }
+
+    fn without(name: &str) -> Map<String, Value> {
+        let mut c = valid();
+        c.remove(name);
+        c
+    }
+
+    fn with(name: &str, value: Value) -> Map<String, Value> {
+        let mut c = valid();
+        c.insert(name.into(), value);
+        c
+    }
+
+    const ISSUER: Option<&str> = Some("https://idp.example.test");
+    const INVALID: Result<(), OAuth2Error> = Err(OAuth2Error::InvalidIdToken);
+
+    #[test]
+    fn hand_built_valid_claims_pass() {
+        assert_eq!(check(&valid(), ISSUER), Ok(()));
+        // One audience with a matching `azp`, and several audiences with it.
+        assert_eq!(check(&with("azp", json!("app")), ISSUER), Ok(()));
+        let mut several = with("aud", json!(["app", "other"]));
+        several.insert("azp".into(), json!("app"));
+        assert_eq!(check(&several, ISSUER), Ok(()));
+    }
+
+    #[test]
+    fn without_a_configured_issuer_any_non_empty_iss_passes() {
+        assert_eq!(
+            check(&with("iss", json!("https://anyone.example")), None),
+            Ok(())
+        );
+        assert_eq!(check(&with("iss", json!("")), None), INVALID);
+        assert_eq!(check(&without("iss"), None), INVALID);
+        assert_eq!(check(&with("iss", json!(42)), None), INVALID);
+        // With a configured issuer, only that one.
+        assert_eq!(
+            check(&with("iss", json!("https://anyone.example")), ISSUER),
+            INVALID
+        );
+        assert_eq!(
+            check(&with("iss", json!("https://idp.example.test/")), ISSUER),
+            INVALID
+        );
+    }
+
+    #[test]
+    fn exp_and_iat_are_required_whole_numbers() {
+        assert_eq!(check(&without("exp"), ISSUER), INVALID);
+        assert_eq!(check(&without("iat"), ISSUER), INVALID);
+        assert_eq!(check(&with("exp", json!("soon")), ISSUER), INVALID);
+        assert_eq!(check(&with("iat", json!(-1)), ISSUER), INVALID);
+        assert_eq!(check(&with("nbf", json!("x")), ISSUER), INVALID);
+    }
+
+    #[test]
+    fn the_time_checks_have_a_60_second_leeway() {
+        assert_eq!(check(&with("exp", json!(NOW - 60)), ISSUER), Ok(()));
+        assert_eq!(check(&with("exp", json!(NOW - 61)), ISSUER), INVALID);
+        assert_eq!(check(&with("iat", json!(NOW + 60)), ISSUER), Ok(()));
+        assert_eq!(check(&with("iat", json!(NOW + 61)), ISSUER), INVALID);
+        assert_eq!(check(&with("nbf", json!(NOW + 60)), ISSUER), Ok(()));
+        assert_eq!(check(&with("nbf", json!(NOW + 61)), ISSUER), INVALID);
+    }
+
+    #[test]
+    fn sub_must_be_a_non_empty_string() {
+        assert_eq!(check(&without("sub"), ISSUER), INVALID);
+        assert_eq!(check(&with("sub", json!("")), ISSUER), INVALID);
+        assert_eq!(check(&with("sub", json!(7)), ISSUER), INVALID);
+    }
+
+    #[test]
+    fn audience_and_azp_rules() {
+        // `azp` present with one audience must still be the client id.
+        assert_eq!(check(&with("azp", json!("other")), ISSUER), INVALID);
+        assert_eq!(check(&with("azp", json!(1)), ISSUER), INVALID);
+        // Several audiences need `azp`.
+        assert_eq!(
+            check(&with("aud", json!(["app", "other"])), ISSUER),
+            INVALID
+        );
+        assert_eq!(check(&with("aud", json!("other")), ISSUER), INVALID);
+        assert_eq!(check(&with("aud", json!(["other", 1])), ISSUER), INVALID);
+        assert_eq!(check(&without("aud"), ISSUER), INVALID);
+    }
+
+    #[test]
+    fn the_nonce_must_match() {
+        assert_eq!(check(&without("nonce"), ISSUER), INVALID);
+        assert_eq!(check(&with("nonce", json!("n-2")), ISSUER), INVALID);
+        assert_eq!(check(&with("nonce", json!("n-1 ")), ISSUER), INVALID);
+    }
+
+    /// A token with `header` and a dummy payload and signature; the header is all that is read
+    /// before the key lookup.
+    fn token_with_header(header: Value) -> String {
+        format!(
+            "{}.{}.c2ln",
+            URL_SAFE_NO_PAD.encode(header.to_string()),
+            URL_SAFE_NO_PAD.encode(Value::Object(valid()).to_string())
+        )
+    }
+
+    async fn validate_header(
+        header: Value,
+        metadata: &ProviderMetadata,
+    ) -> (Result<(), OAuth2Error>, usize) {
+        let client = Arc::new(Counting::default());
+        let validator = IdTokenValidator::new(client.clone());
+        let result = validator
+            .validate(
+                &token_with_header(header),
+                &registration(),
+                metadata,
+                "n-1",
+                UNIX_EPOCH + Duration::from_secs(NOW),
+            )
+            .await
+            .map(|_| ());
+        (result, client.0.load(Ordering::SeqCst))
+    }
+
+    #[tokio::test]
+    async fn a_token_without_kid_or_with_crit_is_refused_before_any_fetch() {
+        let meta = metadata(ISSUER);
+        assert_eq!(
+            validate_header(json!({"alg": "ES256"}), &meta).await,
+            (INVALID, 0)
+        );
+        assert_eq!(
+            validate_header(json!({"alg": "ES256", "kid": "k", "crit": ["exp"]}), &meta).await,
+            (INVALID, 0)
+        );
+        assert_eq!(
+            validate_header(json!({"alg": "HS256", "kid": "k"}), &meta).await,
+            (INVALID, 0)
+        );
+        // A hand-built metadata cannot widen the list to HMAC.
+        let mut widened = metadata(ISSUER);
+        widened.id_token_algorithms.push(Algorithm::HS256);
+        assert_eq!(
+            validate_header(json!({"alg": "HS256", "kid": "k"}), &widened).await,
+            (INVALID, 0)
+        );
+        // A well-formed header goes on to the key lookup, which fails here.
+        assert_eq!(
+            validate_header(json!({"alg": "ES256", "kid": "k"}), &meta).await,
+            (INVALID, 1)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_hand_built_metadata_with_an_unacceptable_key_set_uri_is_refused() {
+        for uri in [
+            "http://idp.example.test/jwks",
+            "ftp://idp.example.test/jwks",
+            "https://idp.example.test/jwks#frag",
+            "not a uri",
+        ] {
+            let mut meta = metadata(ISSUER);
+            meta.jwks_uri = Some(uri.into());
+            assert_eq!(
+                validate_header(json!({"alg": "ES256", "kid": "k"}), &meta).await,
+                (INVALID, 0),
+                "{uri}"
+            );
+        }
+        // A loopback `http` key set is allowed.
+        let mut meta = metadata(ISSUER);
+        meta.jwks_uri = Some("http://127.0.0.1:9/jwks".into());
+        assert_eq!(
+            validate_header(json!({"alg": "ES256", "kid": "k"}), &meta).await,
+            (INVALID, 1)
+        );
+    }
 }

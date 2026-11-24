@@ -2,6 +2,7 @@
 
 use std::fmt;
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -40,7 +41,8 @@ pub struct TokenResponse {
     pub access_token: Secret<String>,
     /// The token type, `Bearer` in any case.
     pub token_type: String,
-    /// The lifetime of the access token in seconds, when the provider sent it.
+    /// The lifetime of the access token in seconds, when the provider sent it, capped at ten
+    /// years so that adding it to a time cannot overflow.
     pub expires_in: Option<u64>,
     /// The refresh token, when the provider sent one.
     pub refresh_token: Option<Secret<String>>,
@@ -48,6 +50,36 @@ pub struct TokenResponse {
     pub id_token: Option<Secret<String>>,
     /// The granted scopes, space-separated, when the provider sent them.
     pub scope: Option<String>,
+}
+
+impl TokenResponse {
+    /// When the access token expires, counted from `now`: `None` when the provider sent no
+    /// lifetime, or when the result would not fit in a `SystemTime`. It never panics, however
+    /// large `expires_in` is.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::time::{Duration, SystemTime};
+    /// use oxbloom_config::Secret;
+    /// use oxbloom_security::__test_support::TokenResponse;
+    ///
+    /// let tokens = TokenResponse {
+    ///     access_token: Secret::new("at".to_owned()),
+    ///     token_type: "Bearer".into(),
+    ///     expires_in: Some(3600),
+    ///     refresh_token: None,
+    ///     id_token: None,
+    ///     scope: None,
+    /// };
+    /// let now = SystemTime::now();
+    /// assert_eq!(tokens.expires_at(now), Some(now + Duration::from_secs(3600)));
+    /// ```
+    #[must_use]
+    pub fn expires_at(&self, now: SystemTime) -> Option<SystemTime> {
+        self.expires_in
+            .and_then(|secs| now.checked_add(Duration::from_secs(secs.min(MAX_EXPIRES_IN))))
+    }
 }
 
 impl fmt::Debug for TokenResponse {
@@ -65,6 +97,9 @@ impl fmt::Debug for TokenResponse {
             .finish()
     }
 }
+
+/// The largest accepted `expires_in`: ten years, in seconds.
+const MAX_EXPIRES_IN: u64 = 10 * 365 * 24 * 3600;
 
 #[derive(Deserialize)]
 struct RawTokenResponse {
@@ -294,7 +329,8 @@ fn read_token_response(response: &Response) -> Result<TokenResponse, OAuth2Error
         Some(Value::Number(n)) => n.as_u64(),
         Some(Value::String(s)) => s.parse().ok(),
         _ => None,
-    };
+    }
+    .map(|secs: u64| secs.min(MAX_EXPIRES_IN));
     Ok(TokenResponse {
         access_token: Secret::new(access_token),
         token_type,

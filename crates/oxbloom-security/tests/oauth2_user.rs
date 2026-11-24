@@ -162,11 +162,22 @@ fn a_missing_user_name_attribute_is_an_error() {
         .unwrap_err(),
         OAuth2Error::UserInfo
     );
-    // ... and a non-empty string.
-    assert_eq!(
-        authentication_from(&registration(), &plain(Some("id")), false, attrs, &[]).unwrap_err(),
-        OAuth2Error::UserInfo
-    );
+    // ... and a non-empty string or an integer.
+    let _ = attrs;
+    for value in [
+        json!(4.5),
+        json!(true),
+        json!(null),
+        json!(["a"]),
+        json!({"a": 1}),
+    ] {
+        let odd = attributes(json!({ "id": value }));
+        assert_eq!(
+            authentication_from(&registration(), &plain(Some("id")), false, odd, &[]).unwrap_err(),
+            OAuth2Error::UserInfo,
+            "{value}"
+        );
+    }
     let empty = attributes(json!({"login": ""}));
     assert_eq!(
         authentication_from(&registration(), &plain(Some("login")), false, empty, &[]).unwrap_err(),
@@ -238,4 +249,21 @@ fn the_oauth2_marker_is_in_the_details() {
     assert_eq!(auth.details()["oauth2.registration"], "idp");
     assert_eq!(auth.details()["oauth2.principal"], true);
     assert!(!auth.is_remembered());
+}
+
+#[test]
+fn an_integer_attribute_is_the_principal_as_a_decimal_string() {
+    // GitHub names its users with a numeric `id`.
+    for (value, expected) in [
+        (json!(583231), "583231"),
+        (json!(-7), "-7"),
+        (json!(u64::MAX), "18446744073709551615"),
+    ] {
+        let attrs = attributes(json!({ "id": value, "login": "octocat" }));
+        let auth =
+            authentication_from(&registration(), &plain(Some("id")), false, attrs, &[]).unwrap();
+        assert_eq!(auth.principal(), expected);
+        // The attribute itself keeps its JSON type in the details.
+        assert_eq!(auth.details()["id"], value);
+    }
 }

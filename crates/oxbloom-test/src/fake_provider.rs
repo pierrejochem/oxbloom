@@ -5,6 +5,7 @@ use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::UNIX_EPOCH;
 
+use aws_lc_rs::digest::{SHA256, digest};
 use aws_lc_rs::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, KeyPair};
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
@@ -348,6 +349,9 @@ struct State {
     nonce: Option<String>,
     token_requests: Vec<TokenRequest>,
     clock: Arc<dyn Clock>,
+    expected_challenge: Option<String>,
+    expected_redirect_uri: Option<String>,
+    expected_secret: Option<String>,
 }
 
 /// The parts of the fake that the HTTP handler needs.
@@ -370,9 +374,16 @@ struct Shared {
 /// [`issue_code`](Self::issue_code) registers a code for a [`FakeUser`]; the next token request
 /// with that code gets an access token, a refresh token and an id token whose `aud` is the
 /// client id of the token request (from HTTP Basic or the `client_id` field) and whose `nonce`
-/// is the one set with [`expect_nonce`](Self::expect_nonce) before the code was issued. A code
-/// works once; an unknown code gets `invalid_grant`. [`misbehave`](Self::misbehave) adds a
-/// [`Fault`]. The key id, the codes and the tokens are random per instance.
+/// is the one set with [`expect_nonce`](Self::expect_nonce) before the code was issued, or,
+/// when none was set then, the one set when the code is exchanged. A code works once; an
+/// unknown code gets `invalid_grant`. [`misbehave`](Self::misbehave) adds a [`Fault`]. The key
+/// id, the codes and the tokens are random per instance.
+///
+/// By default the token endpoint does not check the PKCE verifier, the redirect URI or the
+/// client secret. [`expect_pkce`](Self::expect_pkce),
+/// [`expect_redirect_uri`](Self::expect_redirect_uri) and
+/// [`expect_client_secret`](Self::expect_client_secret) turn those checks on, so an end-to-end
+/// test notices a dropped `code_verifier` or a wrong secret.
 ///
 /// Available with the cargo feature `oauth2`. `Debug` shows the issuer only.
 ///
@@ -443,6 +454,9 @@ impl FakeProvider {
                 nonce: None,
                 token_requests: Vec::new(),
                 clock: Arc::new(SystemClock),
+                expected_challenge: None,
+                expected_redirect_uri: None,
+                expected_secret: None,
             }),
         });
         let client = Arc::new(MockHttpClient::new());
@@ -503,7 +517,8 @@ impl FakeProvider {
     }
 
     /// Registers a new random code for `user` and returns it. The nonce set with
-    /// [`expect_nonce`](Self::expect_nonce) so far goes into the id token of this code.
+    /// [`expect_nonce`](Self::expect_nonce) so far goes into the id token of this code; when
+    /// none is set yet, the one set by the time the code is exchanged is used.
     ///
     /// # Examples
     ///
@@ -524,7 +539,8 @@ impl FakeProvider {
     }
 
     /// Sets the nonce that the id tokens of codes issued from now on carry, normally the one
-    /// the login under test sent in the authorization request.
+    /// the login under test sent in the authorization request. A code issued before any
+    /// nonce was set takes the nonce current when it is exchanged.
     ///
     /// # Examples
     ///
@@ -538,6 +554,56 @@ impl FakeProvider {
     /// ```
     pub fn expect_nonce(&self, nonce: &str) -> &Self {
         self.shared.state().nonce = Some(nonce.to_owned());
+        self
+    }
+
+    /// Makes the token endpoint check the PKCE verifier: the base64url (no padding) SHA-256 of
+    /// the `code_verifier` field must equal `challenge`, else the answer is `invalid_grant`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_test::FakeProvider;
+    ///
+    /// let fake = FakeProvider::new("https://idp.example.test");
+    /// // The RFC 7636 test vector: the challenge of the verifier
+    /// // "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk".
+    /// fake.expect_pkce("E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
+    /// ```
+    pub fn expect_pkce(&self, challenge: &str) -> &Self {
+        self.shared.state().expected_challenge = Some(challenge.to_owned());
+        self
+    }
+
+    /// Makes the token endpoint check that the `redirect_uri` field equals `uri` exactly, else
+    /// the answer is `invalid_grant`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_test::FakeProvider;
+    ///
+    /// let fake = FakeProvider::new("https://idp.example.test");
+    /// fake.expect_redirect_uri("https://app.example/login/oauth2/code/idp");
+    /// ```
+    pub fn expect_redirect_uri(&self, uri: &str) -> &Self {
+        self.shared.state().expected_redirect_uri = Some(uri.to_owned());
+        self
+    }
+
+    /// Makes the token endpoint check the client secret, from HTTP Basic (form-URL-decoded) or
+    /// from the `client_secret` field; a wrong or missing secret gets `invalid_client`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_test::FakeProvider;
+    ///
+    /// let fake = FakeProvider::new("https://idp.example.test");
+    /// fake.expect_client_secret("app-secret");
+    /// ```
+    pub fn expect_client_secret(&self, secret: &str) -> &Self {
+        self.shared.state().expected_secret = Some(secret.to_owned());
         self
     }
 
@@ -677,12 +743,30 @@ impl Shared {
         if recorded.field("grant_type") != Some("authorization_code") {
             return oauth_error("unsupported_grant_type");
         }
+        if let Some(expected) = &state.expected_secret
+            && client_secret(&recorded).as_deref() != Some(expected.as_str())
+        {
+            return oauth_error("invalid_client");
+        }
         let Some(issued) = recorded
             .field("code")
             .and_then(|code| state.codes.remove(code))
         else {
             return oauth_error("invalid_grant");
         };
+        if let Some(expected) = &state.expected_challenge {
+            let challenge = recorded
+                .field("code_verifier")
+                .map(|verifier| URL_SAFE_NO_PAD.encode(digest(&SHA256, verifier.as_bytes())));
+            if challenge.as_deref() != Some(expected.as_str()) {
+                return oauth_error("invalid_grant");
+            }
+        }
+        if let Some(expected) = &state.expected_redirect_uri
+            && recorded.field("redirect_uri") != Some(expected.as_str())
+        {
+            return oauth_error("invalid_grant");
+        }
         let client_id = client_id(&recorded).unwrap_or_default();
         let nonce = issued.nonce.or_else(|| state.nonce.clone());
         let now = state
@@ -816,6 +900,21 @@ fn client_id(request: &TokenRequest) -> Option<String> {
         return Some(form_decode(id));
     }
     request.field("client_id").map(str::to_owned)
+}
+
+/// The client secret of a token request: from HTTP Basic (form-URL-decoded), else from the
+/// `client_secret` field.
+fn client_secret(request: &TokenRequest) -> Option<String> {
+    if let Some(encoded) = request
+        .authorization()
+        .and_then(|v| v.strip_prefix("Basic "))
+    {
+        let decoded = STANDARD.decode(encoded).ok()?;
+        let text = String::from_utf8(decoded).ok()?;
+        let (_, secret) = text.split_once(':')?;
+        return Some(form_decode(secret));
+    }
+    request.field("client_secret").map(str::to_owned)
 }
 
 /// Decodes `application/x-www-form-urlencoded` text: `+` is a space and `%XX` a byte.

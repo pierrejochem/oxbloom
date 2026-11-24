@@ -380,3 +380,132 @@ fn debug_shows_no_key_material_or_codes() {
     assert!(!text.contains(&code));
     assert!(text.contains(ISSUER));
 }
+
+fn post_request(code: &str, fields: &[(&str, &str)], basic: Option<&str>) -> Request {
+    let mut form = vec![
+        ("grant_type".to_owned(), "authorization_code".to_owned()),
+        ("code".to_owned(), code.to_owned()),
+    ];
+    form.extend(
+        fields
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned())),
+    );
+    let mut request = Request::post(format!("{ISSUER}/token"));
+    if let Some(credentials) = basic {
+        request = request.header(
+            "authorization",
+            &format!("Basic {}", STANDARD.encode(credentials)),
+        );
+    }
+    request.body(Body::Form(form))
+}
+
+async fn error_code(fake: &FakeProvider, request: Request) -> Option<String> {
+    let response = fake.client().execute(request).await.unwrap();
+    if response.status() == StatusCode::OK {
+        return None;
+    }
+    let body: Value = response.json().unwrap();
+    Some(body["error"].as_str().unwrap().to_owned())
+}
+
+#[tokio::test]
+async fn an_expected_pkce_challenge_is_checked() {
+    // The RFC 7636 test vector.
+    let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+    let challenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
+    let fake = FakeProvider::new(ISSUER);
+    fake.expect_pkce(challenge);
+    let code = fake.issue_code(FakeUser::new("alice"));
+    let ok = post_request(
+        &code,
+        &[("client_id", "app"), ("code_verifier", verifier)],
+        None,
+    );
+    assert_eq!(error_code(&fake, ok).await, None);
+
+    for fields in [
+        vec![("client_id", "app"), ("code_verifier", "another-verifier")],
+        vec![("client_id", "app")],
+    ] {
+        let code = fake.issue_code(FakeUser::new("alice"));
+        let bad = post_request(&code, &fields, None);
+        assert_eq!(
+            error_code(&fake, bad).await.as_deref(),
+            Some("invalid_grant")
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_expected_redirect_uri_is_checked() {
+    let fake = FakeProvider::new(ISSUER);
+    fake.expect_redirect_uri("https://app.example/cb");
+    let code = fake.issue_code(FakeUser::new("alice"));
+    let ok = post_request(
+        &code,
+        &[("redirect_uri", "https://app.example/cb")],
+        Some("app:s"),
+    );
+    assert_eq!(error_code(&fake, ok).await, None);
+
+    for fields in [vec![("redirect_uri", "https://app.example/cb/")], vec![]] {
+        let code = fake.issue_code(FakeUser::new("alice"));
+        let bad = post_request(&code, &fields, Some("app:s"));
+        assert_eq!(
+            error_code(&fake, bad).await.as_deref(),
+            Some("invalid_grant")
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_expected_client_secret_is_checked_through_basic_and_the_form() {
+    let fake = FakeProvider::new(ISSUER);
+    fake.expect_client_secret("s3cr3t:x y");
+    // Basic carries the form-URL-encoded secret.
+    let code = fake.issue_code(FakeUser::new("alice"));
+    let basic = post_request(&code, &[], Some("app:s3cr3t%3Ax+y"));
+    assert_eq!(error_code(&fake, basic).await, None);
+    let code = fake.issue_code(FakeUser::new("alice"));
+    let form = post_request(
+        &code,
+        &[("client_id", "app"), ("client_secret", "s3cr3t:x y")],
+        None,
+    );
+    assert_eq!(error_code(&fake, form).await, None);
+
+    for (fields, basic) in [
+        (vec![], Some("app:wrong")),
+        (vec![("client_id", "app"), ("client_secret", "wrong")], None),
+        (vec![("client_id", "app")], None),
+    ] {
+        let code = fake.issue_code(FakeUser::new("alice"));
+        let bad = post_request(&code, &fields, basic);
+        assert_eq!(
+            error_code(&fake, bad).await.as_deref(),
+            Some("invalid_client")
+        );
+    }
+}
+
+#[tokio::test]
+async fn without_a_nonce_at_issue_the_current_nonce_is_used() {
+    let fake = FakeProvider::new(ISSUER);
+    let code = fake.issue_code(FakeUser::new("alice"));
+    fake.expect_nonce("set-after-issue");
+    let body: Value = exchange(&fake, &code).await.json().unwrap();
+    assert_eq!(
+        payload(body["id_token"].as_str().unwrap())["nonce"],
+        "set-after-issue"
+    );
+    // A nonce present at issue wins over a later one.
+    let code = fake.issue_code(FakeUser::new("alice"));
+    fake.expect_nonce("even-later");
+    let body: Value = exchange(&fake, &code).await.json().unwrap();
+    assert_eq!(
+        payload(body["id_token"].as_str().unwrap())["nonce"],
+        "set-after-issue"
+    );
+}

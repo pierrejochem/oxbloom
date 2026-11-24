@@ -70,14 +70,15 @@ async fn discovery_reads_the_endpoints() {
 async fn the_algorithm_list_is_narrowed_to_asymmetric_ones_and_defaults_to_rs256_and_es256() {
     let mock = MockHttpClient::new();
     let mut doc = document(&format!("{ISSUER}/token"));
-    doc["id_token_signing_alg_values_supported"] = json!(["HS256", "none", "RS256", "PS256", "X"]);
+    doc["id_token_signing_alg_values_supported"] =
+        json!(["HS256", "none", "RS256", "ES384", "PS256", "X"]);
     mock.on(Method::GET, DISCOVERY, MockResponse::status(200).json(&doc));
     let metadata = ProviderMetadata::resolve(&oidc(ISSUER), &mock, now())
         .await
         .unwrap();
     assert_eq!(
         metadata.id_token_algorithms,
-        vec![Algorithm::RS256, Algorithm::PS256]
+        vec![Algorithm::RS256, Algorithm::ES384]
     );
 
     let mock = MockHttpClient::new();
@@ -144,8 +145,10 @@ async fn a_failed_discovery_is_not_cached() {
         .await
         .unwrap_err();
     assert_eq!(err, OAuth2Error::Discovery);
+    // After the backoff window (5 seconds by default) the next call tries again.
+    let later = now() + Duration::from_secs(5);
     let metadata = cache
-        .get_or_resolve("idp", &oidc(ISSUER), &mock, now())
+        .get_or_resolve("idp", &oidc(ISSUER), &mock, later)
         .await
         .unwrap();
     assert_eq!(metadata.token_endpoint, format!("{ISSUER}/token"));
@@ -155,7 +158,7 @@ async fn a_failed_discovery_is_not_cached() {
             "idp",
             &oidc(ISSUER),
             &mock,
-            now() + Duration::from_secs(3599),
+            later + Duration::from_secs(3599),
         )
         .await
         .unwrap();
@@ -166,11 +169,77 @@ async fn a_failed_discovery_is_not_cached() {
             "idp",
             &oidc(ISSUER),
             &mock,
-            now() + Duration::from_secs(3600),
+            later + Duration::from_secs(3600),
         )
         .await
         .unwrap();
     assert_eq!(mock.request_count(), 3);
+}
+
+#[tokio::test]
+async fn a_call_within_the_backoff_window_gets_the_recorded_error_and_a_later_one_retries() {
+    let mock = MockHttpClient::new();
+    mock.on(Method::GET, DISCOVERY, MockResponse::status(503))
+        .on(
+            Method::GET,
+            DISCOVERY,
+            MockResponse::status(200).json(&document(&format!("{ISSUER}/token"))),
+        );
+    let cache = MetadataCache::new();
+    for offset in [0, 1, 4] {
+        let err = cache
+            .get_or_resolve(
+                "idp",
+                &oidc(ISSUER),
+                &mock,
+                now() + Duration::from_secs(offset),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err, OAuth2Error::Discovery);
+    }
+    assert_eq!(mock.request_count(), 1);
+    cache
+        .get_or_resolve("idp", &oidc(ISSUER), &mock, now() + Duration::from_secs(5))
+        .await
+        .unwrap();
+    assert_eq!(mock.request_count(), 2);
+
+    // The window can be set; zero retries every time.
+    let mock = MockHttpClient::new();
+    mock.on(Method::GET, DISCOVERY, MockResponse::status(503));
+    let cache = MetadataCache::new().failure_backoff(Duration::ZERO);
+    for _ in 0..3 {
+        assert!(
+            cache
+                .get_or_resolve("idp", &oidc(ISSUER), &mock, now())
+                .await
+                .is_err()
+        );
+    }
+    assert_eq!(mock.request_count(), 3);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_callers_during_an_outage_share_one_failed_request() {
+    let mock = Arc::new(MockHttpClient::new());
+    mock.on(Method::GET, DISCOVERY, MockResponse::status(503));
+    let client = Arc::new(Slow(mock.clone()));
+    let cache = Arc::new(MetadataCache::new());
+    let mut tasks = Vec::new();
+    for _ in 0..8 {
+        let cache = cache.clone();
+        let client = client.clone();
+        tasks.push(tokio::spawn(async move {
+            cache
+                .get_or_resolve("idp", &oidc(ISSUER), client.as_ref(), now())
+                .await
+        }));
+    }
+    for task in tasks {
+        assert_eq!(task.await.unwrap().unwrap_err(), OAuth2Error::Discovery);
+    }
+    assert_eq!(mock.request_count(), 1);
 }
 
 #[tokio::test]

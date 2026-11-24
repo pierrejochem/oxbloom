@@ -99,7 +99,9 @@ impl UserInfo {
 ///
 /// The principal is the attribute named by the provider's `user-name-attribute`; for an
 /// OpenID Connect login (`oidc`) it defaults to `sub`, for a plain OAuth2 login it is
-/// required. The authorities are `OIDC_USER` or `OAUTH2_USER`, plus `SCOPE_<scope>` for each
+/// required. The attribute must be a non-empty string or a JSON integer, which becomes its
+/// decimal text (GitHub's numeric `id` gives the principal `"583231"`); the details keep the
+/// attribute with its JSON type. The authorities are `OIDC_USER` or `OAUTH2_USER`, plus `SCOPE_<scope>` for each
 /// granted scope. The `details` are the attributes, plus `oauth2.registration` with the
 /// registration id and `oauth2.principal = true`, which overwrite attributes of the same
 /// names; revalidation skips a principal with that marker.
@@ -107,7 +109,8 @@ impl UserInfo {
 /// # Errors
 ///
 /// [`OAuth2Error::Config`] for a plain OAuth2 provider without `user-name-attribute`;
-/// [`OAuth2Error::UserInfo`] when the attribute is missing, not a string, or empty.
+/// [`OAuth2Error::UserInfo`] when the attribute is missing, empty, or neither a string nor an
+/// integer (a float, a boolean, `null`, an array or an object).
 ///
 /// # Examples
 ///
@@ -140,6 +143,14 @@ impl UserInfo {
 /// assert!(auth.has_authority("OAUTH2_USER"));
 /// assert!(auth.has_authority("SCOPE_read:user"));
 /// assert_eq!(auth.details()["oauth2.registration"], "github");
+///
+/// // A numeric attribute works too.
+/// let by_id = ProviderConfig { user_name_attribute: Some("id".into()), ..provider };
+/// let serde_json::Value::Object(attributes) = serde_json::json!({"login": "alice", "id": 7}) else {
+///     unreachable!()
+/// };
+/// let auth = authentication_from(&registration, &by_id, false, attributes, &[])?;
+/// assert_eq!(auth.principal(), "7");
 /// # Ok::<(), oxbloom_security::__test_support::OAuth2Error>(())
 /// ```
 pub fn authentication_from(
@@ -154,12 +165,12 @@ pub fn authentication_from(
         (None, true) => "sub",
         (None, false) => return Err(OAuth2Error::Config),
     };
-    let principal = attributes
-        .get(attribute)
-        .and_then(Value::as_str)
-        .filter(|name| !name.is_empty())
-        .ok_or(OAuth2Error::UserInfo)?
-        .to_owned();
+    let principal = match attributes.get(attribute) {
+        Some(Value::String(name)) if !name.is_empty() => name.clone(),
+        // A whole number, such as GitHub's numeric `id`, in decimal.
+        Some(Value::Number(n)) if n.is_i64() || n.is_u64() => n.to_string(),
+        _ => return Err(OAuth2Error::UserInfo),
+    };
     let kind = if oidc { "OIDC_USER" } else { "OAUTH2_USER" };
     let authorities = std::iter::once(GrantedAuthority::new(kind)).chain(
         granted_scopes

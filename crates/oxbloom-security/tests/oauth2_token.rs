@@ -319,3 +319,32 @@ fn every_error_has_fixed_text() {
         assert!(!text.contains("http"));
     }
 }
+
+#[tokio::test]
+async fn a_huge_expires_in_is_clamped_and_never_overflows() {
+    let (mock, metadata) = scripted(MockResponse::status(200).json(&json!({
+        "access_token": "at",
+        "token_type": "Bearer",
+        "expires_in": u64::MAX,
+    })));
+    let tokens = TokenEndpoint::new(mock)
+        .exchange_code(
+            &registration("app", ClientAuthentication::Basic),
+            &metadata,
+            "code",
+            REDIRECT,
+            VERIFIER,
+        )
+        .await
+        .unwrap();
+    let ten_years = 10 * 365 * 24 * 3600;
+    assert_eq!(tokens.expires_in, Some(ten_years));
+    let now = SystemTime::now();
+    assert_eq!(
+        tokens.expires_at(now),
+        Some(now + std::time::Duration::from_secs(ten_years))
+    );
+    // Even a time near the end of the representable range does not panic.
+    let far = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(i64::MAX as u64 / 2);
+    let _ = tokens.expires_at(far);
+}

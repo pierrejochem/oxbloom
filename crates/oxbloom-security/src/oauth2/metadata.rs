@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, SystemTime};
 
@@ -14,19 +15,21 @@ use super::{MAX_BODY_BYTES, OAuth2Error, ProviderConfig};
 
 /// The suffix of the discovery document, appended to the issuer without its trailing slash.
 const DISCOVERY_PATH: &str = "/.well-known/openid-configuration";
-/// The id token algorithms accepted at all: asymmetric ones only.
-const ASYMMETRIC: [Algorithm; 6] = [
+/// The id token algorithms accepted at all: asymmetric ones whose keys the JWKS source can
+/// match (`PS256` is left out because no key in a set is ever matched to it).
+pub(crate) const ASYMMETRIC: [Algorithm; 5] = [
     Algorithm::RS256,
     Algorithm::RS384,
     Algorithm::RS512,
     Algorithm::ES256,
     Algorithm::ES384,
-    Algorithm::PS256,
 ];
 /// The algorithms used when the provider does not list any.
 const DEFAULT_ALGORITHMS: [Algorithm; 2] = [Algorithm::RS256, Algorithm::ES256];
 /// How long resolved metadata is used by default.
 const DEFAULT_TTL: Duration = Duration::from_secs(3600);
+/// How long a failed resolution is answered from memory by default.
+const DEFAULT_FAILURE_BACKOFF: Duration = Duration::from_secs(5);
 
 #[derive(Deserialize)]
 struct Discovery {
@@ -77,7 +80,7 @@ pub struct ProviderMetadata {
     /// The key set that signs id tokens; present for an OpenID Connect provider.
     pub jwks_uri: Option<String>,
     /// The algorithms an id token may use: the provider's list (default `RS256` and `ES256`)
-    /// narrowed to `RS256`, `RS384`, `RS512`, `ES256`, `ES384` and `PS256`.
+    /// narrowed to `RS256`, `RS384`, `RS512`, `ES256` and `ES384`.
     pub id_token_algorithms: Vec<Algorithm>,
     /// When the metadata was resolved.
     pub resolved_at: SystemTime,
@@ -237,14 +240,32 @@ async fn discover(issuer: &str, client: &dyn HttpClient) -> Result<Discovery, OA
     Ok(document)
 }
 
+/// What one cache slot remembers: the last metadata and the last failure.
+#[derive(Default)]
+struct SlotState {
+    cached: Option<Arc<ProviderMetadata>>,
+    /// The error of the last attempt and the time passed to it; cleared by a success.
+    failure: Option<(OAuth2Error, SystemTime)>,
+}
+
 /// One cache slot per provider. Its async lock is held while the metadata is resolved, so
-/// concurrent callers wait for one resolution instead of starting their own.
-type Slot = Arc<tokio::sync::Mutex<Option<Arc<ProviderMetadata>>>>;
+/// concurrent callers wait for one resolution instead of starting their own. `attempts`
+/// counts the finished attempts; a caller that sees it change while it waited takes the
+/// outcome of that attempt.
+#[derive(Default)]
+struct Slot {
+    attempts: AtomicU64,
+    state: tokio::sync::Mutex<SlotState>,
+}
 
 /// Caches [`ProviderMetadata`] per provider id for a time limit (default one hour).
 ///
-/// A failed resolution is not cached: the next call tries again. Concurrent calls for the
-/// same provider are coalesced, so one request is made and the others wait for its result.
+/// Concurrent calls for the same provider are coalesced, so one request is made and the
+/// others wait for its result, success or failure. A failure is not cached as metadata, but
+/// it is remembered for a short backoff window (default 5 seconds, measured on the time passed
+/// in): a call within the window gets the same error without a request, and the first call
+/// after it tries again. A success clears the failure. During a provider outage logins
+/// therefore fail fast instead of queueing for one request each.
 ///
 /// # Examples
 ///
@@ -271,7 +292,8 @@ type Slot = Arc<tokio::sync::Mutex<Option<Arc<ProviderMetadata>>>>;
 /// ```
 pub struct MetadataCache {
     ttl: Duration,
-    slots: Mutex<HashMap<String, Slot>>,
+    failure_backoff: Duration,
+    slots: Mutex<HashMap<String, Arc<Slot>>>,
 }
 
 impl MetadataCache {
@@ -305,21 +327,45 @@ impl MetadataCache {
     pub fn with_ttl(ttl: Duration) -> MetadataCache {
         MetadataCache {
             ttl,
+            failure_backoff: DEFAULT_FAILURE_BACKOFF,
             slots: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Sets how long a failed resolution is answered from memory before the next call tries
+    /// again (default 5 seconds). Zero retries on every call that did not wait for the failed
+    /// attempt.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use oxbloom_security::__test_support::MetadataCache;
+    ///
+    /// let cache = MetadataCache::new().failure_backoff(Duration::from_secs(30));
+    /// # let _ = cache;
+    /// ```
+    #[must_use]
+    pub fn failure_backoff(mut self, backoff: Duration) -> MetadataCache {
+        self.failure_backoff = backoff;
+        self
     }
 
     /// Returns the cached metadata of `provider_id` when it was resolved less than the TTL
     /// before `now`, otherwise resolves it with [`ProviderMetadata::resolve`] and caches it.
     ///
+    /// A caller that waited while another call resolved the same provider takes that call's
+    /// outcome. A caller that arrives within the backoff window of a failure gets that
+    /// failure without a request.
+    ///
     /// # Errors
     ///
-    /// The errors of [`ProviderMetadata::resolve`]; a failure is not cached.
+    /// The errors of [`ProviderMetadata::resolve`].
     ///
     /// # Examples
     ///
     /// ```
-    /// use std::time::SystemTime;
+    /// use std::time::{Duration, SystemTime};
     /// use oxbloom_security::ProviderConfig;
     /// use oxbloom_security::__test_support::{MetadataCache, OAuth2Error};
     /// use oxbloom_test::MockHttpClient;
@@ -329,12 +375,17 @@ impl MetadataCache {
     ///     issuer_uri: Some("https://idp.example.test".into()),
     ///     ..ProviderConfig::default()
     /// };
-    /// // The mock answers nothing, so the resolution fails, and is tried again next time.
+    /// // The mock answers nothing, so the resolution fails.
     /// let mock = MockHttpClient::new();
     /// let cache = MetadataCache::new();
     /// let now = SystemTime::now();
     /// assert_eq!(cache.get_or_resolve("idp", &provider, &mock, now).await.unwrap_err(), OAuth2Error::Http);
+    /// // Within the backoff window the failure is answered without a request ...
     /// assert!(cache.get_or_resolve("idp", &provider, &mock, now).await.is_err());
+    /// assert_eq!(mock.request_count(), 1);
+    /// // ... and after it the next call tries again.
+    /// let later = now + Duration::from_secs(5);
+    /// assert!(cache.get_or_resolve("idp", &provider, &mock, later).await.is_err());
     /// assert_eq!(mock.request_count(), 2);
     /// # })
     /// # ;
@@ -354,19 +405,40 @@ impl MetadataCache {
             .entry(provider_id.to_owned())
             .or_default()
             .clone();
-        let mut cached = slot.lock().await;
-        if let Some(metadata) = cached.as_ref() {
-            // A clock that went back counts as age zero.
-            let age = now
-                .duration_since(metadata.resolved_at)
-                .unwrap_or(Duration::ZERO);
-            if age < self.ttl {
-                return Ok(metadata.clone());
-            }
+        let seen = slot.attempts.load(Ordering::Acquire);
+        let mut state = slot.state.lock().await;
+        // An attempt finished while this caller waited: take its failure. Its success is in
+        // `cached` and is found below.
+        if slot.attempts.load(Ordering::Acquire) != seen
+            && let Some((error, _)) = state.failure
+        {
+            return Err(error);
         }
-        let metadata = Arc::new(ProviderMetadata::resolve(provider, client, now).await?);
-        *cached = Some(metadata.clone());
-        Ok(metadata)
+        // A clock that went back counts as age zero.
+        let age = |since: SystemTime| now.duration_since(since).unwrap_or(Duration::ZERO);
+        if let Some(metadata) = &state.cached
+            && age(metadata.resolved_at) < self.ttl
+        {
+            return Ok(metadata.clone());
+        }
+        if let Some((error, failed_at)) = state.failure
+            && age(failed_at) < self.failure_backoff
+        {
+            return Err(error);
+        }
+        let result = ProviderMetadata::resolve(provider, client, now)
+            .await
+            .map(Arc::new);
+        match &result {
+            Ok(metadata) => {
+                state.cached = Some(metadata.clone());
+                state.failure = None;
+            }
+            Err(error) => state.failure = Some((*error, now)),
+        }
+        // Counted while the lock is still held, so every waiter sees it.
+        slot.attempts.fetch_add(1, Ordering::Release);
+        result
     }
 }
 
@@ -381,6 +453,7 @@ impl fmt::Debug for MetadataCache {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MetadataCache")
             .field("ttl", &self.ttl)
+            .field("failure_backoff", &self.failure_backoff)
             .finish_non_exhaustive()
     }
 }
