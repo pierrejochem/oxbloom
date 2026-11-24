@@ -1,0 +1,25 @@
+[package]
+name = "oxbloom-data"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+# None of the features is on by default; at least one driver is needed to build any pool.
+default = []
+postgres = ["sqlx/postgres", "sqlx/tls-rustls-aws-lc-rs-native-roots"]
+mysql = ["sqlx/mysql", "sqlx/tls-rustls-aws-lc-rs-native-roots"]
+sqlite = ["sqlx/sqlite", "sqlx/tls-rustls-aws-lc-rs-native-roots"]
+# Retry of the connection attempts over the retry policy of `oxbloom-tasks`; it gets its
+# dependency in a later task.
+retry = []
+
+[dependencies]
+# Each driver feature also enables rustls with aws-lc-rs and the platform root certificates
+# (never ring), so a build without drivers has no TLS crates. The migrate and macros features
+# are left to the application.
+sqlx = { version = "0.9.1", default-features = false, features = ["runtime-tokio"] }
+
+[dev-dependencies]
+tokio = { version = "1.54.1", features = ["macros", "rt"] }
