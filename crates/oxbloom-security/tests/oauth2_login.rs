@@ -142,6 +142,8 @@ impl Env {
             let users = InMemoryUserDetailsService::new(vec![
                 UserDetails::new("alice", encoder.encode(PASSWORD), []).roles(&["USER"]),
                 UserDetails::new("bob", encoder.encode(PASSWORD), []).roles(&["USER"]),
+                // A name in the namespace of the OAuth2 session keys.
+                UserDetails::new("oauth2:idp:alice", encoder.encode(PASSWORD), []).roles(&["USER"]),
             ])
             .unwrap();
             security = security.password_provider(Arc::new(DaoAuthenticationProvider::new(
@@ -1771,4 +1773,24 @@ async fn the_failure_url_follows_form_login_unless_set() {
         .handle(Request::new(HttpMethod::Get, "/oauth2/authorization/nope"))
         .await;
     assert_eq!(location(&res), "/oauth-failed");
+}
+
+#[tokio::test]
+async fn a_password_user_named_in_the_oauth2_namespace_cannot_log_in() {
+    let env = Env::with(Options {
+        password: true,
+        ..Options::default()
+    });
+    let b = env.browser();
+    let res = b.password_log_in("oauth2:idp:alice").await;
+    assert_eq!(res.status(), 302);
+    assert_eq!(location(&res), FAILURE);
+    assert!(res.body().is_empty());
+    assert_eq!(b.whoami().await, "anonymous");
+    assert_eq!(b.session().await["principal"], Value::Null);
+    // A normal user of the same store is not affected.
+    let other = env.browser();
+    let res = other.password_log_in("alice").await;
+    assert_eq!(location(&res), "/");
+    assert_eq!(other.whoami().await, "alice");
 }

@@ -280,15 +280,13 @@ fn provider_attributes_in_the_reserved_namespaces_are_dropped() {
         "oxbloomish": "kept",
         "oauth2x": "kept",
     }));
-    let auth = authentication_from(&registration(), &plain(Some("login")), false, attrs, &[])
-        .unwrap();
+    let auth =
+        authentication_from(&registration(), &plain(Some("login")), false, attrs, &[]).unwrap();
     // A provider can never mark the user as remembered, or set any framework detail.
     assert!(!auth.is_remembered());
     let details = auth.details();
     assert!(
-        details
-            .keys()
-            .all(|k| !k.starts_with("oxbloom.")),
+        details.keys().all(|k| !k.starts_with("oxbloom.")),
         "{details:?}"
     );
     assert!(!details.contains_key("oauth2.extra"), "{details:?}");

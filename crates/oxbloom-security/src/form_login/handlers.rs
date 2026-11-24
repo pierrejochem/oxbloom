@@ -466,12 +466,26 @@ impl FormLoginHandlers {
     /// `oauth2:<registration>:<principal>` for an OAuth2 login, so an OAuth2 user never shares
     /// the sessions of a password user with the same name. A login that is not an OAuth2 login
     /// also removes the OAuth2 tokens of an earlier login in the session.
+    ///
+    /// With the feature `oauth2`, a login that is not an OAuth2 login is refused when its
+    /// principal starts with `oauth2:`, so a password user can never take the key of an OAuth2
+    /// user. The refusal logs at debug level, leaves the session untouched and gives `Err`,
+    /// which the caller answers like any failed login.
     pub(crate) async fn establish(
         &self,
         session: &Session,
         authentication: &Authentication,
         oauth2_registration: Option<&str>,
     ) -> Result<(), ()> {
+        #[cfg(feature = "oauth2")]
+        if oauth2_registration.is_none() && authentication.principal().starts_with("oauth2:") {
+            tracing::debug!(
+                target: "oxbloom::security",
+                "a login whose principal starts with oauth2: was refused, because that prefix \
+                 is reserved for the session keys of OAuth2 users"
+            );
+            return Err(());
+        }
         // The id of the session the login replaces, read before the rotation removes it.
         let replaced_id = session.id();
         // A new id first, so a planted or stolen anonymous id never carries the login.

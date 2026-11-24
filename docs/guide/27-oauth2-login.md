@@ -214,6 +214,6 @@ The boot tests in `crates/oxbloom-boot/tests/oauth2_login.rs` run the whole flow
 - **HEAD is 405.** The two endpoints answer only GET; any other method, HEAD included, is a 405.
 - **The default login page does not list the registrations.** Add the links yourself.
 - **`invalidate_all` needs the qualified key.** The session limit and the session registry count an OAuth2 user under `oauth2:<registration>:<principal>`, so `SessionRegistry::invalidate_all("oauth2:github:4242")` ends that user's sessions, and the bare principal does not.
-- **Usernames that start with `oauth2:` are reserved.** A password user literally named `oauth2:github:4242` would share the OAuth2 user's session-limit key; refuse such names in your user store.
+- **Usernames that start with `oauth2:` are reserved, and this is enforced.** A password user literally named `oauth2:github:4242` would share the OAuth2 user's session-limit key, so with the feature `oauth2` a password or remember-me login of such a user fails like a wrong password (logged at debug level). Refuse such names in your user store as well, so the user is told early.
 - **PS256 is not supported**, and neither are symmetric algorithms or `none`. The accepted algorithms are RS256, RS384, RS512, ES256 and ES384.
 - **No provider presets.** Configure each provider with its issuer or its endpoints.
