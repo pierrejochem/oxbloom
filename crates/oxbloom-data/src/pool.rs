@@ -100,6 +100,45 @@ impl Pool {
             .map_err(|e| map_error(&e)))
     }
 
+    /// Reads the highest `version` with `success = true` of the history table `table`, which
+    /// the caller has already checked as a plain identifier, which is why the text is safe to
+    /// run. The statement only reads.
+    #[cfg_attr(
+        not(any(feature = "postgres", feature = "mysql", feature = "sqlite")),
+        allow(unused_variables)
+    )]
+    pub(crate) async fn latest_migration_version(
+        &self,
+        table: &str,
+    ) -> Result<Option<i64>, DataError> {
+        match *self {
+            #[cfg(feature = "postgres")]
+            Pool::Postgres(ref pool) => {
+                let sql = format!("SELECT MAX(version) FROM \"{table}\" WHERE success = true");
+                sqlx::query_scalar::<_, Option<i64>>(sqlx::AssertSqlSafe(sql))
+                    .fetch_one(pool)
+                    .await
+                    .map_err(|e| map_error(&e))
+            }
+            #[cfg(feature = "mysql")]
+            Pool::Mysql(ref pool) => {
+                let sql = format!("SELECT MAX(version) FROM `{table}` WHERE success = true");
+                sqlx::query_scalar::<_, Option<i64>>(sqlx::AssertSqlSafe(sql))
+                    .fetch_one(pool)
+                    .await
+                    .map_err(|e| map_error(&e))
+            }
+            #[cfg(feature = "sqlite")]
+            Pool::Sqlite(ref pool) => {
+                let sql = format!("SELECT MAX(version) FROM \"{table}\" WHERE success = true");
+                sqlx::query_scalar::<_, Option<i64>>(sqlx::AssertSqlSafe(sql))
+                    .fetch_one(pool)
+                    .await
+                    .map_err(|e| map_error(&e))
+            }
+        }
+    }
+
     /// Marks the pool closed at once, so it refuses new connections, and returns the future
     /// that waits until its connections are returned and closed. sqlx marks the pool closed
     /// when `close` is called, not when the future is first polled, so the caller can mark

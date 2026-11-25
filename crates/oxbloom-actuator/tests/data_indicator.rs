@@ -85,3 +85,121 @@ async fn the_report_never_contains_the_url_or_path() {
         }
     }
 }
+
+async fn history(s: &DataSources, table: &str, rows: &str) {
+    let pool = s.sqlite("default").unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "CREATE TABLE {table} (version BIGINT PRIMARY KEY, description TEXT NOT NULL, \
+         success BOOLEAN NOT NULL)"
+    )))
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "INSERT INTO {table} VALUES {rows}"
+    )))
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn the_latest_applied_version_is_a_detail() {
+    let s = sources("[data]\nurl = \"sqlite::memory:\"");
+    history(
+        &s,
+        "hist",
+        "(1, 'a', true), (20240101, 'b', true), (7, 'c', true)",
+    )
+    .await;
+    let health = DataHealthIndicator::new(s, "default")
+        .with_migrations_table("hist")
+        .health()
+        .await;
+    assert_eq!(health.status, Status::Up);
+    assert_eq!(health.details["migrations"], json!(20240101));
+    assert_eq!(health.details["driver"], json!("sqlite"));
+}
+
+#[tokio::test]
+async fn without_migrations_there_is_no_detail() {
+    let s = sources("[data]\nurl = \"sqlite::memory:\"");
+    history(&s, "hist", "(1, 'a', true)").await;
+    let health = DataHealthIndicator::new(s, "default").health().await;
+    assert_eq!(health.status, Status::Up);
+    assert!(!health.details.contains_key("migrations"));
+}
+
+#[tokio::test]
+async fn a_missing_history_table_leaves_the_status_up_and_the_detail_absent() {
+    let s = sources("[data]\nurl = \"sqlite::memory:\"");
+    let health = DataHealthIndicator::new(s, "default")
+        .with_migrations_table("nothing_here")
+        .health()
+        .await;
+    assert_eq!(health.status, Status::Up);
+    assert!(!health.details.contains_key("migrations"));
+    assert_eq!(health.details["driver"], json!("sqlite"));
+}
+
+#[tokio::test]
+async fn an_empty_history_and_a_bad_table_name_leave_the_detail_absent() {
+    let s = sources("[data]\nurl = \"sqlite::memory:\"");
+    history(&s, "hist", "(1, 'a', false)").await;
+    for table in ["hist", "hist; DROP TABLE hist", "", "1hist", "h\"ist"] {
+        let health = DataHealthIndicator::new(s.clone(), "default")
+            .with_migrations_table(table)
+            .health()
+            .await;
+        assert_eq!(health.status, Status::Up, "{table}");
+        assert!(!health.details.contains_key("migrations"), "{table}");
+    }
+    // The table of the bad names was not touched.
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM hist")
+        .fetch_one(s.sqlite("default").unwrap())
+        .await
+        .unwrap();
+    assert_eq!(n, 1);
+}
+
+#[tokio::test]
+async fn a_failed_row_is_not_counted() {
+    let s = sources("[data]\nurl = \"sqlite::memory:\"");
+    history(
+        &s,
+        "hist",
+        "(1, 'a', true), (2, 'b', true), (3, 'c', false)",
+    )
+    .await;
+    let health = DataHealthIndicator::new(s, "default")
+        .with_migrations_table("hist")
+        .health()
+        .await;
+    assert_eq!(health.details["migrations"], json!(2));
+}
+
+#[tokio::test]
+async fn the_detail_has_no_description_or_sql() {
+    let s = sources("[data]\nurl = \"sqlite::memory:\"");
+    history(&s, "hist", "(5, 'create secret users table', true)").await;
+    let health = DataHealthIndicator::new(s, "default")
+        .with_migrations_table("hist")
+        .health()
+        .await;
+    let text = serde_json::to_string(&health.details).unwrap();
+    assert!(text.contains("\"migrations\":5"), "{text}");
+    for word in ["secret", "create", "SELECT", "hist"] {
+        assert!(!text.contains(word), "{word} in {text}");
+    }
+}
+
+#[tokio::test]
+async fn a_down_source_has_no_migrations_detail() {
+    let s = sources(&format!("[data]\nurl = \"{MISSING}\""));
+    let health = DataHealthIndicator::new(s, "default")
+        .with_migrations_table("hist")
+        .health()
+        .await;
+    assert_eq!(health.status, Status::Down);
+    assert!(!health.details.contains_key("migrations"));
+}

@@ -93,3 +93,58 @@ async fn a_down_source_in_the_readiness_include_turns_readiness_down() {
     assert_eq!(res.status(), 503, "{}", res.text());
     app.stop().await;
 }
+
+#[cfg(feature = "data-migrate")]
+#[tokio::test]
+async fn the_boot_indicator_of_a_migrating_source_shows_the_version() {
+    use oxbloom_data::migrate::EmbeddedMigrations;
+    use oxbloom_data::sqlx::SqlSafeStr;
+    use oxbloom_data::sqlx::migrate::{Migration, MigrationType, Migrator};
+
+    let migration = |version: i64, description: &'static str, sql: &'static str| {
+        Migration::new(
+            version,
+            description.into(),
+            MigrationType::Simple,
+            sql.into_sql_str(),
+            false,
+        )
+    };
+    let migrator: &'static Migrator = Box::leak(Box::new(Migrator::with_migrations(vec![
+        migration(
+            1,
+            "create secret accounts",
+            "CREATE TABLE accounts (id INTEGER)",
+        ),
+        migration(
+            7,
+            "create secret totals",
+            "CREATE TABLE totals (id INTEGER)",
+        ),
+    ])));
+    let dir = tempfile::tempdir().unwrap();
+    let url = format!("sqlite:{}?mode=rwc", dir.path().join("app.db").display());
+    let app = app(&format!(
+        "[data]\nurl = \"{url}\"\n[data.migrations]\nenabled = true\n\
+         [data.sources.replica]\nurl = \"sqlite::memory:\""
+    ))
+    .configure(move |b| b.instance(EmbeddedMigrations::new().default_source(migrator)))
+    .start()
+    .await;
+    let res = app.client().get("/actuator/health").send().await;
+    assert_eq!(res.status(), 200, "{}", res.text());
+    let text = res.text();
+    let body: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(
+        body["components"]["db"]["details"]["migrations"], 7,
+        "{body}"
+    );
+    // A source without migrations has no such detail.
+    let replica = &body["components"]["db.replica"]["details"];
+    assert!(replica.get("migrations").is_none(), "{body}");
+    assert!(
+        !text.contains("secret") && !text.contains("CREATE"),
+        "{text}"
+    );
+    app.stop().await;
+}

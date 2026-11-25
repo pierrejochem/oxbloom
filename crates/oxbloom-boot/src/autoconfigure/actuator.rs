@@ -307,15 +307,28 @@ struct DataIndicators(Vec<Arc<dyn HealthIndicator>>);
     feature = "data-mysql",
     feature = "data-sqlite"
 ))]
-fn data_indicators(sources: Arc<oxbloom_data::DataSources>) -> DataIndicators {
+///
+/// A source with migrations enabled also reports the latest applied migration version, read
+/// from the history table of its settings.
+fn data_indicators(
+    sources: Arc<oxbloom_data::DataSources>,
+    settings: Arc<oxbloom_data::DataSettings>,
+) -> DataIndicators {
     let indicators = sources
         .names()
         .into_iter()
         .map(|name| {
-            Arc::new(oxbloom_actuator::DataHealthIndicator::new(
-                Arc::clone(&sources),
-                name,
-            )) as Arc<dyn HealthIndicator>
+            let mut indicator =
+                oxbloom_actuator::DataHealthIndicator::new(Arc::clone(&sources), name);
+            let migrations = settings
+                .sources
+                .iter()
+                .find(|s| s.name == name)
+                .and_then(|s| s.migrations.as_ref());
+            if let Some(migrations) = migrations {
+                indicator = indicator.with_migrations_table(&migrations.table);
+            }
+            Arc::new(indicator) as Arc<dyn HealthIndicator>
         })
         .collect();
     DataIndicators(indicators)

@@ -7,7 +7,7 @@ use std::task::Poll;
 use std::time::Duration;
 
 use crate::pool::{self, Pool, TlsMaterial};
-use crate::settings::{DEFAULT_SOURCE, DataSettings, Driver};
+use crate::settings::{DEFAULT_SOURCE, DataSettings, Driver, is_valid_table_name};
 use crate::{DataError, SourceError};
 
 /// One configured source: its name, its driver and its pool.
@@ -404,6 +404,59 @@ impl DataSources {
     pub async fn ping(&self, name: &str, timeout: Duration) -> Result<(), DataError> {
         let entry = self.entry(name).ok_or(DataError::Config)?;
         tokio::time::timeout(timeout, entry.pool.ping())
+            .await
+            .unwrap_or(Err(DataError::Pool))
+    }
+
+    /// Reads the highest migration version with `success = true` from the history table
+    /// `table` of the source `name`, within `timeout`, with one read-only statement on the
+    /// pool of the source. The result is `None` when no row qualifies. A row with
+    /// `success = false` is ignored, whatever its version.
+    ///
+    /// The table name is checked again here: it must match `[A-Za-z_][A-Za-z0-9_]*` and be at
+    /// most 63 characters, otherwise the result is [`DataError::Config`] and nothing is
+    /// sent. An unknown source is also [`DataError::Config`]. A missing table, a closed pool
+    /// or a timeout is an error without text from the driver.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[cfg(feature = "sqlite")]
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use std::time::Duration;
+    /// use oxbloom_config::Config;
+    /// use oxbloom_data::{DataError, DataSettings, DataSources};
+    ///
+    /// let config = Config::from_str("[data]\nurl = \"sqlite::memory:\"")?;
+    /// let sources = DataSources::build(&DataSettings::from_config(&config)?, &|_| Err(DataError::Tls))?;
+    /// let pool = sources.sqlite("default").ok_or("no default")?;
+    /// sqlx::query("CREATE TABLE history (version BIGINT PRIMARY KEY, success BOOLEAN NOT NULL)")
+    ///     .execute(pool).await?;
+    /// sqlx::query("INSERT INTO history VALUES (1, true), (2, true), (3, false)")
+    ///     .execute(pool).await?;
+    /// let wait = Duration::from_secs(2);
+    /// assert_eq!(sources.latest_migration_version("default", "history", wait).await, Ok(Some(2)));
+    /// assert_eq!(
+    ///     sources.latest_migration_version("default", "no such table", wait).await,
+    ///     Err(DataError::Config),
+    /// );
+    /// # Ok(())
+    /// # }
+    /// # #[cfg(not(feature = "sqlite"))]
+    /// # fn main() {}
+    /// ```
+    pub async fn latest_migration_version(
+        &self,
+        name: &str,
+        table: &str,
+        timeout: Duration,
+    ) -> Result<Option<i64>, DataError> {
+        if !is_valid_table_name(table) {
+            return Err(DataError::Config);
+        }
+        let entry = self.entry(name).ok_or(DataError::Config)?;
+        tokio::time::timeout(timeout, entry.pool.latest_migration_version(table))
             .await
             .unwrap_or(Err(DataError::Pool))
     }
