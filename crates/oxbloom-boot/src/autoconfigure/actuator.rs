@@ -46,6 +46,11 @@ const READINESS_INCLUDE: &str = "management.health.readiness.include";
 ///   registers the loggers routes, which can change log levels;
 /// - with the feature `ssl` and an `SslBundles` bean, an [`SslHealthIndicator`](oxbloom_actuator::SslHealthIndicator)
 ///   as `dyn HealthIndicator`, reading the time from the `dyn Clock` bean when there is one;
+/// - with a `data-*` feature and a `DataSources` bean, one `DataHealthIndicator` per data
+///   source: `db` for the default source and `db.<name>` for the others. The container has no
+///   way to register a bean per source name, so one `DataIndicators` bean builds them when it
+///   is created and the runner reads them next to the `dyn HealthIndicator` beans (their names
+///   count for `management.health.readiness.include`);
 /// - with the feature `security` and `management.endpoints.health.public = true`, a
 ///   [`SecurityCustomizer`](crate::SecurityCustomizer) that permits `GET <base-path>/health/**`
 ///   and requires authentication for every other request. It owns the authorization rules, so
@@ -134,6 +139,14 @@ impl Configuration for ActuatorAutoConfiguration {
                 |i: Arc<oxbloom_actuator::SslHealthIndicator>| -> Arc<dyn HealthIndicator> { i },
             )
             .on_bean::<oxbloom_ssl::SslBundles>();
+        #[cfg(any(
+            feature = "data-postgres",
+            feature = "data-mysql",
+            feature = "data-sqlite"
+        ))]
+        let builder = builder
+            .bean(data_indicators)
+            .on_bean::<oxbloom_data::DataSources>();
         #[cfg(feature = "security")]
         let builder = builder
             .bean(|settings: Arc<ActuatorSettings>| PublicHealth {
@@ -154,11 +167,18 @@ impl AutoConfiguration for ActuatorAutoConfiguration {
             .on_bean::<dyn Controller>()
     }
 
-    /// The `SslBundles` bean decides whether the `ssl` indicator is registered.
+    /// The `SslBundles` and `DataSources` beans decide whether the `ssl` and `db` indicators
+    /// are registered.
     fn after() -> Vec<ConfigRef> {
         [
             #[cfg(feature = "ssl")]
             ConfigRef::of::<super::SslAutoConfiguration>(),
+            #[cfg(any(
+                feature = "data-postgres",
+                feature = "data-mysql",
+                feature = "data-sqlite"
+            ))]
+            ConfigRef::of::<super::DataAutoConfiguration>(),
         ]
         .into()
     }
@@ -196,7 +216,22 @@ fn actuator_settings(config: Arc<Config>) -> Result<ActuatorSettings, DiError> {
 fn health_runner(
     settings: Arc<ActuatorSettings>,
     indicators: Vec<Arc<dyn HealthIndicator>>,
+    #[cfg(any(
+        feature = "data-postgres",
+        feature = "data-mysql",
+        feature = "data-sqlite"
+    ))]
+    data: Option<Arc<DataIndicators>>,
 ) -> Result<HealthRunner, DiError> {
+    #[cfg(any(
+        feature = "data-postgres",
+        feature = "data-mysql",
+        feature = "data-sqlite"
+    ))]
+    let indicators: Vec<Arc<dyn HealthIndicator>> = indicators
+        .into_iter()
+        .chain(data.iter().flat_map(|d| d.0.iter().cloned()))
+        .collect();
     let unknown: Vec<&str> = settings
         .readiness_include
         .iter()
@@ -256,6 +291,34 @@ fn actuator_controller(
         None => controller,
     };
     controller
+}
+
+/// The indicators of the data sources, one per source, built from the `DataSources` bean.
+#[cfg(any(
+    feature = "data-postgres",
+    feature = "data-mysql",
+    feature = "data-sqlite"
+))]
+struct DataIndicators(Vec<Arc<dyn HealthIndicator>>);
+
+/// One `DataHealthIndicator` per source of the registry.
+#[cfg(any(
+    feature = "data-postgres",
+    feature = "data-mysql",
+    feature = "data-sqlite"
+))]
+fn data_indicators(sources: Arc<oxbloom_data::DataSources>) -> DataIndicators {
+    let indicators = sources
+        .names()
+        .into_iter()
+        .map(|name| {
+            Arc::new(oxbloom_actuator::DataHealthIndicator::new(
+                Arc::clone(&sources),
+                name,
+            )) as Arc<dyn HealthIndicator>
+        })
+        .collect();
+    DataIndicators(indicators)
 }
 
 /// The `ssl` indicator over the bundles, on the `dyn Clock` bean or the system time.

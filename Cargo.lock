@@ -1789,6 +1789,7 @@ dependencies = [
  "http",
  "oxbloom-config",
  "oxbloom-core",
+ "oxbloom-data",
  "oxbloom-logging",
  "oxbloom-ssl",
  "oxbloom-web",

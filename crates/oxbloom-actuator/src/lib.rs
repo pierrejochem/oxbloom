@@ -23,6 +23,8 @@ mod settings;
 
 #[cfg(feature = "web")]
 mod controller;
+#[cfg(feature = "data")]
+mod data_indicator;
 #[cfg(feature = "logging")]
 mod loggers;
 #[cfg(feature = "ssl")]
@@ -36,5 +38,7 @@ pub use settings::ActuatorSettings;
 #[cfg(feature = "web")]
 pub use controller::ActuatorController;
 
+#[cfg(feature = "data")]
+pub use data_indicator::DataHealthIndicator;
 #[cfg(feature = "ssl")]
 pub use ssl_indicator::SslHealthIndicator;
