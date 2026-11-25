@@ -13,6 +13,9 @@ use serde::Deserialize;
 pub(crate) const DEFAULT_SOURCE: &str = "default";
 const DEFAULT_MAX_CONNECTIONS: u32 = 10;
 const DEFAULT_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_MIGRATIONS_TABLE: &str = "_sqlx_migrations";
+const DEFAULT_MIGRATIONS_TIMEOUT: Duration = Duration::from_secs(300);
+const MAX_TABLE_NAME_LEN: usize = 63;
 
 /// The database driver of a source, derived from the scheme of its URL.
 ///
@@ -196,6 +199,51 @@ pub struct SourceSettings {
     /// that has a trust store is refused. The PEM is parsed on the first connection, so a bad
     /// PEM shows up then as [`DataError::Connect`](crate::DataError::Connect).
     pub ssl_bundle: Option<String>,
+    /// The migration settings of this source. `Some` only when `migrations.enabled` is true;
+    /// the other `migrations` keys are validated but dropped when it is not.
+    pub migrations: Option<MigrationSettings>,
+}
+
+/// The migration settings of one source, read from `data.migrations.*` for the default source
+/// and `data.sources.<name>.migrations.*` for a named one.
+///
+/// The settings are read whether or not the `migrate` feature is on. The `table` value is
+/// placed in SQL by the runner, so it is restricted to `[A-Za-z_][A-Za-z0-9_]*` with at most
+/// 63 characters. Renaming the history table of an existing database needs a copy of its
+/// contents first, as `sqlx` warns. `path` is read as written and is not checked against the
+/// file system here.
+///
+/// # Examples
+///
+/// ```
+/// use std::time::Duration;
+/// use oxbloom_config::Config;
+/// use oxbloom_data::DataSettings;
+///
+/// let config = Config::from_str(
+///     "[data]\nurl = \"sqlite::memory:\"\n[data.migrations]\nenabled = true",
+/// )?;
+/// let settings = DataSettings::from_config(&config)?;
+/// let migrations = settings.sources[0].migrations.as_ref().unwrap();
+/// assert_eq!(migrations.table, "_sqlx_migrations");
+/// assert_eq!(migrations.timeout, Duration::from_secs(300));
+/// assert!(migrations.locking && !migrations.ignore_missing && migrations.path.is_none());
+/// # Ok::<(), oxbloom_config::ConfigError>(())
+/// ```
+#[derive(Debug, Clone)]
+pub struct MigrationSettings {
+    /// The directory with the migration files. Unset means the embedded migrator.
+    pub path: Option<std::path::PathBuf>,
+    /// The name of the history table. Default `_sqlx_migrations`.
+    pub table: String,
+    /// Whether a migration that is recorded as applied but has no file is ignored. Default
+    /// false.
+    pub ignore_missing: bool,
+    /// An upper bound for the whole run of the source, including the wait for the lock.
+    /// Default 300 seconds.
+    pub timeout: Duration,
+    /// Whether `sqlx` takes its database lock. Default true.
+    pub locking: bool,
 }
 
 impl SourceSettings {
@@ -273,6 +321,18 @@ struct RawData {
     test_before_acquire: Option<bool>,
     ssl_mode: Option<String>,
     ssl_bundle: Option<String>,
+    migrations: Option<RawMigrations>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawMigrations {
+    enabled: Option<bool>,
+    path: Option<String>,
+    table: Option<String>,
+    ignore_missing: Option<bool>,
+    timeout: Option<Duration>,
+    locking: Option<bool>,
 }
 
 #[derive(Default, Deserialize)]
@@ -287,6 +347,7 @@ struct RawSource {
     test_before_acquire: Option<bool>,
     ssl_mode: Option<String>,
     ssl_bundle: Option<String>,
+    migrations: Option<RawMigrations>,
 }
 
 impl RawSource {
@@ -300,6 +361,7 @@ impl RawSource {
             && self.test_before_acquire.is_none()
             && self.ssl_mode.is_none()
             && self.ssl_bundle.is_none()
+            && self.migrations.is_none()
     }
 }
 
@@ -362,6 +424,7 @@ impl DataSettings {
             test_before_acquire,
             ssl_mode,
             ssl_bundle,
+            migrations,
         } = raw;
         let default = RawSource {
             url,
@@ -373,6 +436,7 @@ impl DataSettings {
             test_before_acquire,
             ssl_mode,
             ssl_bundle,
+            migrations,
         };
         let mut sources = Vec::new();
         if !default.is_empty() {
@@ -526,6 +590,7 @@ fn source(name: &str, prefix: &str, raw: RawSource) -> Result<SourceSettings, Co
             "`ssl-bundle` has no effect with `ssl-mode = disable`",
         ));
     }
+    let migrations = migration_settings(prefix, raw.migrations)?;
     Ok(SourceSettings {
         name: name.to_string(),
         url,
@@ -538,7 +603,55 @@ fn source(name: &str, prefix: &str, raw: RawSource) -> Result<SourceSettings, Co
         test_before_acquire: raw.test_before_acquire.unwrap_or(true),
         ssl_mode,
         ssl_bundle: raw.ssl_bundle,
+        migrations,
     })
+}
+
+/// Validates the `migrations` table of a source. The keys are checked even when `enabled` is
+/// false, but only an enabled table gives settings. No error names a value.
+fn migration_settings(
+    prefix: &str,
+    raw: Option<RawMigrations>,
+) -> Result<Option<MigrationSettings>, ConfigError> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let key = |field: &str| format!("{prefix}.migrations.{field}");
+    if let Some(table) = &raw.table
+        && !is_valid_table_name(table)
+    {
+        return Err(ConfigError::invalid(
+            key("table"),
+            "must match `[A-Za-z_][A-Za-z0-9_]*` and be at most 63 characters",
+        ));
+    }
+    if raw.timeout.is_some_and(|d| d < Duration::from_millis(1)) {
+        return Err(ConfigError::invalid(
+            key("timeout"),
+            "must be at least 1 millisecond",
+        ));
+    }
+    if !raw.enabled.unwrap_or(false) {
+        return Ok(None);
+    }
+    Ok(Some(MigrationSettings {
+        path: raw.path.map(std::path::PathBuf::from),
+        table: raw
+            .table
+            .unwrap_or_else(|| DEFAULT_MIGRATIONS_TABLE.to_string()),
+        ignore_missing: raw.ignore_missing.unwrap_or(false),
+        timeout: raw.timeout.unwrap_or(DEFAULT_MIGRATIONS_TIMEOUT),
+        locking: raw.locking.unwrap_or(true),
+    }))
+}
+
+fn is_valid_table_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    name.len() <= MAX_TABLE_NAME_LEN
+        && bytes
+            .next()
+            .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
+        && bytes.all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
 
 /// Every configuration key this crate reads, as `(key, type, default, description)`, in the
@@ -616,6 +729,42 @@ pub const PROPERTIES: &[(&str, &str, Option<&str>, &str)] = &[
         "The name of the SSL bundle with the trust roots or client certificate; implies `ssl-mode = verify-full` when unset; not for SQLite or `ssl-mode = disable`.",
     ),
     (
+        "data.migrations.enabled",
+        "bool",
+        Some("false"),
+        "Whether the migrations of the default source run at startup; the other `migrations` keys are checked but ignored when this is false.",
+    ),
+    (
+        "data.migrations.path",
+        "String",
+        None,
+        "The directory with the migration files of the default source; unset uses the embedded migrations.",
+    ),
+    (
+        "data.migrations.table",
+        "String",
+        Some("_sqlx_migrations"),
+        "The name of the history table of the default source; `[A-Za-z_][A-Za-z0-9_]*`, at most 63 characters.",
+    ),
+    (
+        "data.migrations.ignore-missing",
+        "bool",
+        Some("false"),
+        "Whether an applied migration without a file is ignored for the default source.",
+    ),
+    (
+        "data.migrations.timeout",
+        "Duration",
+        Some("300s"),
+        "The upper bound for the whole migration run of the default source, including the wait for the lock; at least 1ms.",
+    ),
+    (
+        "data.migrations.locking",
+        "bool",
+        Some("true"),
+        "Whether `sqlx` takes its database lock while migrating the default source.",
+    ),
+    (
         "data.sources.<name>.url",
         "String (secret)",
         None,
@@ -668,5 +817,41 @@ pub const PROPERTIES: &[(&str, &str, Option<&str>, &str)] = &[
         "String",
         None,
         "The SSL bundle of a named source; implies `verify-full` when `ssl-mode` is unset; not for SQLite or `ssl-mode = disable`.",
+    ),
+    (
+        "data.sources.<name>.migrations.enabled",
+        "bool",
+        Some("false"),
+        "Whether the migrations of a named source run at startup; the other `migrations` keys are checked but ignored when this is false.",
+    ),
+    (
+        "data.sources.<name>.migrations.path",
+        "String",
+        None,
+        "The directory with the migration files of a named source; unset uses the embedded migrations.",
+    ),
+    (
+        "data.sources.<name>.migrations.table",
+        "String",
+        Some("_sqlx_migrations"),
+        "The name of the history table of a named source; `[A-Za-z_][A-Za-z0-9_]*`, at most 63 characters.",
+    ),
+    (
+        "data.sources.<name>.migrations.ignore-missing",
+        "bool",
+        Some("false"),
+        "Whether an applied migration without a file is ignored for a named source.",
+    ),
+    (
+        "data.sources.<name>.migrations.timeout",
+        "Duration",
+        Some("300s"),
+        "The upper bound for the whole migration run of a named source, including the wait for the lock; at least 1ms.",
+    ),
+    (
+        "data.sources.<name>.migrations.locking",
+        "bool",
+        Some("true"),
+        "Whether `sqlx` takes its database lock while migrating a named source.",
     ),
 ];

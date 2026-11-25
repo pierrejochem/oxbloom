@@ -29,7 +29,7 @@ mod transaction;
 
 pub use error::{DataError, SourceError};
 pub use pool::TlsMaterial;
-pub use settings::{DataSettings, Driver, PROPERTIES, SourceSettings, SslMode};
+pub use settings::{DataSettings, Driver, MigrationSettings, PROPERTIES, SourceSettings, SslMode};
 pub use sources::DataSources;
 pub use sqlx;
 #[cfg(feature = "retry")]

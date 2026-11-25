@@ -417,7 +417,7 @@ fn properties_list_every_key() {
     ] {
         assert!(keys.contains(&expected), "missing {expected}");
     }
-    assert_eq!(keys.len(), 19);
+    assert_eq!(keys.len(), 31);
     let max = PROPERTIES
         .iter()
         .find(|p| p.0 == "data.max-connections")
@@ -442,4 +442,147 @@ fn driver_from_url_follows_the_scheme_rule_of_the_settings() {
     assert_eq!(Driver::from_url("SQLITE::memory:"), None);
     assert_eq!(Driver::from_url("redis://h"), None);
     assert_eq!(Driver::from_url("no-scheme"), None);
+}
+
+// Migration settings.
+
+const SQLITE: &str = "[data]\nurl = \"sqlite::memory:\"\n";
+
+#[test]
+fn migrations_are_off_by_default() {
+    let s = settings(SQLITE).unwrap();
+    assert!(s.sources[0].migrations.is_none());
+}
+
+#[test]
+fn enabled_with_defaults() {
+    let s = settings(&format!("{SQLITE}[data.migrations]\nenabled = true")).unwrap();
+    let m = s.sources[0].migrations.as_ref().unwrap();
+    assert_eq!(m.table, "_sqlx_migrations");
+    assert!(!m.ignore_missing);
+    assert_eq!(m.timeout, Duration::from_secs(300));
+    assert!(m.locking);
+    assert!(m.path.is_none());
+}
+
+#[test]
+fn every_key_is_read_for_the_default_and_a_named_source() {
+    let body = "enabled = true\npath = \"db/migrations\"\ntable = \"history_1\"\n\
+                ignore-missing = true\ntimeout = \"45s\"\nlocking = false\n";
+    let s = settings(&format!(
+        "{SQLITE}[data.migrations]\n{body}\
+         [data.sources.rep]\nurl = \"sqlite::memory:\"\n[data.sources.rep.migrations]\n{body}"
+    ))
+    .unwrap();
+    for name in ["default", "rep"] {
+        let src = source(&s, name);
+        let m = src.migrations.as_ref().unwrap();
+        assert_eq!(
+            m.path.as_deref(),
+            Some(std::path::Path::new("db/migrations"))
+        );
+        assert_eq!(m.table, "history_1");
+        assert!(m.ignore_missing);
+        assert_eq!(m.timeout, Duration::from_secs(45));
+        assert!(!m.locking);
+    }
+}
+
+#[test]
+fn other_keys_are_validated_but_dropped_when_not_enabled() {
+    let s = settings(&format!(
+        "{SQLITE}[data.migrations]\nenabled = false\ntable = \"ok_name\""
+    ))
+    .unwrap();
+    assert!(s.sources[0].migrations.is_none());
+    let key = invalid_key(&format!(
+        "{SQLITE}[data.migrations]\nenabled = false\ntable = \"a b\""
+    ));
+    assert_eq!(key, "data.migrations.table");
+}
+
+#[test]
+fn a_bad_table_name_names_the_key_and_no_value() {
+    let long = "a".repeat(64);
+    for bad in [
+        "x; drop table users",
+        "a b",
+        "\\\"quoted\\\"",
+        "1abc",
+        "",
+        &long,
+    ] {
+        let toml = format!("{SQLITE}[data.migrations]\nenabled = true\ntable = \"{bad}\"");
+        match settings(&toml) {
+            Err(ConfigError::Invalid { key, message, .. }) => {
+                assert_eq!(key, "data.migrations.table");
+                assert!(!message.contains("drop"), "message leaks: {message}");
+                assert!(!message.contains("quoted"), "message leaks: {message}");
+                assert!(!message.contains("1abc"), "message leaks: {message}");
+                assert!(!message.contains("aaaa"), "message leaks: {message}");
+                assert!(!message.contains("a b"), "message leaks: {message}");
+            }
+            other => panic!("expected Invalid for {bad:?}, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn a_63_character_table_name_is_accepted() {
+    let name = format!("_{}", "Z9".repeat(31));
+    assert_eq!(name.len(), 63);
+    let s = settings(&format!(
+        "{SQLITE}[data.migrations]\nenabled = true\ntable = \"{name}\""
+    ))
+    .unwrap();
+    assert_eq!(s.sources[0].migrations.as_ref().unwrap().table, name);
+}
+
+#[test]
+fn an_unknown_migrations_key_fails_with_the_full_key() {
+    let err = settings(&format!(
+        "{SQLITE}[data.migrations]\nenabled = true\nvalidate-checksums = false"
+    ))
+    .unwrap_err();
+    assert!(err.to_string().contains("validate-checksums"), "{err}");
+    assert!(err.to_string().contains("data.migrations"), "{err}");
+}
+
+#[test]
+fn a_zero_timeout_is_rejected_naming_the_key() {
+    let key = invalid_key(&format!(
+        "{SQLITE}[data.migrations]\nenabled = true\ntimeout = \"0s\""
+    ));
+    assert_eq!(key, "data.migrations.timeout");
+}
+
+#[test]
+fn the_property_metadata_lists_every_migrations_key() {
+    for key in [
+        "enabled",
+        "path",
+        "table",
+        "ignore-missing",
+        "timeout",
+        "locking",
+    ] {
+        for prefix in ["data.migrations", "data.sources.<name>.migrations"] {
+            let full = format!("{prefix}.{key}");
+            assert!(PROPERTIES.iter().any(|p| p.0 == full), "missing {full}");
+        }
+    }
+    assert!(
+        !PROPERTIES
+            .iter()
+            .any(|p| p.0.contains("validate-checksums"))
+    );
+}
+
+#[test]
+fn a_named_source_prefix_is_in_the_error() {
+    let key = invalid_key(
+        "[data.sources.rep]\nurl = \"sqlite::memory:\"\n\
+         [data.sources.rep.migrations]\nenabled = true\ntable = \"a b\"",
+    );
+    assert_eq!(key, "data.sources.rep.migrations.table");
 }
