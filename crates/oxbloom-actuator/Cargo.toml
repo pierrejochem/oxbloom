@@ -5,13 +5,14 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
-# The features gate the optional parts: `web` the controller, `logging` the loggers endpoint and
-# `ssl` the certificate indicator and `data` the database indicator. The health and availability types are always available.
+# The features gate the optional parts: `web` the controller, `logging` the loggers endpoint,
+# `ssl` the certificate indicator and `data` the database indicator. The health and availability
+# types are always available.
 [features]
 web = ["dep:oxbloom-web", "dep:http"]
 logging = ["web", "dep:oxbloom-logging"]
 ssl = ["dep:oxbloom-ssl", "dep:oxbloom-core"]
-# `data` the database indicator; it needs no driver, the application brings its own.
+# The database indicator needs no driver: the application brings its own.
 data = ["dep:oxbloom-data"]
 
 [dependencies]

@@ -195,7 +195,9 @@ impl TransactionOptions {
 pub enum TransactionError<E> {
     /// The transaction could not be started: no connection, or the begin statement failed.
     Begin,
-    /// The work succeeded, but the commit failed; the transaction is rolled back.
+    /// The work succeeded, but the commit failed. When the database refused the commit, the
+    /// transaction is rolled back; when the connection was lost during the `COMMIT`, the
+    /// outcome is unknown: the database may have committed the transaction or not.
     Commit,
     /// The driver cannot honor the [`TransactionOptions`]; nothing was run.
     Unsupported,

@@ -629,8 +629,8 @@ impl SslBundle {
     ///
     /// The key keeps its own encoding under the matching label: a PKCS#8 key is written as
     /// `PRIVATE KEY`, a PKCS#1 RSA key as `RSA PRIVATE KEY` and a SEC1 EC key as
-    /// `EC PRIVATE KEY`, so no key is ever converted or dropped. Drivers such as sqlx read all
-    /// three labels. A key from a PKCS#12 file is always PKCS#8.
+    /// `EC PRIVATE KEY`, so no key is ever converted or dropped. sqlx with rustls reads all
+    /// three labels; native-tls needs PKCS#8. A key from a PKCS#12 file is always PKCS#8.
     ///
     /// The second value is plain secret key material in an ordinary `Vec<u8>`: callers must
     /// not log it, and should drop it as soon as the driver has read it.

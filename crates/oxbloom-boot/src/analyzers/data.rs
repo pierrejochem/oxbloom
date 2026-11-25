@@ -2,26 +2,19 @@
 //! that is not reachable at start.
 
 use oxbloom_config::ConfigError;
-use oxbloom_data::{DataError, Driver};
+use oxbloom_data::DataError;
 
 use crate::autoconfigure::{DataUnreachable, SourceBuildError};
 use crate::error::StartupError;
 use crate::failure::{FailureAnalysis, FailureAnalyzer};
 
-/// The configuration key of a source: `data` for `default`, `data.sources.<name>` otherwise.
-fn prefix(source_name: &str) -> String {
-    if source_name == "default" {
-        "data".to_owned()
-    } else {
-        format!("data.sources.{source_name}")
-    }
-}
-
 /// Recognises a `ConfigError::Invalid` for a key under `data` (`data.sources.` included)
 /// anywhere in the cause chain, and a source the registry could not build. The report names
 /// the key with a fixed text and leaves out the configuration error's message, so no value can
 /// reach it. The one exception is an `ssl-bundle` key, whose messages are fixed texts that
-/// list bundle names at most, so the report shows them.
+/// list bundle names at most, so the report shows them. A source refused for
+/// `ssl-mode = verify-ca` with a bundle that has a trust store is reported on its `ssl-mode`
+/// key with the fixed text of the error.
 pub(crate) struct DataConfigAnalyzer;
 
 impl FailureAnalyzer for DataConfigAnalyzer {
@@ -37,7 +30,7 @@ impl FailureAnalyzer for DataConfigAnalyzer {
         }
         if key.ends_with(".ssl-bundle") {
             return Some(FailureAnalysis::new(
-                format!("The data source key `{key}` is not usable: {message}."),
+                format!("The data source key `{key}` is not usable ({message})."),
                 "Set it to the name of a bundle defined under `ssl.bundle.pem.<name>` or \
                  `ssl.bundle.pkcs12.<name>` (this needs the `ssl` feature), for a Postgres or \
                  MySQL source whose `ssl-mode` is not `disable`, or remove it.",
@@ -63,16 +56,29 @@ fn build_failure(build: &SourceBuildError) -> FailureAnalysis {
     let name = build.error.source_name();
     let prefix = build.error.config_prefix();
     let key = format!("{prefix}.url");
+    if build.error.error() == DataError::VerifyCaWithTrust {
+        return FailureAnalysis::new(
+            format!(
+                "The data source key `{prefix}.ssl-mode` is not usable: {}.",
+                build.error.error()
+            ),
+            format!(
+                "Set `{prefix}.ssl-mode` to `verify-full`, or name in `{prefix}.ssl-bundle` a \
+                 bundle without a trust store (for example one with only a client \
+                 certificate)."
+            ),
+        );
+    }
     let description = format!(
         "The data source `{name}` cannot be built: {}.",
         build.error.error()
     );
     let action = match build.error.error() {
         DataError::Unsupported => match build.driver {
+            // The boot feature of a driver is `data-` and the driver's name.
             Some(driver) => format!(
-                "`{key}` names the {driver} driver: enable the `data-{}` feature of \
-                 `oxbloom-boot`, or point the source at a database of an enabled driver.",
-                feature(driver)
+                "`{key}` names the {driver} driver: enable the `data-{driver}` feature of \
+                 `oxbloom-boot`, or point the source at a database of an enabled driver."
             ),
             None => format!(
                 "Enable the `data-*` feature of `oxbloom-boot` for the driver that `{key}` \
@@ -94,15 +100,6 @@ fn build_failure(build: &SourceBuildError) -> FailureAnalysis {
     FailureAnalysis::new(description, action)
 }
 
-/// The boot feature of `driver`.
-fn feature(driver: Driver) -> &'static str {
-    match driver {
-        Driver::Postgres => "postgres",
-        Driver::Mysql => "mysql",
-        Driver::Sqlite => "sqlite",
-    }
-}
-
 /// Recognises a source that failed the start-up check. [`DataError::Connect`] and
 /// [`DataError::Pool`] get the same report: sqlx retries a refused connection until the
 /// acquire timeout, so an unreachable server can end in either. The report names the source
@@ -112,9 +109,9 @@ pub(crate) struct DataUnreachableAnalyzer;
 
 impl FailureAnalyzer for DataUnreachableAnalyzer {
     fn analyze(&self, failure: &StartupError) -> Option<FailureAnalysis> {
-        let unreachable = failure.find_cause::<DataUnreachable>()?;
-        let name = &unreachable.source_name;
-        let description = match unreachable.error {
+        let unreachable = &failure.find_cause::<DataUnreachable>()?.0;
+        let name = unreachable.source_name();
+        let description = match unreachable.error() {
             DataError::Connect | DataError::Pool => format!(
                 "The data source `{name}` is not reachable: no connection could be made during \
                  the start-up check."
@@ -127,7 +124,7 @@ impl FailureAnalyzer for DataUnreachableAnalyzer {
                 "Check the URL in `{}.url` (host, port, database name or file path), the \
                  network path to the database and the credentials. Set \
                  `data.connect-on-startup = false` to start without connecting.",
-                prefix(name)
+                unreachable.config_prefix()
             ),
         ))
     }
@@ -137,6 +134,7 @@ impl FailureAnalyzer for DataUnreachableAnalyzer {
 mod tests {
     use super::*;
     use crate::error::{ServiceError, StartupPhase};
+    use oxbloom_data::SourceError;
     use oxbloom_di::DiError;
 
     fn analyze(
@@ -167,9 +165,31 @@ mod tests {
         let a = analyze(&DataConfigAnalyzer, di).unwrap();
         assert_eq!(
             a.description(),
-            "The data source key `data.ssl-bundle` is not usable: names an SSL bundle that \
-             does not exist; available bundles: api, idp."
+            "The data source key `data.ssl-bundle` is not usable (names an SSL bundle that \
+             does not exist; available bundles: api, idp)."
         );
+    }
+
+    #[test]
+    fn verify_ca_with_a_trust_store_is_reported_on_the_ssl_mode_key() {
+        let build = SourceBuildError {
+            error: SourceError::new("orders", DataError::VerifyCaWithTrust),
+            driver: Some(oxbloom_data::Driver::Postgres),
+        };
+        let di = DiError::creation_from::<oxbloom_data::DataSources>(build);
+        let a = analyze(&DataConfigAnalyzer, di).unwrap();
+        assert_eq!(
+            a.description(),
+            "The data source key `data.sources.orders.ssl-mode` is not usable: ssl-mode \
+             verify-ca cannot be combined with an ssl-bundle that has a trust store because the \
+             database drivers add the bundle's trust to the platform roots; use verify-full."
+        );
+        let action = a.action().unwrap();
+        assert!(
+            action.contains("`data.sources.orders.ssl-mode`"),
+            "{action}"
+        );
+        assert!(action.contains("`verify-full`"), "{action}");
     }
 
     #[test]
@@ -204,10 +224,7 @@ mod tests {
     fn an_unreachable_source_is_named_with_its_key() {
         // A refused connection and a pool timeout get the same report.
         for error in [DataError::Connect, DataError::Pool] {
-            let error = ServiceError::new(DataUnreachable {
-                source_name: "orders".into(),
-                error,
-            });
+            let error = ServiceError::new(DataUnreachable(SourceError::new("orders", error)));
             let a = analyze(&DataUnreachableAnalyzer, error).unwrap();
             assert_eq!(
                 a.description(),
@@ -217,10 +234,7 @@ mod tests {
             assert!(a.action().unwrap().contains("`data.sources.orders.url`"));
             assert!(a.action().unwrap().contains("credentials"));
         }
-        let tls = ServiceError::new(DataUnreachable {
-            source_name: "default".into(),
-            error: DataError::Tls,
-        });
+        let tls = ServiceError::new(DataUnreachable(SourceError::new("default", DataError::Tls)));
         let a = analyze(&DataUnreachableAnalyzer, tls).unwrap();
         assert_eq!(
             a.description(),

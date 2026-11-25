@@ -1,6 +1,9 @@
 //! [`DataSources`], the registry of the configured pools.
 
 use std::fmt;
+use std::future::Future;
+use std::pin::Pin;
+use std::task::Poll;
 use std::time::Duration;
 
 use crate::pool::{self, Pool, TlsMaterial};
@@ -65,7 +68,8 @@ impl DataSources {
     /// Building opens no connection and needs no database; the first use of a pool connects.
     /// `tls` resolves an SSL bundle name to its PEM material and is called only for a source
     /// with an `ssl-bundle`, with the bundle name. A source with a bundle and no `ssl-mode`
-    /// connects with `verify-full`. An in-memory SQLite database keeps its connections open
+    /// connects with `verify-full`. The drivers add the bundle's trust certificates to the
+    /// platform roots instead of replacing them. An in-memory SQLite database keeps its connections open
     /// unless `idle-timeout` or `max-lifetime` is set, because closing the last connection
     /// destroys the database. `min-connections` is honoured only loosely by a lazy pool: sqlx
     /// opens and refills those connections in the background.
@@ -86,6 +90,10 @@ impl DataSources {
     /// - [`DataError::Config`] for a URL the driver refuses, for example an unknown option
     ///   value. The message never contains the URL.
     /// - Any error of `tls`, such as [`DataError::Tls`].
+    /// - [`DataError::VerifyCaWithTrust`] for a source with `ssl-mode = verify-ca` whose bundle
+    ///   has a trust store: `verify-ca` does not check the host name, and the bundle's trust is
+    ///   added to the platform roots, so any publicly trusted certificate would pass. Use
+    ///   `verify-full`, or a bundle without a trust store.
     /// - [`DataError::Pool`] when it is called outside a Tokio runtime and there is a source.
     ///
     /// # Examples
@@ -455,9 +463,13 @@ impl DataSources {
         self.entry(name).map(|e| e.pool.counts())
     }
 
-    /// Closes every pool. Each close waits until the connections in use are returned, so
-    /// release them first; a caller at shutdown wraps it in a timeout. A closed pool refuses
-    /// new connections with [`DataError::Pool`].
+    /// Closes every pool and waits until each one has closed.
+    ///
+    /// Every pool is marked closed first, so all of them refuse new connections at once with
+    /// [`DataError::Pool`], and then the closes run concurrently. A close waits until the
+    /// connections in use are returned, so one connection that is never returned keeps this
+    /// future pending; a caller at shutdown uses
+    /// [`close_all_within`](Self::close_all_within) instead.
     ///
     /// # Examples
     ///
@@ -480,8 +492,85 @@ impl DataSources {
     /// # fn main() {}
     /// ```
     pub async fn close_all(&self) {
-        for entry in &self.entries {
-            entry.pool.close().await;
-        }
+        let mut pending = self.start_closing();
+        join_closes(&mut pending).await;
     }
+
+    /// Closes every pool like [`close_all`](Self::close_all), but waits at most `timeout`
+    /// for all of them together, and returns the names of the sources whose close did not
+    /// finish in that time, in the order of [`names`](Self::names). An empty list means that
+    /// every pool closed.
+    ///
+    /// Every pool is marked closed before the wait begins, so a source that is still listed
+    /// refuses new connections all the same; only its connections in use stay open until
+    /// they are returned. Closing a closed registry again returns an empty list.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[cfg(feature = "sqlite")]
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use std::time::Duration;
+    /// use oxbloom_config::Config;
+    /// use oxbloom_data::{DataError, DataSettings, DataSources};
+    ///
+    /// let config = Config::from_str(
+    ///     "[data]\nurl = \"sqlite::memory:\"\n[data.sources.cache]\nurl = \"sqlite::memory:\"",
+    /// )?;
+    /// let sources = DataSources::build(&DataSettings::from_config(&config)?, &|_| Err(DataError::Tls))?;
+    /// // A connection of `cache` is checked out and not returned within the time.
+    /// let held = sources.sqlite("cache").ok_or("no cache")?.acquire().await?;
+    /// let unfinished = sources.close_all_within(Duration::from_millis(100)).await;
+    /// assert_eq!(unfinished, ["cache"]);
+    /// assert!(sources.sqlite("default").ok_or("no default")?.is_closed());
+    /// assert!(sources.sqlite("cache").ok_or("no cache")?.is_closed());
+    /// drop(held);
+    /// assert!(sources.close_all_within(Duration::from_secs(5)).await.is_empty());
+    /// # Ok(())
+    /// # }
+    /// # #[cfg(not(feature = "sqlite"))]
+    /// # fn main() {}
+    /// ```
+    pub async fn close_all_within(&self, timeout: Duration) -> Vec<String> {
+        let mut pending = self.start_closing();
+        // The timeout drops only the joining future; `pending` keeps what did not finish.
+        let _ = tokio::time::timeout(timeout, join_closes(&mut pending)).await;
+        pending
+            .into_iter()
+            .filter(|(_, close)| close.is_some())
+            .map(|(name, _)| name.to_owned())
+            .collect()
+    }
+
+    /// Marks every pool closed, in the order of the sources, and returns the futures that wait
+    /// for the closes.
+    fn start_closing(&self) -> Vec<(&str, Option<Close<'_>>)> {
+        self.entries
+            .iter()
+            .map(|entry| (entry.name.as_str(), Some(entry.pool.close())))
+            .collect()
+    }
+}
+
+/// The pending close of one pool.
+type Close<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
+
+/// Drives every pending close concurrently until all have finished; a finished close is set to
+/// `None`, so after a timeout the remaining `Some` entries are the closes that did not finish.
+async fn join_closes(pending: &mut [(&str, Option<Close<'_>>)]) {
+    std::future::poll_fn(|cx| {
+        let mut done = true;
+        for (_, slot) in pending.iter_mut() {
+            if let Some(close) = slot {
+                if close.as_mut().poll(cx).is_ready() {
+                    *slot = None;
+                } else {
+                    done = false;
+                }
+            }
+        }
+        if done { Poll::Ready(()) } else { Poll::Pending }
+    })
+    .await;
 }

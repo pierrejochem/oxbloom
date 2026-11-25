@@ -41,7 +41,9 @@ const TARGET: &str = "oxbloom::data";
 /// - the [`DataSettings`] of the `data.*` keys. An unknown key or a bad value fails the build
 ///   with `DiError::Creation` whose source is the `ConfigError` naming the full key, never the
 ///   value (the URL is a secret);
-/// - the [`DataSources`] registry with a lazy pool per source. An `ssl-bundle` names a bundle
+/// - the [`DataSources`] registry with a lazy pool per source, unless the application
+///   registered a `DataSources` bean itself; then the application's registry is the one the
+///   default pool bean, the [`DataService`] and the health indicators use. An `ssl-bundle` names a bundle
 ///   of the `SslBundles` bean (feature `ssl`), whose trust certificates and client identity
 ///   the pool uses as PEM; an unknown name fails the build with a `ConfigError::Invalid` on
 ///   `data.ssl-bundle` or `data.sources.<name>.ssl-bundle` that lists the available bundle
@@ -51,7 +53,9 @@ const TARGET: &str = "oxbloom::data";
 /// - the default source's pool as `Arc<PgPool>`, `Arc<MySqlPool>` or `Arc<SqlitePool>`
 ///   (whichever driver `data.url` names), unless the application registered a bean of that
 ///   type itself. Named sources are reachable through the registry only;
-/// - the [`DataService`] as a `dyn Service`.
+/// - the [`DataService`] as a `dyn Service`, when the section configures a source (a
+///   `data` section with only `connect-on-startup` registers none). The service does not keep
+///   running, so a run-to-completion application ends after its runners.
 ///
 /// The pools are built while the container is built, which `OxbloomApplicationBuilder::run`
 /// does on the application's Tokio runtime; sqlx ties the maintenance task of a pool to that
@@ -93,8 +97,7 @@ const TARGET: &str = "oxbloom::data";
 ///         .output(std::io::sink())
 ///         .listener(seen.clone())
 ///         .auto_configuration::<DataAutoConfiguration>();
-///     // The data service is a service, so the run waits for shutdown; trigger it up front.
-///     builder.shutdown_handle().trigger();
+///     // The data service does not keep running, so the run ends by itself.
 ///     builder.run().await?;
 ///     let names = vec!["default".to_string(), "cache".to_string()];
 ///     assert_eq!(*seen.0.lock().unwrap(), Some((names, true)));
@@ -131,7 +134,10 @@ impl Configuration for DataAutoConfiguration {
         let builder = builder
             .try_bean(data_settings)
             .try_bean(data_sources)
+            // The application's own registry wins.
+            .on_missing_bean::<DataSources>()
             .bean(data_service)
+            .condition("data_sources_configured", sources_configured)
             // The lowest phase starts first; the order keeps it first within that phase, so
             // the pools are up before every other service and close after them.
             .order(i32::MIN)
@@ -257,27 +263,34 @@ fn data_service(sources: Arc<DataSources>, settings: Arc<DataSettings>) -> DataS
     DataService::new(sources, settings.connect_on_startup)
 }
 
-/// Whether the scheme of `data.url` names `driver`. Only the scheme is read; the reason of a
-/// skip never contains the URL.
+/// Whether the `data` section configures a source: a named one under `data.sources`, or any
+/// key of the default source. Without a source there is nothing to connect or close, so no
+/// `DataService` is registered. The reason of a skip never contains a value.
+fn sources_configured(cx: &ConditionContext) -> ConditionOutcome {
+    let default_keys = oxbloom_data::PROPERTIES
+        .iter()
+        .map(|p| p.0)
+        .filter(|key| !key.starts_with("data.sources.") && *key != "data.connect-on-startup");
+    if cx.contains("data.sources") || default_keys.into_iter().any(|key| cx.contains(key)) {
+        ConditionOutcome::matched()
+    } else {
+        ConditionOutcome::skipped("the data section configures no source")
+    }
+}
+
+/// Whether the scheme of `data.url` names `driver`, by the rule of [`Driver::from_url`]. Only
+/// the scheme is read; the reason of a skip never contains the URL.
 fn default_driver_is(cx: &ConditionContext, driver: Driver) -> ConditionOutcome {
-    match cx.property("data.url").as_deref().and_then(driver_of) {
+    match cx
+        .property("data.url")
+        .as_deref()
+        .and_then(Driver::from_url)
+    {
         Some(found) if found == driver => ConditionOutcome::matched(),
         Some(_) => ConditionOutcome::skipped(format!(
             "the default data source does not use the {driver} driver"
         )),
         None => ConditionOutcome::skipped("there is no default data source with a known scheme"),
-    }
-}
-
-/// The driver of a URL by its scheme, the same rule as `oxbloom-data`'s settings.
-fn driver_of(url: &str) -> Option<Driver> {
-    let (scheme, rest) = url.split_once(':')?;
-    let slashes = rest.starts_with("//");
-    match scheme {
-        "postgres" | "postgresql" if slashes => Some(Driver::Postgres),
-        "mysql" | "mariadb" if slashes => Some(Driver::Mysql),
-        "sqlite" => Some(Driver::Sqlite),
-        _ => None,
     }
 }
 
@@ -340,33 +353,33 @@ impl std::error::Error for SourceBuildError {
     }
 }
 
-/// A source that failed the start-up check. The `Display` names the source with fixed text;
-/// the [`DataError`] is the source.
+/// A source that failed the start-up check. The `Display` is the fixed text of the
+/// [`SourceError`], which names the source; the [`DataError`] of the check is the source.
 #[derive(Debug)]
-pub(crate) struct DataUnreachable {
-    pub(crate) source_name: String,
-    pub(crate) error: DataError,
-}
+pub(crate) struct DataUnreachable(pub(crate) SourceError);
 
 impl fmt::Display for DataUnreachable {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "data source `{}`: {}", self.source_name, self.error)
+        fmt::Display::fmt(&self.0, f)
     }
 }
 
 impl std::error::Error for DataUnreachable {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.error)
+        Some(&self.0.error)
     }
 }
 
 /// The boot [`Service`] of the [`DataSources`] registry, registered by
 /// [`DataAutoConfiguration`].
 ///
-/// With `data.connect-on-startup` (the default), [`start`](Service::start) checks every
-/// source in turn with a 10 second timeout each, so an unreachable database fails the boot.
-/// The `ServiceError` then wraps an error whose `Display` is `data source `<name>`: <fixed
-/// text>` and whose source is the [`DataError`] of the check, such as [`DataError::Connect`];
+/// With `data.connect-on-startup` (the default), [`start`](Service::start) checks the sources
+/// one at a time in the order of [`DataSources::names`], each with a 10 second timeout, and
+/// stops at the first source that fails, so an unreachable database fails the boot and
+/// several unreachable ones cost one wait, not one each.
+/// The `ServiceError` then wraps an error whose `Display` names the source with a fixed text,
+/// such as ``data source `orders`: could not connect to the database``, and whose source is
+/// the [`DataError`] of the check, such as [`DataError::Connect`];
 /// the failure report names the source and never the URL. A refused connection can also end
 /// in [`DataError::Pool`], because sqlx retries it until the source's `acquire-timeout`; the
 /// report treats both as an unreachable source. With the default `acquire-timeout` of 30
@@ -374,13 +387,18 @@ impl std::error::Error for DataUnreachable {
 /// seconds of its check; set a shorter `acquire-timeout` to fail sooner. Without
 /// `data.connect-on-startup` the pools connect on first use.
 ///
-/// [`stop`](Service::stop) closes every pool, waiting up to 10 seconds for the connections
-/// in use; when that time runs out it logs a `warn` event at target `oxbloom::data` naming
-/// the sources, and the pools close in the background. Boot's own stop deadline bounds it as
-/// well.
+/// [`stop`](Service::stop) marks every pool closed at once, so none hands out a new
+/// connection, then waits up to 10 seconds in all for the pools to close, which needs the
+/// connections in use to be returned. When that time runs out it logs one `warn` event at
+/// target `oxbloom::data` whose `sources` field lists only the sources that did not finish
+/// closing (see [`DataSources::close_all_within`]); their connections in use are closed when
+/// they are returned. Boot's own stop deadline bounds the stop as well.
 ///
 /// Its [`phase`](Service::phase) is `i32::MIN` and its registration has the lowest DI order,
-/// so it starts before every other service and stops after them.
+/// so it starts before every other service and stops after them. It does not
+/// [keep running](Service::keeps_running): the pools only need to be open while other code
+/// uses them, so an application whose only services are data services ends after its runners
+/// instead of waiting for a shutdown signal.
 ///
 /// # Examples
 ///
@@ -399,6 +417,7 @@ impl std::error::Error for DataUnreachable {
 ///     let service = DataService::new(sources.clone(), true);
 ///     assert_eq!(service.phase(), i32::MIN);
 ///     assert_eq!(service.name(), "DataSources");
+///     assert!(!service.keeps_running());
 ///
 ///     service.start().await?;
 ///     assert_eq!(sources.pool_counts("default").map(|(size, _)| size), Some(1));
@@ -494,27 +513,35 @@ impl Service for DataService {
         if !self.connect_on_startup {
             return Ok(());
         }
-        for (source_name, result) in self.sources.ping_all(PING_TIMEOUT).await {
-            if let Err(error) = result {
-                return Err(ServiceError::new(DataUnreachable { source_name, error }));
+        // One source at a time, stopping at the first failure, so several unreachable sources
+        // do not each add their wait to the start.
+        for name in self.sources.names() {
+            if let Err(error) = self.sources.ping(name, PING_TIMEOUT).await {
+                return Err(ServiceError::new(DataUnreachable(SourceError::new(
+                    name, error,
+                ))));
             }
         }
         Ok(())
     }
 
-    /// Closes every pool, waiting up to 10 seconds for the connections in use.
+    /// Marks every pool closed, then waits up to 10 seconds in all for the closes; the sources
+    /// whose close did not finish are named in one warning.
     async fn stop(&self) {
-        if tokio::time::timeout(CLOSE_TIMEOUT, self.sources.close_all())
-            .await
-            .is_err()
-        {
-            let names = self.sources.names().join(", ");
+        let unfinished = self.sources.close_all_within(CLOSE_TIMEOUT).await;
+        if !unfinished.is_empty() {
             tracing::warn!(
                 target: TARGET,
-                sources = %names,
-                "the data sources did not close within 10 seconds"
+                sources = %unfinished.join(", "),
+                "these data sources did not close within 10 seconds"
             );
         }
+    }
+
+    /// `false`: the pools only need to be open between start and stop, so an application
+    /// whose runners do the work ends after them.
+    fn keeps_running(&self) -> bool {
+        false
     }
 
     /// `i32::MIN`: the pools are up before every other service and close after them.
@@ -542,25 +569,10 @@ mod tests {
     }
 
     #[test]
-    fn the_scheme_picks_the_driver() {
-        assert_eq!(driver_of("postgres://h/db"), Some(Driver::Postgres));
-        assert_eq!(driver_of("postgresql://h/db"), Some(Driver::Postgres));
-        assert_eq!(driver_of("mysql://h/db"), Some(Driver::Mysql));
-        assert_eq!(driver_of("mariadb://h/db"), Some(Driver::Mysql));
-        assert_eq!(driver_of("sqlite::memory:"), Some(Driver::Sqlite));
-        assert_eq!(driver_of("postgres:h"), None);
-        assert_eq!(driver_of("redis://h"), None);
-        assert_eq!(driver_of("no-scheme"), None);
-    }
-
-    #[test]
     fn the_errors_show_fixed_text_and_keep_their_source() {
         use std::error::Error;
 
-        let unreachable = DataUnreachable {
-            source_name: "orders".into(),
-            error: DataError::Connect,
-        };
+        let unreachable = DataUnreachable(SourceError::new("orders", DataError::Connect));
         assert_eq!(
             unreachable.to_string(),
             "data source `orders`: could not connect to the database"

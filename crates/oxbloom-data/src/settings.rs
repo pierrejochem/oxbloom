@@ -34,6 +34,7 @@ const DEFAULT_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(30);
 /// # Ok::<(), oxbloom_config::ConfigError>(())
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Driver {
     /// PostgreSQL.
     Postgres,
@@ -41,6 +42,38 @@ pub enum Driver {
     Mysql,
     /// SQLite.
     Sqlite,
+}
+
+impl Driver {
+    /// The driver of `url` by its scheme, or `None` for a URL whose scheme names no driver.
+    ///
+    /// The scheme is matched case-sensitively, in the lowercase forms the drivers themselves
+    /// accept: `postgres://` and `postgresql://` give [`Postgres`](Self::Postgres),
+    /// `mysql://` and `mariadb://` give [`Mysql`](Self::Mysql), and `sqlite:` gives
+    /// [`Sqlite`](Self::Sqlite). The network schemes need `://`. Only the scheme is read.
+    /// [`DataSettings::from_config`] applies the same rule to every `url` key.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_data::Driver;
+    ///
+    /// assert_eq!(Driver::from_url("postgresql://db.internal/app"), Some(Driver::Postgres));
+    /// assert_eq!(Driver::from_url("sqlite::memory:"), Some(Driver::Sqlite));
+    /// // An uppercase scheme or a network scheme without `://` names no driver.
+    /// assert_eq!(Driver::from_url("MYSQL://db/app"), None);
+    /// assert_eq!(Driver::from_url("mysql:db/app"), None);
+    /// ```
+    pub fn from_url(url: &str) -> Option<Driver> {
+        let (scheme, rest) = url.split_once(':')?;
+        let slashes = rest.starts_with("//");
+        match scheme {
+            "postgres" | "postgresql" if slashes => Some(Driver::Postgres),
+            "mysql" | "mariadb" if slashes => Some(Driver::Mysql),
+            "sqlite" => Some(Driver::Sqlite),
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Display for Driver {
@@ -144,13 +177,24 @@ pub struct SourceSettings {
     /// The TLS mode, not allowed for SQLite. Default none, which leaves it to the URL and the
     /// driver, except with an `ssl_bundle`, where none means `verify-full`. An explicit
     /// `prefer` or `require` encrypts without checking the certificate against the bundle's
-    /// trust roots, and `prefer` falls back to plain text.
+    /// trust roots, and `prefer` falls back to plain text. `verify-ca` together with a bundle
+    /// that has a trust store is refused when the pool is built, with
+    /// [`DataError::VerifyCaWithTrust`](crate::DataError::VerifyCaWithTrust): the drivers add
+    /// the bundle's trust to the platform roots and `verify-ca` does not check the host name,
+    /// so the pair would accept any publicly trusted certificate.
     pub ssl_mode: Option<SslMode>,
     /// The name of the SSL bundle with the trust roots or client certificate. Not allowed for
     /// SQLite, nor with `ssl-mode = disable`. The caller resolves the name. Without an
     /// `ssl_mode` the bundle makes the connection `verify-full`, overriding a mode in the URL
-    /// or the environment. The PEM is parsed on the first connection, so a bad PEM shows up
-    /// then as [`DataError::Connect`](crate::DataError::Connect).
+    /// or the environment; a bundle with only a client certificate then verifies the server
+    /// against the platform roots, so a server behind a private authority needs that
+    /// authority in the bundle's trust or an explicit `ssl_mode`.
+    ///
+    /// For a database the bundle's trust certificates are added to the platform roots, unlike
+    /// the other users of a bundle, where they replace them. `verify-full` therefore also
+    /// accepts a publicly trusted certificate for the host name, and `verify-ca` with a bundle
+    /// that has a trust store is refused. The PEM is parsed on the first connection, so a bad
+    /// PEM shows up then as [`DataError::Connect`](crate::DataError::Connect).
     pub ssl_bundle: Option<String>,
 }
 
@@ -272,12 +316,17 @@ impl DataSettings {
     ///
     /// Fails with a [`ConfigError::Invalid`] naming the full key, and never the value, for an
     /// unknown key, a value of the wrong type, a bad duration, a source without `url`, a URL
-    /// whose scheme is not `postgres`, `postgresql`, `mysql`, `mariadb` or `sqlite`, a zero
-    /// `max-connections` or duration, `min-connections` above `max-connections`, an unknown
-    /// `ssl-mode`, `ssl-mode` or `ssl-bundle` on a SQLite source, `ssl-bundle` with
-    /// `ssl-mode = disable`, a source name outside
-    /// `[a-z0-9-]+` or equal to `default`, and an in-memory SQLite URL with `max-connections`
-    /// above 1 and no `cache=shared`.
+    /// that does not start with `postgres://`, `postgresql://`, `mysql://`, `mariadb://` or
+    /// `sqlite:` (the scheme in lowercase, see [`Driver::from_url`]), a zero
+    /// `max-connections` or duration, `min-connections` above the effective
+    /// `max-connections`, an unknown `ssl-mode`, an empty `ssl-bundle`, `ssl-mode` or
+    /// `ssl-bundle` on a SQLite source, `ssl-bundle` with `ssl-mode = disable`, a source name
+    /// outside `[a-z0-9-]+` or equal to `default`, and an in-memory SQLite URL with
+    /// `max-connections` above 1 and no `cache=shared`.
+    ///
+    /// The settings know only the name of an `ssl-bundle`, so the refusal of
+    /// `ssl-mode = verify-ca` with a bundle that has a trust store happens in
+    /// [`DataSources::build`](crate::DataSources::build).
     ///
     /// # Examples
     ///
@@ -369,19 +418,6 @@ fn is_valid_name(name: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
-/// The driver of the URL. The scheme is matched case-sensitively, in the lowercase forms the
-/// drivers themselves accept, and the network schemes need `://`.
-fn driver_of(url: &str) -> Option<Driver> {
-    let (scheme, rest) = url.split_once(':')?;
-    let slashes = rest.starts_with("//");
-    match scheme {
-        "postgres" | "postgresql" if slashes => Some(Driver::Postgres),
-        "mysql" | "mariadb" if slashes => Some(Driver::Mysql),
-        "sqlite" => Some(Driver::Sqlite),
-        _ => None,
-    }
-}
-
 /// What the options of a SQLite URL say about an in-memory database.
 pub(crate) struct SqliteMemory {
     pub(crate) in_memory: bool,
@@ -408,7 +444,7 @@ fn source(name: &str, prefix: &str, raw: RawSource) -> Result<SourceSettings, Co
     let Some(url) = raw.url else {
         return Err(ConfigError::invalid(key("url"), "is required"));
     };
-    let Some(driver) = driver_of(url.expose()) else {
+    let Some(driver) = Driver::from_url(url.expose()) else {
         return Err(ConfigError::invalid(
             key("url"),
             "must start with `postgres://`, `postgresql://`, `mysql://` or `mariadb://` (lowercase, followed by `://`), or with `sqlite:`",

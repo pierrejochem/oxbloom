@@ -16,6 +16,7 @@ use std::fmt;
 /// assert_eq!(DataError::Connect.to_string(), "could not connect to the database");
 /// let boxed: Box<dyn std::error::Error> = Box::new(DataError::Tls);
 /// assert_eq!(boxed.to_string(), "the TLS configuration of the database is unusable");
+/// assert!(DataError::VerifyCaWithTrust.to_string().ends_with("use verify-full"));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -30,6 +31,11 @@ pub enum DataError {
     Unsupported,
     /// The TLS settings of a source cannot be applied.
     Tls,
+    /// `ssl-mode = verify-ca` names an `ssl-bundle` that has a trust store. The database
+    /// drivers add the bundle's trust to the platform roots, and `verify-ca` does not check
+    /// the host name, so the pair would accept any publicly trusted certificate; use
+    /// `verify-full`.
+    VerifyCaWithTrust,
 }
 
 impl fmt::Display for DataError {
@@ -40,6 +46,11 @@ impl fmt::Display for DataError {
             Self::Pool => "the database connection pool failed",
             Self::Unsupported => "the database driver is not available in this build",
             Self::Tls => "the TLS configuration of the database is unusable",
+            Self::VerifyCaWithTrust => {
+                "ssl-mode verify-ca cannot be combined with an ssl-bundle that has a trust store \
+                 because the database drivers add the bundle's trust to the platform roots; use \
+                 verify-full"
+            }
         })
     }
 }
@@ -87,7 +98,20 @@ pub struct SourceError {
 }
 
 impl SourceError {
-    pub(crate) fn new(source_name: &str, error: DataError) -> Self {
+    /// The error `error` of the source `source_name`, for code that checks a source itself,
+    /// such as a start-up check that pings each source.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_data::{DataError, SourceError};
+    ///
+    /// let err = SourceError::new("orders", DataError::Connect);
+    /// assert_eq!(err.config_prefix(), "data.sources.orders");
+    /// assert_eq!(err.to_string(), "data source `orders`: could not connect to the database");
+    /// assert_eq!(SourceError::new("default", DataError::Pool).config_prefix(), "data");
+    /// ```
+    pub fn new(source_name: &str, error: DataError) -> Self {
         Self {
             source_name: source_name.to_string(),
             error,

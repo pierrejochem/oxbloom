@@ -10,8 +10,10 @@ use crate::output::Output;
 ///
 /// Register it as a bean that `provides` `dyn Service`. After the runners, boot
 /// starts every service in ascending [`phase`](Service::phase), ties in DI order
-/// (`order`, then registration order). With at least one service started, `run()`
-/// waits for shutdown, then stops the services in reverse start order. The whole
+/// (`order`, then registration order). With at least one service that
+/// [keeps running](Service::keeps_running) started, `run()` waits for shutdown;
+/// without one it goes on at once. Either way it then stops the services in
+/// reverse start order. The whole
 /// stop sequence shares one deadline, `shutdown_timeout`: a `stop` still running
 /// at the deadline is abandoned and named in the output. A start error stops the
 /// services started so far and fails the run in the `Service` phase. Implement it
@@ -21,8 +23,8 @@ use crate::output::Output;
 /// panic in user code, and the services started before it are not stopped.
 /// Whenever a service is registered, boot needs a Tokio runtime with the time
 /// and IO drivers, such as `#[tokio::main]` or a builder with `enable_all()`:
-/// it installs signal handlers just before the first `start`, spawns each
-/// `stop` and bounds it with a timer.
+/// it spawns each `stop` and bounds it with a timer, and when a service keeps
+/// running it installs signal handlers just before the first `start`.
 ///
 /// ```
 /// use std::sync::Arc;
@@ -174,6 +176,62 @@ pub trait Service: Send + Sync + 'static {
     fn name(&self) -> &'static str {
         std::any::type_name::<Self>()
     }
+
+    /// Whether the service keeps working after `start` until it is stopped, such
+    /// as a server or a scheduler. Default: `true`.
+    ///
+    /// `run()` waits for a shutdown signal only when at least one started service
+    /// keeps running, and installs the signal handlers only then. A service that
+    /// returns `false` only holds resources between start and stop, such as
+    /// connection pools: an application whose services all return `false` ends
+    /// after its runners, and boot still starts and stops those services.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use std::sync::atomic::{AtomicBool, Ordering};
+    /// use oxbloom_boot::async_trait;
+    /// use oxbloom_boot::{OxbloomApplication, Service, ServiceError};
+    /// use oxbloom_config::Config;
+    ///
+    /// /// Opens a resource at start and releases it at stop; it does no work of its own.
+    /// struct Resource(Arc<AtomicBool>);
+    ///
+    /// #[async_trait]
+    /// impl Service for Resource {
+    ///     async fn start(&self) -> Result<(), ServiceError> {
+    ///         self.0.store(true, Ordering::SeqCst);
+    ///         Ok(())
+    ///     }
+    ///     async fn stop(&self) {
+    ///         self.0.store(false, Ordering::SeqCst);
+    ///     }
+    ///     fn keeps_running(&self) -> bool {
+    ///         false
+    ///     }
+    /// }
+    ///
+    /// # tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(async {
+    /// let open = Arc::new(AtomicBool::new(false));
+    /// let flag = open.clone();
+    /// // No shutdown trigger: the run ends by itself, after starting and stopping the service.
+    /// let status = OxbloomApplication::builder()
+    ///     .with_config(Config::from_str("")?)
+    ///     .output(std::io::sink())
+    ///     .configure(move |b| {
+    ///         b.instance(Resource(flag))
+    ///             .provides(|r: Arc<Resource>| -> Arc<dyn Service> { r })
+    ///     })
+    ///     .run()
+    ///     .await?;
+    /// assert_eq!(status.code(), 0);
+    /// assert!(!open.load(Ordering::SeqCst));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    fn keeps_running(&self) -> bool {
+        true
+    }
 }
 
 /// Starts `services` in ascending phase, ties in the given (DI) order.
@@ -273,6 +331,7 @@ mod tests {
     #[test]
     fn defaults() {
         assert_eq!(Plain.phase(), 0);
+        assert!(Plain.keeps_running());
         assert_eq!(Plain.name(), std::any::type_name::<Plain>());
     }
 

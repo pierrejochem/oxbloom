@@ -8,6 +8,7 @@ use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::sign::CertifiedKey;
 use rustls::{InconsistentKeys, RootCertStore};
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::error::SslError;
 use crate::settings::{BundleSource, Source};
@@ -15,7 +16,8 @@ use crate::validity::{self, CertValidity, Warnings};
 
 /// The loaded material of a bundle: an optional identity and an optional trust store, at
 /// least one of them present, with the validity of every certificate and the warnings given
-/// about them. It has no `Debug`, so the key can never be printed.
+/// about them. It has no `Debug`, so the key can never be printed, and dropping it wipes the
+/// retained key DER.
 pub(crate) struct Material {
     pub(crate) identity: Option<Arc<CertifiedKey>>,
     pub(crate) trust: Option<Arc<RootCertStore>>,
@@ -56,6 +58,16 @@ impl Material {
     }
 }
 
+impl Drop for Material {
+    /// Wipes the retained private key DER, so it does not linger in freed memory after a
+    /// reload replaced the material or the bundle was dropped.
+    fn drop(&mut self) {
+        if let Some(key) = &mut self.key {
+            key.zeroize();
+        }
+    }
+}
+
 /// The only crypto provider Oxbloom uses for TLS: `aws-lc-rs`.
 pub(crate) fn provider() -> Arc<CryptoProvider> {
     static PROVIDER: OnceLock<Arc<CryptoProvider>> = OnceLock::new();
@@ -75,7 +87,9 @@ pub(crate) fn load(bundle: &BundleSource) -> Result<Material, SslError> {
             let identity = match (certificate, private_key) {
                 (Some(cert), Some(key)) => {
                     let chain = certificates(bundle, "certificate", cert)?;
-                    let key_bytes = value_bytes(bundle, "private-key", key.expose())?;
+                    // The PEM text of the key is wiped when it goes out of scope.
+                    let key_bytes =
+                        Zeroizing::new(value_bytes(bundle, "private-key", key.expose())?);
                     let key =
                         PrivateKeyDer::from_pem_slice(&key_bytes).map_err(|_| SslError::Pem {
                             bundle: bundle.name.clone(),

@@ -13,8 +13,8 @@
 //! 4. run the [`ApplicationRunner`] and [`CommandLineRunner`] beans;
 //! 5. start the [`Service`] beans in ascending phase;
 //! 6. fire `started` and `ready`;
-//! 7. with at least one service, wait for Ctrl-C, SIGTERM (Unix) or a
-//!    [`ShutdownHandle`] trigger;
+//! 7. with at least one service that [keeps running](Service::keeps_running),
+//!    wait for Ctrl-C, SIGTERM (Unix) or a [`ShutdownHandle`] trigger;
 //! 8. stop the services in reverse order under one deadline (`stopping`);
 //! 9. shut the container down;
 //! 10. compute the [`ExitStatus`] from the [`ExitCodeGenerator`] beans

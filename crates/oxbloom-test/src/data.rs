@@ -200,6 +200,26 @@ impl TestDatabase {
     }
 
     /// The URL of the database, with credentials for a server database. Do not print it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_data::sqlx::{self, Connection, SqliteConnection};
+    /// use oxbloom_test::TestDatabase;
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() {
+    /// let db = TestDatabase::sqlite();
+    /// // A connection of its own reaches the same shared in-memory database as the pool.
+    /// sqlx::query("CREATE TABLE notes (body TEXT)").execute(db.sqlite_pool()).await.unwrap();
+    /// let mut own = SqliteConnection::connect(db.url()).await.unwrap();
+    /// let (rows,): (i64,) =
+    ///     sqlx::query_as("SELECT COUNT(*) FROM notes").fetch_one(&mut own).await.unwrap();
+    /// assert_eq!(rows, 0);
+    /// own.close().await.unwrap();
+    /// db.close().await;
+    /// # }
+    /// ```
     pub fn url(&self) -> &str {
         &self.url
     }

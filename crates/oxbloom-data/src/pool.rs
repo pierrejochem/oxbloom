@@ -6,6 +6,8 @@
 //! user name or SQL text.
 
 use std::fmt;
+use std::future::Future;
+use std::pin::Pin;
 
 use crate::DataError;
 #[cfg(any(feature = "postgres", feature = "mysql"))]
@@ -17,7 +19,10 @@ use crate::settings::{Driver, SourceSettings};
 ///
 /// The caller resolves the bundle and hands the material to
 /// [`DataSources::build`](crate::DataSources::build). `trust_pem` holds the trusted
-/// certificates; without it the platform roots stay in use. `identity` holds the client
+/// certificates. The database drivers add them to the platform roots (unlike the other users
+/// of an SSL bundle, where the bundle's trust replaces the platform roots), so a source with
+/// a trust store and `ssl-mode = verify-ca` is refused; without `trust_pem` the platform
+/// roots alone stay in use. `identity` holds the client
 /// certificate chain and its private key. The `Debug` output shows only which parts are
 /// present. A pool keeps the material it was built with and does not follow a reload of the
 /// bundle.
@@ -95,9 +100,12 @@ impl Pool {
             .map_err(|e| map_error(&e)))
     }
 
-    /// Closes the pool and waits until its connections are closed.
-    pub(crate) async fn close(&self) {
-        each_pool!(self, pool => pool.close().await)
+    /// Marks the pool closed at once, so it refuses new connections, and returns the future
+    /// that waits until its connections are returned and closed. sqlx marks the pool closed
+    /// when `close` is called, not when the future is first polled, so the caller can mark
+    /// every pool closed before it waits for any of them.
+    pub(crate) fn close(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        each_pool!(self, pool => Box::pin(pool.close()))
     }
 
     /// The open connections and the idle ones among them.
@@ -170,6 +178,20 @@ fn effective_ssl_mode(source: &SourceSettings) -> Option<SslMode> {
         .or(source.ssl_bundle.is_some().then_some(SslMode::VerifyFull))
 }
 
+/// The bundle's trust certificates are added to the platform roots by sqlx, and `verify-ca`
+/// does not check the host name, so `verify-ca` with a bundle that has a trust store would
+/// accept any publicly trusted certificate. That pair is refused.
+#[cfg(any(feature = "postgres", feature = "mysql"))]
+fn refuse_verify_ca_with_trust(
+    source: &SourceSettings,
+    material: &TlsMaterial,
+) -> Result<(), DataError> {
+    if source.ssl_mode == Some(SslMode::VerifyCa) && material.trust_pem.is_some() {
+        return Err(DataError::VerifyCaWithTrust);
+    }
+    Ok(())
+}
+
 /// The pool options of `source`. For an in-memory SQLite database an unset idle timeout or
 /// lifetime means never, because closing its last connection destroys the database; for any
 /// other source the sqlx defaults stay.
@@ -221,10 +243,12 @@ fn postgres_connect_options(
         });
     }
     if let Some(bundle) = &source.ssl_bundle {
+        let material = tls(bundle)?;
+        refuse_verify_ca_with_trust(source, &material)?;
         let TlsMaterial {
             trust_pem,
             identity,
-        } = tls(bundle)?;
+        } = material;
         if let Some(pem) = trust_pem {
             options = options.ssl_root_cert_from_pem(pem);
         }
@@ -271,10 +295,12 @@ fn mysql_connect_options(
         });
     }
     if let Some(bundle) = &source.ssl_bundle {
+        let material = tls(bundle)?;
+        refuse_verify_ca_with_trust(source, &material)?;
         let TlsMaterial {
             trust_pem,
             identity,
-        } = tls(bundle)?;
+        } = material;
         if let Some(pem) = trust_pem {
             options = options.ssl_ca_from_pem(pem);
         }

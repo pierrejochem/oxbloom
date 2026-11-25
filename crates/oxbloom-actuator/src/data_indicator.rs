@@ -32,7 +32,6 @@ const TIMED_OUT: &str = "timed out";
 /// # Examples
 ///
 /// ```
-/// # #[cfg(feature = "sqlite")]
 /// # #[tokio::main(flavor = "current_thread")]
 /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// use std::sync::Arc;
@@ -50,8 +49,6 @@ const TIMED_OUT: &str = "timed out";
 /// assert_eq!(health.details["driver"], "sqlite");
 /// # Ok(())
 /// # }
-/// # #[cfg(not(feature = "sqlite"))]
-/// # fn main() {}
 /// ```
 pub struct DataHealthIndicator {
     sources: Arc<DataSources>,
@@ -70,7 +67,6 @@ impl DataHealthIndicator {
     /// # Examples
     ///
     /// ```
-    /// # #[cfg(feature = "sqlite")]
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use std::sync::Arc;
     /// use oxbloom_actuator::{DataHealthIndicator, HealthIndicator};
@@ -88,8 +84,6 @@ impl DataHealthIndicator {
     /// assert_eq!(DataHealthIndicator::new(sources, "replica").name(), "db.replica");
     /// # Ok(())
     /// # }
-    /// # #[cfg(not(feature = "sqlite"))]
-    /// # fn main() {}
     /// ```
     pub fn new(sources: Arc<DataSources>, name: &str) -> Self {
         let component = if sources.default_name() == Some(name) {
@@ -110,7 +104,6 @@ impl DataHealthIndicator {
     /// # Examples
     ///
     /// ```
-    /// # #[cfg(feature = "sqlite")]
     /// # #[tokio::main(flavor = "current_thread")]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use std::sync::Arc;
@@ -122,14 +115,26 @@ impl DataHealthIndicator {
     /// let config = Config::from_str("[data]\nurl = \"sqlite::memory:\"")?;
     /// let settings = DataSettings::from_config(&config)?;
     /// let sources = Arc::new(DataSources::build(&settings, &|_| Err(DataError::Tls))?);
-    /// let indicator = DataHealthIndicator::new(sources, "default").with_timeout(Duration::ZERO);
-    /// // A pool that is already connected answers within any timeout, a zero one included.
+    /// // The builder is chainable, and a generous timeout lets the check pass.
+    /// let indicator = DataHealthIndicator::new(sources.clone(), "default")
+    ///     .with_timeout(Duration::from_millis(1))
+    ///     .with_timeout(Duration::from_secs(10));
     /// let health = indicator.health().await;
-    /// assert!(matches!(health.status, Status::Up | Status::Down));
+    /// assert_eq!(health.status, Status::Up);
+    /// assert_eq!(health.details["driver"], "sqlite");
+    ///
+    /// // Every connection is in use: the check uses its whole timeout and reports `timed out`,
+    /// // still with the driver.
+    /// let held = sources.sqlite("default").ok_or("no default")?.acquire().await?;
+    /// let short = DataHealthIndicator::new(sources.clone(), "default")
+    ///     .with_timeout(Duration::from_millis(50));
+    /// let health = short.health().await;
+    /// assert_eq!(health.status, Status::Down);
+    /// assert_eq!(health.details["error"], "timed out");
+    /// assert_eq!(health.details["driver"], "sqlite");
+    /// drop(held);
     /// # Ok(())
     /// # }
-    /// # #[cfg(not(feature = "sqlite"))]
-    /// # fn main() {}
     /// ```
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;

@@ -24,6 +24,9 @@ rustls-platform-verifier = "0.7.1"
 serde = { version = "1.0.229", features = ["derive"] }
 tokio = { version = "1.54.1", features = ["rt", "sync", "time"] }
 tracing = "0.1.44"
+# Wipes the retained private key DER and the PEM bytes it was read from; already in the tree
+# through `rustls-pki-types`.
+zeroize = { version = "1.9.1", default-features = false, features = ["alloc"] }
 # Reads the subject and validity dates of each certificate for the validity warnings.
 x509-parser = { version = "0.18.1", default-features = false }
 
