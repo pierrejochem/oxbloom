@@ -7,7 +7,8 @@
 //! enabled driver's pool. The cargo feature `retry` (off by default) adds
 //! `transaction_with_retry`, which runs that work again after a serialization failure or a
 //! deadlock. The feature only adds that function, so turning it on never changes
-//! [`transaction`] or [`TransactionOptions`].
+//! [`transaction`] or [`TransactionOptions`]. The cargo feature `migrate` (off by default)
+//! adds the module `migrate`, which applies and reverts schema migrations with `sqlx::migrate`.
 //!
 //! # Examples
 //!

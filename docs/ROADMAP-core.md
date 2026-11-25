@@ -1091,13 +1091,37 @@ Delivered:
 - `oxbloom-test`: `TestDatabase` (SQLite always, PostgreSQL and MySQL with `data-postgres` and `data-mysql`), the per-driver conformance suite `data_conformance_*` in `crates/oxbloom-test/tests/`, `compose.test.yaml` and `make test-db`.
 - Verified against real servers with `make test-db`: PostgreSQL 17 and MySQL 8.4, including the MySQL begin statement and the induced serialization failures.
 
-Not in M3a: migrations (M3b, next), ambient transactions, a repository layer or query builder, a qualifier mechanism for pools, pools that follow SSL bundle reloads, and databases other than the three.
+Not in M3a: migrations (done afterwards in M3b), ambient transactions, a repository layer or query builder, a qualifier mechanism for pools, pools that follow SSL bundle reloads, and databases other than the three.
 
 Deferred minors from the M3a reviews (parked, small; the final fix wave closed the others):
 - A zero health timeout maps a closed pool to `timed out`, because the indicator tells the two apart by the time the check took.
 - `cargo test -p oxbloom-test --features data` alone runs no boot conformance tests; they need `data,web`, which `make test-db` gets through `--all-features`.
 - There is no end-to-end TLS test against a database: the compose services of `make test-db` run without TLS.
 - `DataSources::close_all_within` drops the unfinished close futures when the budget ends, so the idle connections of a pool that did not finish stay open until the pool itself is dropped (connections that are returned later are closed).
+
+### M3b: Data migrations (`oxbloom-data`, `oxbloom-boot`, `oxbloom-actuator`, `oxbloom-test`) — done
+Done on 2026-11-25 on the branch `m3b-migrations`; design in `docs/superpowers/specs/2026-11-25-data-migrations-design.md`, plan in `docs/superpowers/plans/2026-11-25-data-migrations.md` (local files, named without a link), decisions in ADR 0097, usage in the guide chapter 29 (section Migrations) and `docs/API.md` (section 4.16).
+
+Delivered:
+- `oxbloom_data::migrate` (cargo feature `migrate`; `data-migrate` in boot) on `sqlx::migrate`, with the files and history table of `sqlx-cli`: `run`, `revert`, `EmbeddedMigrations`, `MigrationReport`, `MigrateError` with fixed text, and the `data.migrations.*` keys (`enabled`, `path`, `table`, `ignore-missing`, `timeout`, `locking`) per source. There is no `validate-checksums` key: a changed applied file always fails the run.
+- `oxbloom-boot`: `DataService::start` migrates after the connectivity check, source by source with the default first; a failure stops the boot with a report that names the source, the version and the key, and a source that migrates connects even with `connect-on-startup = false`. `enabled = true` without the feature or without any migrations is a startup error.
+- Locking: the `sqlx` advisory lock on PostgreSQL and MySQL; on SQLite the write lock (`BEGIN IMMEDIATE`) and one re-run after a failure. A dedicated connection with statement logging off keeps SQL out of the logs. A private-cache in-memory SQLite source is refused.
+- `oxbloom-actuator`: the `migrations` detail (the latest applied version) on the health indicator of a migrating source.
+- `oxbloom-test`: `MigrationFiles`, `TestDatabase::with_migrations`, `config_snippet_with_migrations` and the migration conformance suite, run against PostgreSQL 17 and MySQL 8.4 by `make test-db` (which now runs every test binary even when one fails). The real servers found two defects that were fixed: the health detail of a history table with capitals on PostgreSQL, and a failing down script on MySQL.
+
+Not in M3b: repeatable and Flyway-style scripts, a baseline, automatic down migration, a command line tool (use `sqlx-cli`), concurrent migration of several sources, a dry run, profiles, a lock timeout other than `timeout`, and cancelling a statement after a timeout.
+
+Gate numbers: to be recorded by the controller (the workspace test count, `make check-examples`, clippy and fmt, the boot stack probes, the `make test-db` results).
+
+Deferred minors from the M3b reviews (parked, small):
+- A timed-out migration keeps its lock until the statement ends, and a retry on SQLite reports only the versions applied in its last attempt.
+- `run` reads the directory before it checks that the driver is enabled, so a load error can hide a disabled driver.
+- A private-cache check precedes the disabled-driver check, and there is no test for `sqlite::memory:?cache=private` or `file:name?mode=memory` without `cache=shared`.
+- `data-migrate` enables `oxbloom-data/migrate` with `oxbloom-data` as a plain dependency (`oxbloom-data?/migrate` would not pull it in); the derived `Debug` of `DataService` can show a migrations `path`; the default-first order is not pinned by a test whose names sort differently.
+- `MigrationFiles` does not sanitise `/` or `\` in a description, and `TestDatabase::with_migrations` has no guard that closes the database when the run panics.
+- A revert maps every execute error of the `sqlx` undo (begin, bookkeeping, commit) to a script failure with the version, on all drivers.
+- The two defects found on real servers are covered by ignored server tests only; a plain `cargo test` does not cover them.
+- The build matrix test does not touch `oxbloom_data::migrate`, and its nested builds cost about 27 seconds.
 - With a `data` section that holds only `connect-on-startup`, `DataService` is not registered, so boot neither pings nor closes an application's own `DataSources`.
 - `DataSettings` has no back-off for an application bean of the same type; a second `DataSettings` bean makes the registry and service wiring ambiguous.
 - Ctrl-C during the startup check of an application whose only service is `DataService` ends the process without a graceful pool close, because signal handlers are installed only when a service keeps running.
@@ -1165,7 +1189,7 @@ Deferred minors from the C10b reviews:
 6. **C4 Conditions and auto-configuration** (C4a, the mechanism, and C4b, auto-configuring the existing wiring with property metadata, done).
 7. **C10 Test support** (C10a, the context runner and clock, and C10b, `TestApp`, `TestClient` and slicing, done).
 8. **C7 SSL bundles** (done) and **C8 Availability, info and health** (done), **C9a Tasks and scheduling** (done) and **C9b Retry** (done).
-9. Security Slice 8 (method security, done) and 9 (the HTTP client and module M1, OAuth2 login and the OAuth2 client, done). M3a (the data core, `oxbloom-data`) is done; next candidates, on the user's request: M3b (migrations), `oxbloom-ai`, jobs and the rest of `IDEA.md`.
+9. Security Slice 8 (method security, done) and 9 (the HTTP client and module M1, OAuth2 login and the OAuth2 client, done). M3a (the data core, `oxbloom-data`) and M3b (migrations) are done; next candidates, on the user's request: `oxbloom-ai`, jobs and the rest of `IDEA.md`.
 10. **C11 Service connections** after the database and queue crates exist.
 
 ## Open questions for the design steps

@@ -6839,7 +6839,7 @@ Pooled SQL access on `sqlx` for PostgreSQL, MySQL (and MariaDB) and SQLite: the 
 - An in-memory SQLite source has one connection by default, refuses an explicit `max-connections` above 1 without `cache=shared` and has no idle timeout and no maximum lifetime unless you set them (a set value can destroy a non-shared in-memory database).
 - `DataService` pings the sources one at a time at start (10 seconds each, default `connect-on-startup = true`) and stops at the first failure. At stop it marks every pool closed at once and waits 10 seconds in all for the closes (`close_all_within`); one fixed warning at target `oxbloom::data` lists only the sources that did not finish closing. It does not keep running, so a run-to-completion application ends after its runners. A failed start does not call stop. Your own `DataSources` bean wins over boot's.
 - The future of `transaction` is not `Send` when the closure borrows from the surrounding code (rust-lang/rust#110338); inside `tokio::spawn` use `async move` over owned data.
-- There are no migrations yet (M3b is next), no ambient transactions, no repository layer, no qualifier mechanism and no databases other than the three.
+- Migrations (feature `migrate` of `oxbloom-data`, `data-migrate` of `oxbloom-boot`) are in `oxbloom_data::migrate`; see the section after `DataService`. There are no ambient transactions, no repository layer, no qualifier mechanism and no databases other than the three.
 
 Imports for the examples below:
 
@@ -7052,9 +7052,26 @@ service.start().await?;
 service.stop().await;
 ```
 
+#### `migrate::run`, `migrate::revert`, `EmbeddedMigrations`, `MigrationReport` and `MigrateError` (feature `migrate` of `oxbloom-data`, `data-migrate` of `oxbloom-boot`)
+
+The keys are `data.migrations.*` for the default source and `data.sources.<name>.migrations.*` for a named one: `enabled` (default `false`), `path`, `table` (default `_sqlx_migrations`, `[A-Za-z_][A-Za-z0-9_]*`, at most 63 characters), `ignore-missing` (default `false`), `timeout` (default 300 seconds, at least 1ms) and `locking` (default `true`). There is no `validate-checksums` key: a changed applied file always fails the run. The other keys are validated and dropped when `enabled` is `false`; they are in `PROPERTIES`. `DataSettings` gives each source `migrations: Option<MigrationSettings>`, `Some` only when enabled. The files are `sqlx` files (`<version>_<description>.sql`, or `.up.sql` and `.down.sql`) and the history table is the `sqlx` one.
+
+`run(&sources, name, &settings, embedded)` applies the pending migrations of the source `name` from `settings.path` or from the `Migrator` in `embedded` (the `path` wins) and returns a `MigrationReport` (`applied()`, `is_empty()`, `latest_version()`, and a `Display` such as `applied 1 migration: 1 (create accounts)`). `revert(&sources, name, &settings, embedded, target_version)` reverts the applied migrations above the target with their down files, highest first; it needs a down file for each (`MigrateError::NotReversible` otherwise, before any script runs), and a changed file does not fail it. Boot calls `run` from `DataService::start`, after the connectivity check, source by source with the default first, and never calls `revert`. A source that migrates connects even with `data.connect-on-startup = false`.
+
+`EmbeddedMigrations::new().default_source(&MIGRATOR).source("name", &OTHER)` holds `&'static Migrator` values (`sqlx::migrate!`, which needs a direct dependency named `sqlx` with the features `macros` and `migrate`); `get(name)` reads one. The application registers it as a bean (`DataService::with_migrations(sources, settings, embedded, connect_on_startup)` takes the optional bean).
+
+`MigrateError` is `#[non_exhaustive]` with fixed text: `Load` (with a `LoadReason`: `NotConfigured`, `Unreadable`, `Empty`, `InvalidTable`), `Dirty`, `ChecksumMismatch`, `MissingFile`, `NotReversible`, `Script`, `Timeout`, `UnknownSource`, `PrivateMemory`, `DriverDisabled` and `Database`. `source_name()` and `version()` read the fields; no text holds SQL, a file path or the URL. A run uses a connection of its own with statement logging off. PostgreSQL and MySQL use the `sqlx` advisory lock; SQLite takes the write lock of the database (`BEGIN IMMEDIATE`) when `locking` is true (not for a `-- no-transaction` migration) and re-runs once after a failure other than a dirty history or a changed file. MySQL commits schema changes implicitly, so a script that fails midway leaves a dirty history row until the database is repaired. A timeout stops waiting and closes the connection but does not cancel the running statement. A private-cache in-memory SQLite source is refused with `PrivateMemory`.
+
+```rust
+let report = migrate::run(&sources, "default", migrations, Some(&migrator)).await?;
+assert_eq!(report.to_string(), "applied 1 migration: 1 (create accounts)");
+let reverted = migrate::revert(&sources, "default", migrations, Some(&migrator), 0).await?;
+assert!(!reverted.is_empty());
+```
+
 #### `DataHealthIndicator` (feature `data` of `oxbloom-actuator`)
 
-`DataHealthIndicator::new(sources, name)` checks one source: its name is `db` for `default` and `db.<name>` otherwise, and `with_timeout(duration)` replaces the 3 second timeout. Up has the details `driver`, `size` and `idle`; down has `error` (`connection failed` or `timed out`) and `driver`. An unknown source name does not panic: the indicator is down with `connection failed`. In boot, one `DataIndicators` bean builds an indicator per source and the health runner chains them after the `dyn HealthIndicator` beans, so `management.health.readiness.include` accepts `db` and `db.<name>`.
+`DataHealthIndicator::new(sources, name)` checks one source: its name is `db` for `default` and `db.<name>` otherwise, and `with_timeout(duration)` replaces the 3 second timeout. Up has the details `driver`, `size` and `idle`; down has `error` (`connection failed` or `timed out`) and `driver`. `with_migrations_table(table)` adds the detail `migrations`, the highest version recorded as applied, as a number; it is absent when the table does not exist, and boot adds it for a source that migrates. An unknown source name does not panic: the indicator is down with `connection failed`. In boot, one `DataIndicators` bean builds an indicator per source and the health runner chains them after the `dyn HealthIndicator` beans, so `management.health.readiness.include` accepts `db` and `db.<name>`.
 
 ```rust
 let indicator = DataHealthIndicator::new(sources.clone(), "default");
@@ -7072,6 +7089,8 @@ sqlx::query("CREATE TABLE t (id INTEGER)").execute(db.sqlite_pool()).await.unwra
 assert!(db.config_snippet().starts_with("[data]\n"));
 db.close().await;
 ```
+
+Migration support: `MigrationFiles::new().up(version, description, sql).reversible(version, description, up, down).plain(..)` writes migration files into a temporary directory (`path()`, removed on drop); `TestDatabase::with_migrations(dir)` applies them to the database (a `Result<TestDatabase, MigrateError>`; the database is closed when the run fails) and `config_snippet_with_migrations(dir)` is the `config_snippet()` plus a `[data.migrations]` table with `enabled = true` and the path. A shared-cache SQLite test database migrates; a private-cache one is refused.
 
 #### `SslBundle::trust_pem()` and `SslBundle::identity_pem()` (`oxbloom-ssl`)
 
@@ -7198,6 +7217,6 @@ For the actuator: a separate management port, roles per endpoint, `/metrics`, `/
 For the HTTP client: HTTP/2, a proxy setter (proxies come from the environment), per-host clients, a request-level retry override, streaming bodies, response interceptors and metrics. For task scheduling: retry, backoff and jitter (C9b), an actuator `/scheduledtasks` endpoint, persistence and
 catch-up of missed runs, distributed locking, adding or removing tasks at run time, per-task concurrency limits,
 a backward clock clamp for cron tasks, and one duration grammar for configuration and attributes.
-For the data core: schema migrations (M3b), ambient transactions, a repository layer or query builder, a qualifier mechanism for pools, pools that follow SSL bundle reloads, and databases other than PostgreSQL, MySQL and SQLite.
+For the data core: repeatable and Flyway-style migration scripts, a baseline, automatic down migration, a migration command line tool (use `sqlx-cli`), concurrent migration of several sources, a dry run, migration profiles, a lock timeout other than `migrations.timeout`, cancelling a timed-out migration statement, ambient transactions, a repository layer or query builder, a qualifier mechanism for pools, pools that follow SSL bundle reloads, and databases other than PostgreSQL, MySQL and SQLite.
 Do not document these as available.
 When you build one, start with a spec in `docs/superpowers/specs`.

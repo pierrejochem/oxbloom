@@ -1,16 +1,17 @@
 # Data
 
-Oxbloom connects to a SQL database through the crate `oxbloom-data`, which is built on `sqlx`. It reads the `data.*` keys, builds one connection pool per configured source, runs work in a transaction, reports the health of each pool and connects and closes the pools with the application. You write queries with `sqlx` directly: there is no query builder, no repository layer and no migration runner yet. This is module M3, part a (M3a). The supported databases are PostgreSQL, MySQL (and MariaDB) and SQLite.
+Oxbloom connects to a SQL database through the crate `oxbloom-data`, which is built on `sqlx`. It reads the `data.*` keys, builds one connection pool per configured source, runs work in a transaction, reports the health of each pool and connects and closes the pools with the application. You write queries with `sqlx` directly: there is no query builder and no repository layer. This is module M3, parts a and b: the pools, transactions, health and tests (M3a) and the [schema migrations](#migrations) (M3b). The supported databases are PostgreSQL, MySQL (and MariaDB) and SQLite.
 
 ```toml
 # Cargo.toml
 oxbloom-boot = { version = "0.1", features = ["data-postgres"] }   # or data-mysql, data-sqlite
 oxbloom-boot = { version = "0.1", features = ["data-postgres", "ssl"] }   # a source can use an SSL bundle
 oxbloom-boot = { version = "0.1", features = ["data-postgres", "actuator"] }   # health indicators `db`
+oxbloom-boot = { version = "0.1", features = ["data-postgres", "data-migrate"] }   # run migrations at startup
 oxbloom-test = { version = "0.1", features = ["data"] }            # TestDatabase (dev-dependency)
 ```
 
-The decisions are in [ADR 0096](../adr/0096-data-core.md) and every public item has an example in the [API reference](../API.md#416-oxbloom-data).
+The decisions are in [ADR 0096](../adr/0096-data-core.md) and [ADR 0097](../adr/0097-data-migrations.md) (migrations), and every public item has an example in the [API reference](../API.md#416-oxbloom-data).
 
 The features of `oxbloom-boot` are `data-postgres`, `data-mysql` and `data-sqlite`; name the drivers your application uses. Each one turns on the matching driver of `oxbloom-data`, rustls with `aws-lc-rs` and the platform root certificates (never `ring`) and `transaction_with_retry`. Without the `data-*` features of boot, use `oxbloom-data` directly with its own features `postgres`, `mysql`, `sqlite` and `retry`. With no driver feature, `oxbloom-data` builds without any TLS crate, and a source whose driver is missing fails with `Unsupported`. Every driver feature, `sqlite` included, carries the rustls and `aws-lc-rs` stack. The `sqlite` feature also compiles SQLite itself from source (`sqlx` bundles it), so it needs a C compiler and adds build time.
 
@@ -237,6 +238,8 @@ include = ["db", "db.reporting"]   # these indicators also decide readiness
 
 The indicators are built by one `DataIndicators` bean and chained after the `dyn HealthIndicator` beans of the health runner, because the container cannot register a bean per source name. An application that collects the `dyn HealthIndicator` beans itself does not see them. Outside boot, `DataHealthIndicator::new(sources, "default")` (feature `data` of `oxbloom-actuator`) gives the same indicator; `with_timeout` changes the 3 seconds.
 
+The indicator of a source that migrates also has the detail `migrations`: the highest version recorded as applied, as a number. It is absent when the history table does not exist yet, and it never shows a description or SQL. Outside boot, `with_migrations_table(table)` adds it.
+
 ## TLS with an SSL bundle
 
 A PostgreSQL or MySQL source can name an SSL bundle, with a trust store for a private CA, a client certificate, or both. Boot resolves the name against the `SslBundles` bean (feature `ssl`) and hands the PEM to the pool.
@@ -275,6 +278,143 @@ A SQLite source takes `sqlite:` URLs. It has no `ssl-mode` and no `ssl-bundle`. 
 - an explicit `max-connections` above 1 is refused unless the URL has `cache=shared`;
 - `idle-timeout` and `max-lifetime` default to none, so the pool never closes its connections;
 - a value you set for `idle-timeout` or `max-lifetime` can still destroy a database that is not shared.
+
+## Migrations
+
+Oxbloom applies the schema migrations of a source when the application starts. It uses the migration engine of `sqlx`, so the files and the history table are those of `sqlx-cli`, and you can move between the two without converting anything. Migrations need the cargo feature `data-migrate` of `oxbloom-boot` (or `migrate` of `oxbloom-data`). With `migrations.enabled = true` and without the feature, the start fails with a report that names the feature.
+
+### Keys
+
+The keys are `data.migrations.*` for the default source and `data.sources.<name>.migrations.*` for a named one.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `data.migrations.enabled` | `false` | Whether the migrations of this source run at startup. |
+| `data.migrations.path` | unset | The directory with the migration files. When unset, the source uses an embedded `EmbeddedMigrations` entry. `path` wins when both exist. |
+| `data.migrations.table` | `_sqlx_migrations` | The history table. `[A-Za-z_][A-Za-z0-9_]*`, at most 63 characters. See the warning below. |
+| `data.migrations.ignore-missing` | `false` | Whether an applied migration without a file is ignored instead of failing the run. |
+| `data.migrations.timeout` | `300s` | The upper bound for the whole run, including the wait for the lock. At least 1ms. |
+| `data.migrations.locking` | `true` | Whether the run takes the database lock. Only a database without advisory locks, such as CockroachDB, needs `false`. |
+
+- There is no `validate-checksums` key. A file that was changed after it was applied always fails the run; add a new migration instead of editing an applied one.
+- The other keys are validated even when `enabled` is `false`, and then dropped.
+- `enabled = true` without a `path` and without an embedded entry for the source is a startup error. A `path` always wins over an embedded entry.
+- Every error names the full key and never a value.
+
+```toml
+[data]
+url = "sqlite://app.db?mode=rwc"
+
+[data.migrations]
+enabled = true
+path    = "migrations"
+
+[data.sources.reporting.migrations]
+enabled = true
+path    = "migrations/reporting"
+```
+
+### Files
+
+A file is `<version>_<description>.sql`, or a reversible pair `<version>_<description>.up.sql` and `<version>_<description>.down.sql`. The version is a number, usually a timestamp. A directory can mix the two kinds, and the migrations are applied in version order. A SQLite script that starts with `-- no-transaction` runs outside a transaction (and then outside the write lock described below).
+
+```sql
+-- migrations/20261125120000_create_accounts.up.sql
+CREATE TABLE accounts (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+
+-- migrations/20261125120000_create_accounts.down.sql
+DROP TABLE accounts;
+```
+
+### Embedded migrations
+
+The files can also be compiled into the binary and registered as an `EmbeddedMigrations` bean. `sqlx::migrate!` expands to `::sqlx`, so the application needs a direct dependency named `sqlx` with the features `macros` and `migrate`. Going through `oxbloom_data::sqlx` is not enough.
+
+```toml
+# Cargo.toml
+sqlx = { version = "0.9", default-features = false, features = ["macros", "migrate"] }
+```
+
+```rust
+use oxbloom_data::migrate::EmbeddedMigrations;
+use oxbloom_data::sqlx::migrate::Migrator;
+
+static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
+
+fn embedded() -> EmbeddedMigrations {
+    // `default_source` is the source of the unnamed `data.*` keys, the key `default`;
+    // `source("reporting", &OTHER)` registers a named source.
+    EmbeddedMigrations::new().default_source(&MIGRATOR)
+}
+
+// On the application builder:
+// OxbloomApplication::builder().configure(|b| b.instance(embedded()))
+```
+
+Register it with `.instance(..)` as shown (see [Dependency injection](03-dependency-injection.md)); the data service reads the optional bean when it starts. Then only `data.migrations.enabled = true` is needed.
+
+### When they run
+
+- The migrations run inside `DataService::start`, after the connectivity check and before the service reports started, so every service with a later phase sees the migrated schema.
+- Sources migrate one after the other, the default source first. A failure stops the rest and fails the start. Migrating several sources at once is not supported.
+- A source with migrations enabled connects and migrates even when `data.connect-on-startup` is `false`. The other sources stay lazy.
+- The failure report names the source, the version of the migration at fault and the key to change. It never contains SQL, a file path or the URL. The error text is fixed (`MigrateError`); the database error stays available through `source()` and may contain SQL object names, so do not log it.
+- A dirty history means a migration started and did not finish. On MySQL it means a script failed part way and its earlier statements stay applied. On the other databases it means the transaction was interrupted, for example by a crash of the server. The report names the version and says what to repair; see MySQL below.
+- A migration runs on a connection of its own with statement logging switched off, so the SQL text never reaches the logs of `sqlx`.
+
+### Transactions, locking and the databases
+
+- **PostgreSQL** and **MySQL** use the advisory lock of `sqlx`, so two instances that start together apply each migration once. PostgreSQL runs each script in a transaction.
+- **SQLite** has no such lock. When `locking` is true, the runner takes the write lock of the database (`BEGIN IMMEDIATE`) for the run, except for a migration marked `-- no-transaction`. After a failure other than a dirty history or a changed file, the runner runs once more, because a second run sees what a concurrent runner has applied.
+- A long SQLite migration holds the write lock, so a second instance that starts meanwhile can hit the busy timeout of SQLite and fail its start.
+- Two instances can share a SQLite file. Concurrent runners on one shared-cache in-memory database inside one process are not supported: they can fail with SQLite code 262.
+- A private-cache in-memory SQLite source (`sqlite://?mode=memory` without a name, or `cache=private`) is refused with an error that names the source, because the migration connection would see another, empty database. `sqlite::memory:` and a named shared-cache memory database (`cache=shared`) work.
+- **MySQL commits schema changes implicitly.** A script that fails midway leaves a dirty history row and a partly applied script. The next start fails with the dirty-history report naming the version until you repair the database: finish or undo what the migration changed, then delete its row from the history table. Prefer one statement per file where you can, so a failure leaves nothing half done. PostgreSQL and SQLite roll a failed script back.
+
+### The timeout does not cancel the statement
+
+When `timeout` passes, the runner stops waiting and closes its migration connection, but it does not cancel the statement that is running. On PostgreSQL the backend keeps the advisory lock until the script ends, on SQLite the statement keeps the write lock, and on MySQL a following run can wait. A restart right after a timeout can therefore wait for the old statement. The `MigrationReport`s of concurrent runners can overlap; each migration is still applied exactly once.
+
+### The history table name
+
+`sqlx` changes the table name only through `dangerous_set_table_name`. Renaming the table of an existing database needs a copy of its contents first, or the migrations are applied again. PostgreSQL folds an unquoted name to lower case and `sqlx` creates the table unquoted, so a custom name behaves case-insensitively there.
+
+### Running and reverting from code
+
+`oxbloom_data::migrate::run(&sources, name, &settings, embedded)` applies the pending migrations of one source and returns a `MigrationReport` with the versions it applied. Boot calls it for you. `revert(&sources, name, &settings, embedded, target_version)` goes back to `target_version` with the down files and returns the reverted migrations, highest first; `0` reverts everything. Boot never calls `revert`: it is for your application and your tools.
+
+- Every applied migration above the target needs a down file. Otherwise `revert` fails with `NotReversible` naming the highest such version, before any script runs.
+- A changed file does not fail a revert (`sqlx` checks missing files when it undoes, not checksums), but a missing file, a dirty history and a failing script do.
+- The settings, the lock, the timeout and the refusal of a private-cache in-memory SQLite database are those of `run`.
+
+For the command line, use `sqlx-cli`; it reads the same files and the same history table.
+
+### Testing migrations
+
+`oxbloom-test` (feature `data`) has `MigrationFiles`, which writes migration files into a temporary directory: `up(version, description, sql)`, `reversible(version, description, up, down)`, `plain(..)` and `path()`. `TestDatabase::sqlite().with_migrations(files.path()).await?` applies them to the test database, and `config_snippet_with_migrations(files.path())` gives a `[data]` section that enables the migrations at startup, for a test that starts the `DataService`.
+
+```rust
+use oxbloom_data::sqlx;
+use oxbloom_test::{MigrationFiles, TestDatabase};
+
+#[tokio::test]
+async fn the_schema_is_migrated() {
+    let files = MigrationFiles::new().up(1, "create t", "CREATE TABLE t (id INTEGER)");
+    let db = TestDatabase::sqlite().with_migrations(files.path()).await.unwrap();
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM t")
+        .fetch_one(db.sqlite_pool())
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+    db.close().await;
+}
+```
+
+The migration conformance suite runs the same checks against every driver: SQLite always, PostgreSQL and MySQL under `make test-db`, which starts the two servers and runs all test binaries even when one fails.
+
+### Not supported
+
+Repeatable and Flyway-style scripts, a baseline command, automatic down migration, a command line tool of its own (use `sqlx-cli`), migrating several sources concurrently, a dry run, profiles, a lock timeout other than `timeout`, and cancelling a statement after a timeout.
 
 ## Testing
 
@@ -320,7 +460,7 @@ The conformance suite runs the same transaction, rollback, savepoint, retry, hea
 
 ## Limits
 
-- **No migrations yet.** Schema migrations are M3b, the next part. Until then, run them with the `sqlx` tooling or your own code.
+- **Migrations have limits.** No repeatable scripts, baseline, automatic down migration, dry run or concurrent migration of several sources, and a timed-out statement is not cancelled. See [Migrations](#migrations).
 - **No ambient transactions.** A transaction is a closure with an explicit `&mut Transaction`; nothing joins one by itself.
 - **No repository layer and no query API.** Use `sqlx` directly.
 - **No qualifier mechanism.** Named sources are looked up by name on the `DataSources` bean, not injected by type.

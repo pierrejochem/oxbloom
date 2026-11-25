@@ -24,9 +24,9 @@ Spring Boot splits one feature into many modules: the feature itself, its `-test
 | `http-client`, `restclient`, `webclient`, `http-converter`, `http-codec` | `oxbloom-http-client`: outbound HTTP with timeouts, retries and SSL bundles (candidate: `reqwest`) | done: M1, delivered in security Slice 9 part A on 2026-11-23 (the `HttpClient` trait, `ReqwestClient`, `RetryingClient`, `InterceptedClient`, the `http.client.*` keys, `HttpClientAutoConfiguration`, `MockHttpClient`; HTTP/2, a proxy setter and per-host clients are parked) |
 | `jackson`, `jackson2`, `gson`, `jsonb`, `kotlinx-serialization-json` | covered by `serde_json` and the JSON work in slice C6; no separate crates | folded |
 | `validation` | `oxbloom-validation`: a `Validate` trait, request-body validation, error mapping (shares the config validation hook from C2b) | M4 |
-| `jdbc`, `r2dbc`, `data-jdbc`, `data-r2dbc`, `sql`, `transaction`, `jooq` | `oxbloom-data`: pooled SQL access, transactions and migrations on `sqlx` | M3a done on 2026-11-25 (PostgreSQL, MySQL and SQLite pools from the `data.*` keys, `DataSources`, `transaction` with savepoints and per-driver options, `transaction_with_retry`, `DataAutoConfiguration`, `DataService`, `DataHealthIndicator`, `TestDatabase`, `make test-db`; see ADR 0096 and the guide chapter 29; parked: a qualifier mechanism, pools that follow bundle reloads, ambient transactions, a repository layer); M3b (migrations) next |
+| `jdbc`, `r2dbc`, `data-jdbc`, `data-r2dbc`, `sql`, `transaction`, `jooq` | `oxbloom-data`: pooled SQL access, transactions and migrations on `sqlx` | M3a done on 2026-11-25 (PostgreSQL, MySQL and SQLite pools from the `data.*` keys, `DataSources`, `transaction` with savepoints and per-driver options, `transaction_with_retry`, `DataAutoConfiguration`, `DataService`, `DataHealthIndicator`, `TestDatabase`, `make test-db`; see ADR 0096 and the guide chapter 29; parked: a qualifier mechanism, pools that follow bundle reloads, ambient transactions, a repository layer); M3b done on 2026-11-25 (schema migrations on `sqlx::migrate` with `sqlx-cli` compatible files and history table, run from a directory or an embedded `EmbeddedMigrations` bean at `DataService` start, `migrate::run` and `migrate::revert`, the `data.migrations.*` keys, the `migrations` health detail, `MigrationFiles` and `TestDatabase::with_migrations`, the migration conformance suite; see ADR 0097; parked: repeatable and Flyway-style scripts, a baseline, automatic down migration, a command line tool (use `sqlx-cli`), concurrent migration of several sources, a dry run, profiles, a lock timeout other than `timeout`, cancelling a timed-out statement) |
 | `jpa`, `hibernate`, `persistence`, `data-jpa`, `data-commons` | no ORM; maybe a thin repository layer on `oxbloom-data` later | skipped for now |
-| `flyway`, `liquibase` | schema migrations inside `oxbloom-data` | M3b, next |
+| `flyway`, `liquibase` | schema migrations inside `oxbloom-data` | M3b done on 2026-11-25 (on `sqlx::migrate`, no Flyway-style repeatable scripts or baseline; see the `oxbloom-data` row and ADR 0097) |
 | `data-redis`, `session-data-redis` | `oxbloom-redis` (candidate: `redis`) | M5 |
 | `cache` | `oxbloom-cache`: cache abstraction with in-memory and Redis backends | M5 |
 | `mongodb`, `data-mongodb`, `cassandra`, `data-cassandra`, `couchbase`, `data-couchbase`, `elasticsearch`, `data-elasticsearch`, `neo4j`, `data-neo4j`, `ldap`, `data-ldap`, `hazelcast` | one crate per store on demand, after `oxbloom-data` and `oxbloom-redis` have settled the pattern | later, on demand |
@@ -50,7 +50,7 @@ Core slices C1 (DI v2), C3 (application lifecycle), C4 (auto-configuration) and 
 
 1. **M1 `oxbloom-http-client`** (done on 2026-11-23, in security Slice 9 part A). The JWKS fetcher of `oxbloom-security` runs on it, and `http.client.ssl-bundle` makes the SSL bundles (C7) useful for outbound calls.
 2. **M2 `oxbloom-observability` with the actuator (C8).** `tracing`, metrics, OpenTelemetry, health.
-3. **M3 `oxbloom-data`.** Pooled SQL, transactions, migrations. M3a (pools, transactions, health and tests on `sqlx`, no query API) is done on 2026-11-25; M3b (migrations) is next.
+3. **M3 `oxbloom-data`.** Pooled SQL, transactions, migrations. M3a (pools, transactions, health and tests on `sqlx`, no query API) is done on 2026-11-25; M3b (migrations on `sqlx::migrate`, run at startup or from code) is done on 2026-11-25.
 4. **M4 `oxbloom-validation`.** Shares the validation hook planned for config binding (C2b).
 5. **M5 `oxbloom-redis` and `oxbloom-cache`.**
 6. **M6 `oxbloom-messaging`.**
@@ -70,7 +70,7 @@ Security Slices 6a, 6b, 6c and 6d are done; Slices 7 to 9 interleave: sessions n
 
 ## Open questions for the design steps
 
-- M3: decided in M3a: `sqlx`, with no query API in `oxbloom-data` (the application uses `sqlx` directly, including its compile-time checked macros if it wants them). Open for M3b: how migrations are written and run.
+- M3: decided in M3a: `sqlx`, with no query API in `oxbloom-data` (the application uses `sqlx` directly, including its compile-time checked macros if it wants them). Decided in M3b: migrations are `sqlx` files (a directory or embedded with `sqlx::migrate!`) run by `oxbloom_data::migrate` at `DataService` start (ADR 0097).
 - M2: whether `tracing` is the single logging and tracing facade, and how metrics are exposed (Prometheus text endpoint versus OpenTelemetry only).
 - M1/M6/M8: the client libraries bring TLS back-ends; settle one TLS provider workspace-wide (`aws-lc-rs` is already pulled in by `reqwest`).
 - Whether Oxbloom re-exports feature crates behind one umbrella crate with features, as Spring's starters do.
