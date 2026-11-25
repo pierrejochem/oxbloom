@@ -503,6 +503,34 @@ pub(crate) fn sqlite_memory(url: &str) -> SqliteMemory {
     }
 }
 
+/// Whether `sqlx` opens the SQLite `url` as an in-memory database with a private cache, which
+/// every connection of its own sees as a different, empty database. This follows the URL
+/// parser of `sqlx-sqlite`: `:memory:` and `mode=memory` turn the shared cache on, and a
+/// `cache` parameter sets it, the last one winning. An in-memory database without a name
+/// (`sqlite://?mode=memory`) is private to its connection whatever the cache says, because
+/// SQLite shares only named databases. The URL is only read, never shown.
+#[cfg(feature = "migrate")]
+pub(crate) fn sqlite_private_memory(url: &str) -> bool {
+    let rest = url.split_once(':').map_or("", |(_, rest)| rest);
+    let rest = rest.strip_prefix("//").unwrap_or(rest);
+    let (path, query) = rest.split_once('?').unwrap_or((rest, ""));
+    let mut in_memory = path == ":memory:";
+    let mut shared = in_memory;
+    for pair in query.split('&') {
+        match pair {
+            "mode=memory" => {
+                in_memory = true;
+                shared = true;
+            }
+            "cache=private" => shared = false,
+            "cache=shared" => shared = true,
+            _ => {}
+        }
+    }
+    let unnamed = path.is_empty();
+    in_memory && (!shared || unnamed)
+}
+
 fn source(name: &str, prefix: &str, raw: RawSource) -> Result<SourceSettings, ConfigError> {
     let key = |field: &str| format!("{prefix}.{field}");
     let Some(url) = raw.url else {

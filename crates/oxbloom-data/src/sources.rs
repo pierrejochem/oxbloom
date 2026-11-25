@@ -15,6 +15,9 @@ struct Entry {
     name: String,
     driver: Driver,
     pool: Pool,
+    /// Whether the source is an in-memory SQLite database with a private cache.
+    #[cfg(feature = "migrate")]
+    private_memory: bool,
 }
 
 /// The registry of every configured data source, each with its lazy sqlx pool.
@@ -138,6 +141,9 @@ impl DataSources {
                 Ok(Entry {
                     name: source.name.clone(),
                     driver: source.driver,
+                    #[cfg(feature = "migrate")]
+                    private_memory: source.driver == Driver::Sqlite
+                        && crate::settings::sqlite_private_memory(source.url.expose()),
                     pool: pool::build(source, tls)
                         .map_err(|error| SourceError::new(&source.name, error))?,
                 })
@@ -227,6 +233,12 @@ impl DataSources {
     /// ```
     pub fn driver_of(&self, name: &str) -> Option<Driver> {
         self.entry(name).map(|e| e.driver)
+    }
+
+    /// Whether the source is an in-memory SQLite database with a private cache.
+    #[cfg(feature = "migrate")]
+    pub(crate) fn is_private_memory(&self, name: &str) -> bool {
+        self.entry(name).is_some_and(|e| e.private_memory)
     }
 
     /// The number of sources.

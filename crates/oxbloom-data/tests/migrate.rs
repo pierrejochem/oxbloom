@@ -841,9 +841,29 @@ async fn an_embedded_migrator_is_reverted_like_a_directory() {
 }
 
 #[tokio::test]
-async fn revert_fails_on_a_changed_file_a_missing_file_and_a_dirty_history() {
+async fn revert_fails_on_a_missing_file_and_a_dirty_history_but_not_on_a_changed_file() {
     let fixture = Fixture::new(&REVERSIBLE);
     let sources = fixture.sources();
+    migrate::run(&sources, "default", &fixture.settings(), None)
+        .await
+        .unwrap();
+
+    // A changed file does not fail a revert: `sqlx` checks no checksums when it undoes.
+    fixture.write(
+        "2_create_orders.up.sql",
+        "CREATE TABLE orders (id INTEGER PRIMARY KEY, changed INTEGER);",
+    );
+    let report = migrate::revert(&sources, "default", &fixture.settings(), None, 2)
+        .await
+        .unwrap();
+    assert_eq!(versions(&report), [3]);
+    migrate::run(&sources, "default", &fixture.settings(), None)
+        .await
+        .unwrap_err();
+    fixture.write(
+        "2_create_orders.up.sql",
+        "CREATE TABLE orders (id INTEGER PRIMARY KEY);",
+    );
     migrate::run(&sources, "default", &fixture.settings(), None)
         .await
         .unwrap();
@@ -1086,4 +1106,70 @@ async fn run_and_revert_emit_no_sql_in_tracing_output() {
         !captured.contains("SECRET_MARKER_SQL"),
         "a statement of a migration reached the tracing output: {captured}"
     );
+}
+
+fn memory_sources(url: &str) -> DataSources {
+    let config =
+        Config::from_str(&format!("[data]\nurl = \"{url}\"\nmax-connections = 1")).unwrap();
+    let settings = DataSettings::from_config(&config).unwrap();
+    DataSources::build(&settings, &|_| Err(DataError::Tls)).unwrap()
+}
+
+#[tokio::test]
+async fn a_private_cache_memory_database_is_refused_by_run_and_revert() {
+    let fixture = Fixture::new(&REVERSIBLE);
+    for url in [
+        "sqlite://?mode=memory&cache=private",
+        "sqlite://?mode=memory",
+        "sqlite:file:oxbloom-private?mode=memory&cache=private",
+    ] {
+        let sources = memory_sources(url);
+        let run = migrate::run(&sources, "default", &fixture.settings(), None)
+            .await
+            .unwrap_err();
+        let revert = migrate::revert(&sources, "default", &fixture.settings(), None, 0)
+            .await
+            .unwrap_err();
+        for err in [run, revert] {
+            assert!(
+                matches!(&err, MigrateError::PrivateMemory { source_name } if source_name == "default"),
+                "{err:?}"
+            );
+            for text in [err.to_string(), format!("{err:?}")] {
+                assert!(!text.contains("oxbloom-private"), "{text}");
+                assert!(!text.contains("sqlite:"), "{text}");
+                assert!(!text.contains("cache=private"), "{text}");
+            }
+            assert_eq!(
+                err.to_string(),
+                "data source `default`: an in-memory SQLite database with a private cache cannot \
+                 be migrated; use `cache=shared` or a database file"
+            );
+        }
+        // Nothing was migrated: the pool's own database has no history table.
+        assert!(!table_exists(pool(&sources), "_sqlx_migrations").await);
+    }
+}
+
+#[tokio::test]
+async fn shared_cache_memory_databases_still_migrate() {
+    let fixture = Fixture::new(&REVERSIBLE);
+    for url in [
+        "sqlite::memory:",
+        "sqlite://:memory:",
+        "sqlite:file:oxbloom-shared-one?mode=memory&cache=shared",
+    ] {
+        let sources = memory_sources(url);
+        let report = migrate::run(&sources, "default", &fixture.settings(), None)
+            .await
+            .unwrap();
+        assert_eq!(versions(&report), [1, 2, 3], "{url}");
+        // The pool sees what the run did.
+        assert!(table_exists(pool(&sources), "invoices").await, "{url}");
+        let report = migrate::revert(&sources, "default", &fixture.settings(), None, 1)
+            .await
+            .unwrap();
+        assert_eq!(versions(&report), [3, 2], "{url}");
+        assert!(!table_exists(pool(&sources), "invoices").await, "{url}");
+    }
 }

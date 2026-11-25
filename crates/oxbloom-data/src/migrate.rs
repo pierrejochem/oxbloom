@@ -470,6 +470,12 @@ pub enum MigrateError {
         /// The name that was asked for.
         source_name: String,
     },
+    /// The source is an in-memory SQLite database with a private cache. The migrations run on a
+    /// connection of their own, which would see a different, empty database, so nothing ran.
+    PrivateMemory {
+        /// The source.
+        source_name: String,
+    },
     /// The driver feature of the source is off in this build.
     DriverDisabled {
         /// The source.
@@ -506,6 +512,7 @@ impl MigrateError {
             | Self::NotReversible { source_name, .. }
             | Self::Script { source_name, .. }
             | Self::Timeout { source_name }
+            | Self::PrivateMemory { source_name }
             | Self::UnknownSource { source_name }
             | Self::DriverDisabled { source_name }
             | Self::Database { source_name, .. } => source_name,
@@ -533,6 +540,7 @@ impl MigrateError {
             | Self::Script { version, .. } => Some(*version),
             Self::Load { .. }
             | Self::Timeout { .. }
+            | Self::PrivateMemory { .. }
             | Self::UnknownSource { .. }
             | Self::DriverDisabled { .. }
             | Self::Database { .. } => None,
@@ -596,6 +604,10 @@ impl fmt::Display for MigrateError {
                 ..
             } => write!(f, "migration {version} ({description}) failed"),
             Self::Timeout { .. } => f.write_str("the migrations did not finish within the timeout"),
+            Self::PrivateMemory { .. } => f.write_str(
+                "an in-memory SQLite database with a private cache cannot be migrated; use \
+                 `cache=shared` or a database file",
+            ),
             Self::DriverDisabled { .. } => {
                 f.write_str("the database driver is not available in this build")
             }
@@ -672,6 +684,10 @@ impl fmt::Debug for MigrateError {
                 .debug_struct("UnknownSource")
                 .field("source_name", source_name)
                 .finish(),
+            Self::PrivateMemory { source_name } => f
+                .debug_struct("PrivateMemory")
+                .field("source_name", source_name)
+                .finish(),
             Self::DriverDisabled { source_name } => f
                 .debug_struct("DriverDisabled")
                 .field("source_name", source_name)
@@ -709,11 +725,15 @@ impl std::error::Error for MigrateError {
 /// loser fails, for example with "table already exists". On a SQLite source the run is
 /// therefore repeated once after any failure other than a dirty history or a changed file;
 /// the second run sees what the winner applied, and a script that really fails fails again.
-/// On Postgres and MySQL the run uses a connection of its own, which is closed afterwards, so
-/// a database lock that `sqlx` leaves behind after a failure is released with it.
 ///
-/// The work runs on a connection of its own with `sqlx` statement logging off, so no migration
-/// SQL reaches the `tracing` output through the `sqlx::query` events.
+/// The work runs on a connection of its own, opened with the connect options of the pool and
+/// with `sqlx` statement logging off, so no migration SQL reaches the `tracing` output through
+/// the `sqlx::query` events. Because the connection is not one of the pool, an in-memory SQLite
+/// database with a private cache (`cache=private`) is refused with
+/// [`MigrateError::PrivateMemory`]: that connection would see another, empty database.
+/// `:memory:`, a named `mode=memory` or `cache=shared` database and database files work; an unnamed `mode=memory` one is private as well. On Postgres and MySQL
+/// the connection is closed afterwards, so a database lock that `sqlx` leaves behind after a
+/// failure is released with it.
 ///
 /// A long migration on SQLite holds the write lock for its whole run, so a second instance that
 /// starts meanwhile can hit the busy timeout of SQLite and fail.
@@ -779,8 +799,9 @@ pub async fn run(
 /// with their down files, and reports the migrations it reverted, highest version first.
 ///
 /// The source of the migrations, the history `table`, `ignore_missing`, `locking` and the
-/// `timeout` work as they do for [`run`], and a changed or missing file, a dirty history and a
-/// failing script fail the revert with the same errors. A migration is only reversible when
+/// `timeout` work as they do for [`run`]. A missing file, a dirty history and a failing script
+/// fail the revert with the same errors; a changed file does not, because `sqlx` checks no
+/// checksums when it undoes. A migration is only reversible when
 /// the migrations hold a down file for it (`N_name.down.sql` next to `N_name.up.sql`, or a
 /// [`MigrationType::ReversibleDown`](sqlx::migrate::MigrationType::ReversibleDown) migration in
 /// an embedded migrator). The check runs before the first script: when an applied migration
@@ -789,8 +810,9 @@ pub async fn run(
 /// nothing, and `0` reverts everything.
 ///
 /// On SQLite the revert holds the write lock of the database for its whole run, as [`run`]
-/// does, and a failure is not repeated. On Postgres and MySQL it uses a connection of its own,
-/// which is closed afterwards.
+/// does, and a failure is not repeated. It uses a connection of its own on every driver, with
+/// the same consequences as [`run`], including the refusal of a private-cache in-memory SQLite
+/// database ([`MigrateError::PrivateMemory`]).
 ///
 /// # Errors
 ///
@@ -828,7 +850,7 @@ pub async fn run(
 /// let err = migrate::revert(&sources, "default", migrations, Some(&migrator), 0).await.unwrap_err();
 /// assert!(matches!(err, MigrateError::NotReversible { version: 2, .. }));
 ///
-/// // Going back to version 1 only needs the down files above it, and there are none.
+/// // Going back to version 2 only needs the down files above it, and there are none.
 /// let report = migrate::revert(&sources, "default", migrations, Some(&migrator), 2).await?;
 /// assert!(report.is_empty());
 /// # Ok(())
@@ -880,6 +902,11 @@ async fn execute(
     };
     if !is_valid_table_name(&settings.table) {
         return Err(load_error(name, LoadReason::InvalidTable));
+    }
+    if sources.is_private_memory(name) {
+        return Err(MigrateError::PrivateMemory {
+            source_name: name.to_string(),
+        });
     }
     // Before the directory is read, so a disabled driver is not hidden by a load error.
     if !driver_enabled(driver) {
@@ -1118,9 +1145,9 @@ async fn apply_op<C: sqlx::migrate::Migrate>(
 
 /// `Migrator::undo` on an open connection, step by step as `sqlx` does it: the lock, the
 /// history table, the dirty check, the check that every applied migration has a file (unless
-/// `ignore_missing`), the down files of everything above `target`, and then the down migrations above `target`, newest first. `sqlx` does
-/// not release the lock after a failure, and neither does this; the connection of a run is
-/// closed instead (see `CLOSE_AFTER_RUN`).
+/// `ignore_missing`), and the down migrations above `target`, newest first. Unlike `sqlx`, it
+/// first checks that every applied migration above `target` has a down file. Like `sqlx`, it
+/// does not release the lock after a failure; the connection of the work is closed instead.
 #[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
 async fn undo_direct<C: sqlx::migrate::Migrate>(
     migrator: &Migrator,
