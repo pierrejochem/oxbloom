@@ -1189,7 +1189,17 @@ async fn undo_direct<C: sqlx::migrate::Migrate>(
         .filter(|m| applied.contains(&m.version))
         .filter(|m| m.version > target)
     {
-        conn.revert(table, migration).await?;
+        // The Postgres and SQLite drivers of sqlx report a failing down script as
+        // `ExecuteMigration` with its version, the MySQL driver as a plain `Execute`. The error
+        // is mapped here so that a failing down script names its version on every driver.
+        conn.revert(table, migration)
+            .await
+            .map_err(|error| match error {
+                SqlxMigrateError::Execute(cause) => {
+                    SqlxMigrateError::ExecuteMigration(cause, migration.version)
+                }
+                other => other,
+            })?;
     }
     if migrator.locking {
         conn.unlock().await?;
