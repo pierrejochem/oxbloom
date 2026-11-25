@@ -103,6 +103,10 @@ impl Pool {
     /// Reads the highest `version` with `success = true` of the history table `table`, which
     /// the caller has already checked as a plain identifier, which is why the text is safe to
     /// run. The statement only reads.
+    ///
+    /// `sqlx` creates and reads the history table with its name unquoted, and Postgres folds an
+    /// unquoted name to lower case, so on Postgres the quoted name is the lower-case one; a
+    /// name with capitals would otherwise name a table that does not exist.
     #[cfg_attr(
         not(any(feature = "postgres", feature = "mysql", feature = "sqlite")),
         allow(unused_variables)
@@ -114,6 +118,7 @@ impl Pool {
         match *self {
             #[cfg(feature = "postgres")]
             Pool::Postgres(ref pool) => {
+                let table = table.to_ascii_lowercase();
                 let sql = format!("SELECT MAX(version) FROM \"{table}\" WHERE success = true");
                 sqlx::query_scalar::<_, Option<i64>>(sqlx::AssertSqlSafe(sql))
                     .fetch_one(pool)
