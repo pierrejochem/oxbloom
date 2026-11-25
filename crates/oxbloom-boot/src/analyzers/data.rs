@@ -319,7 +319,10 @@ fn migration_failure(
             } else {
                 format!(
                     "Fix migration {version} and start again; its transaction was rolled back, \
-                     so it left no changes. The SQL and the database message are not shown."
+                     so it left no changes, unless the migration is marked \
+                     `-- no-transaction`: then the statements before the failure may stay \
+                     applied and run again at the next start, so make them safe to repeat or \
+                     undo them first. The SQL and the database message are not shown."
                 )
             },
         ),
@@ -634,6 +637,13 @@ mod tests {
         let sqlite = migration_report(script(), Some(Driver::Sqlite)).to_string();
         assert!(sqlite.contains("Migration 2 (seed)"), "{sqlite}");
         assert!(sqlite.contains("rolled back"), "{sqlite}");
+        // A `-- no-transaction` script runs outside a transaction, so it may stay partly
+        // applied; the advice says so for every driver that otherwise rolls back.
+        for driver in [Driver::Sqlite, Driver::Postgres] {
+            let other = migration_report(script(), Some(driver)).to_string();
+            assert!(other.contains("`-- no-transaction`"), "{other}");
+            assert!(other.contains("run again at the next start"), "{other}");
+        }
         let mysql = migration_report(script(), Some(Driver::Mysql)).to_string();
         assert!(mysql.contains("dirty history"), "{mysql}");
         assert!(!mysql.contains("rolled back"), "{mysql}");

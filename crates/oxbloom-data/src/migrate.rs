@@ -448,8 +448,9 @@ pub enum MigrateError {
         /// have none.
         version: i64,
     },
-    /// A migration script failed. On Postgres and SQLite it was rolled back; on MySQL it may
-    /// be partly applied.
+    /// A migration script failed. On Postgres and SQLite it was rolled back, unless it is
+    /// marked `-- no-transaction`: such a script may be partly applied, has no history row and
+    /// runs again from the top at the next start. On MySQL it may be partly applied.
     Script {
         /// The source.
         source_name: String,

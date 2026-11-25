@@ -316,7 +316,7 @@ path    = "migrations/reporting"
 
 ### Files
 
-A file is `<version>_<description>.sql`, or a reversible pair `<version>_<description>.up.sql` and `<version>_<description>.down.sql`. The version is a number, usually a timestamp. A directory can mix the two kinds, and the migrations are applied in version order. A SQLite script that starts with `-- no-transaction` runs outside a transaction (and then outside the write lock described below).
+A file is `<version>_<description>.sql`, or a reversible pair `<version>_<description>.up.sql` and `<version>_<description>.down.sql`. The version is a number, usually a timestamp. A directory can mix the two kinds, and the migrations are applied in version order. A script that starts with `-- no-transaction` runs outside a transaction, on every database; on SQLite it then also runs outside the write lock described below. Such a script is recorded in the history only after it succeeded, so a failure can leave its earlier statements applied, and the next start runs it again from the top.
 
 ```sql
 -- migrations/20261125120000_create_accounts.up.sql
@@ -359,7 +359,7 @@ Register it with `.instance(..)` as shown (see [Dependency injection](03-depende
 - Sources migrate one after the other, the default source first. A failure stops the rest and fails the start. Migrating several sources at once is not supported.
 - A source with migrations enabled connects and migrates even when `data.connect-on-startup` is `false`. The other sources stay lazy.
 - The failure report names the source, the version of the migration at fault and the key to change. It never contains SQL, a file path or the URL. The error text is fixed (`MigrateError`); the database error stays available through `source()` and may contain SQL object names, so do not log it.
-- A dirty history means a migration started and did not finish. On MySQL it means a script failed part way and its earlier statements stay applied. PostgreSQL and SQLite run an ordinary script in a transaction, so a failed ordinary script leaves no dirty row. There a dirty history typically means a `-- no-transaction` migration that failed, or a crash of the server during a migration. The report names the version and says what to repair; see MySQL below.
+- A dirty history means a migration started and did not finish. On MySQL it means a script failed part way and its earlier statements stay applied. PostgreSQL and SQLite run an ordinary script in a transaction, so a failed ordinary script leaves no dirty row. A failed `-- no-transaction` script does not leave a dirty row either: it may stay partly applied without a history row and runs again at the next start, so write it to be safe to repeat. A dirty row on PostgreSQL or SQLite comes from a history written by other tooling or edited by hand. The report names the version and says what to repair; see MySQL below.
 - A migration runs on a connection of its own with statement logging switched off, so the SQL text never reaches the logs of `sqlx`.
 
 ### Transactions, locking and the databases
@@ -369,7 +369,7 @@ Register it with `.instance(..)` as shown (see [Dependency injection](03-depende
 - A long SQLite migration holds the write lock, so a second instance that starts meanwhile can hit the busy timeout of SQLite and fail its start.
 - Two instances can share a SQLite file. Concurrent runners on one shared-cache in-memory database inside one process are not supported: they can fail with SQLite code 262.
 - A private-cache in-memory SQLite source (`sqlite://?mode=memory` without a name, or `cache=private`) is refused with an error that names the source, because the migration connection would see another, empty database. `sqlite::memory:` and a named shared-cache memory database (`cache=shared`) work.
-- **MySQL commits schema changes implicitly.** A script that fails midway leaves a dirty history row and a partly applied script. The next start fails with the dirty-history report naming the version until you repair the database: finish or undo what the migration changed, then delete its row from the history table. Prefer one statement per file where you can, so a failure leaves nothing half done. PostgreSQL and SQLite roll a failed script back.
+- **MySQL commits schema changes implicitly.** A script that fails midway leaves a dirty history row and a partly applied script. The next start fails with the dirty-history report naming the version until you repair the database: finish or undo what the migration changed, then delete its row from the history table. Prefer one statement per file where you can, so a failure leaves nothing half done. PostgreSQL and SQLite roll a failed script back, unless it is marked `-- no-transaction`.
 
 ### The timeout does not cancel the statement
 
