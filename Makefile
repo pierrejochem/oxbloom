@@ -6,8 +6,9 @@
 #   make test-hello                       test one example
 #   make build-hello                      build one example
 #   make check-examples                   build and test every example
-#   make test-db                          run the database conformance tests against Postgres and MySQL
-#                                         in containers (docker compose, docker-compose or podman compose)
+#   make test-db                          run the database and migration conformance tests against
+#                                         Postgres and MySQL in containers (docker compose, docker-compose
+#                                         or podman compose)
 #
 # The cargo target directory comes from ~/.cargo/config.toml; do not override it here.
 
@@ -72,5 +73,5 @@ test-db:
 	fi; \
 	OXBLOOM_TEST_POSTGRES_URL=postgres://oxbloom:oxbloom@127.0.0.1:55432/postgres \
 	OXBLOOM_TEST_MYSQL_URL=mysql://root:oxbloom@127.0.0.1:53306/mysql \
-	cargo test --workspace --all-features -- --ignored data_conformance; \
+	cargo test --workspace --all-features --no-fail-fast -- --ignored data_conformance data_migrate_conformance; \
 	status=$$?; exit $$status

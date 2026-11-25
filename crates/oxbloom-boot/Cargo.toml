@@ -35,6 +35,12 @@ oauth2 = ["security", "http-client", "oxbloom-security/oauth2", "dep:serde"]
 data-postgres = ["dep:oxbloom-data", "oxbloom-data/postgres", "oxbloom-data/retry", "dep:tracing", "oxbloom-actuator?/data"]
 data-mysql = ["dep:oxbloom-data", "oxbloom-data/mysql", "oxbloom-data/retry", "dep:tracing", "oxbloom-actuator?/data"]
 data-sqlite = ["dep:oxbloom-data", "oxbloom-data/sqlite", "oxbloom-data/retry", "dep:tracing", "oxbloom-actuator?/data"]
+# The `DataService` applies the migrations of every source with `migrations.enabled = true`
+# while the application starts, from the `migrations.path` directory or from the application's
+# `EmbeddedMigrations` bean. Additive: it does something only together with a driver feature,
+# but builds without one. Without it, a source that enables migrations fails the boot with a
+# report naming this feature.
+data-migrate = ["oxbloom-data?/migrate"]
 
 [dependencies]
 oxbloom-actuator = { version = "0.1.0", path = "../oxbloom-actuator", optional = true }
@@ -81,4 +87,12 @@ serde_json = "1.0.154"
 tempfile = "3.27.0"
 tokio = { version = "1.54.1", features = ["rt", "macros", "time", "signal", "net", "io-util"] }
 tokio-rustls = { version = "0.26.6", default-features = false }
+# `tests/autoconfigure_data_migrate.rs` captures the `info` line of a source whose `path` wins
+# over its embedded migrations, the same way the `oxbloom-data` log hygiene test does.
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["std", "fmt"] }
 trybuild = "1.0.122"
+
+[[test]]
+name = "autoconfigure_data_migrate"
+required-features = ["data-sqlite", "data-migrate"]

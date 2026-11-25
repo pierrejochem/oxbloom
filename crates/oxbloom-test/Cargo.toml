@@ -30,9 +30,9 @@ http-client = ["oxbloom-boot/http-client", "dep:oxbloom-http-client", "dep:async
 # `FakeProvider`: an OpenID Connect provider over `MockHttpClient` that signs id tokens with an
 # ES256 key generated at construction (`aws-lc-rs`, no `ring`).
 oauth2 = ["http-client", "dep:jsonwebtoken", "dep:aws-lc-rs", "dep:base64"]
-# `TestDatabase` over SQLite; `oxbloom-boot/data-sqlite` lets `ContextRunner` run
+# `TestDatabase` over SQLite, `MigrationFiles` and `TestDatabase::with_migrations`; `oxbloom-boot/data-sqlite` lets `ContextRunner` run
 # `DataAutoConfiguration` on the `config_snippet`.
-data = ["dep:oxbloom-data", "oxbloom-data/sqlite", "oxbloom-boot/data-sqlite"]
+data = ["dep:oxbloom-data", "oxbloom-data/sqlite", "oxbloom-data/migrate", "oxbloom-boot/data-sqlite"]
 # `TestDatabase::postgres` and `TestDatabase::mysql`; `url` rewrites the database of the server URL.
 data-postgres = ["data", "oxbloom-data/postgres", "oxbloom-boot/data-postgres", "dep:url"]
 data-mysql = ["data", "oxbloom-data/mysql", "oxbloom-boot/data-mysql", "dep:url"]
@@ -71,11 +71,12 @@ url = { version = "2.5.8", optional = true }
 
 [dev-dependencies]
 bytes = "1.12.1"
-# The data conformance suites (`tests/data_conformance.rs`, `tests/data_conformance_boot.rs`):
-# the `DataHealthIndicator`, the actuator health endpoint of a `TestApp`, and the retry policy
-# of `transaction_with_retry`.
+# The data conformance suites (`tests/data_conformance*.rs`, `tests/data_migrate_conformance*.rs`):
+# the `DataHealthIndicator`, the actuator health endpoint of a `TestApp`, the retry policy of
+# `transaction_with_retry`, and the migrations that the `DataService` runs at startup
+# (`data-migrate`, which builds nothing without a driver feature).
 oxbloom-actuator = { version = "0.1.0", path = "../oxbloom-actuator", features = ["data"] }
-oxbloom-boot = { version = "0.1.0", path = "../oxbloom-boot", features = ["actuator"] }
+oxbloom-boot = { version = "0.1.0", path = "../oxbloom-boot", features = ["actuator", "data-migrate"] }
 oxbloom-tasks = { version = "0.1.0", path = "../oxbloom-tasks" }
 http = "1.5.0"
 jsonwebtoken = { version = "12.0.0", features = ["rust_crypto"] }
@@ -85,4 +86,8 @@ oxbloom-web = { version = "0.1.0", path = "../oxbloom-web" }
 rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs", "pem"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+# The migration conformance suites capture the `tracing` events of a run to prove that no SQL
+# reaches them.
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["std", "fmt"] }
 tokio = { version = "1.54.1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "net", "io-util"] }

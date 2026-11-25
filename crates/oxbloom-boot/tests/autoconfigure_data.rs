@@ -88,6 +88,82 @@ async fn a_postgres_source_without_the_feature_fails_naming_the_feature() {
         .await;
 }
 
+/// The `migrations` keys under `data` belong to the default source, so a `migrations` table
+/// without `data.url` is a default source without a URL: the boot fails naming `data.url`,
+/// whether the table enables the migrations or not, and no `DataService` starts.
+#[tokio::test]
+async fn a_migrations_table_without_a_url_fails_naming_the_url() {
+    for (toml, key) in [
+        ("[data.migrations]\nenabled = false", "data.url"),
+        (
+            "[data]\nconnect-on-startup = false\n[data.migrations]\nenabled = false\ntable = \"history\"",
+            "data.url",
+        ),
+        ("[data.migrations]\nenabled = true", "data.url"),
+        (
+            "[data.sources.orders.migrations]\nenabled = false",
+            "data.sources.orders.url",
+        ),
+    ] {
+        ContextRunner::new()
+            .config_str(toml)
+            .auto_configuration::<DataAutoConfiguration>()
+            .run_failing(|view| {
+                assert_eq!(view.error().phase(), StartupPhase::Container, "{toml}");
+                let config = view
+                    .error()
+                    .find_cause::<ConfigError>()
+                    .expect("a config error");
+                assert!(
+                    matches!(config, ConfigError::Invalid { key: k, .. } if k == key),
+                    "{toml}: {config:?}"
+                );
+                let report = view.error().analysis().expect("a report").to_string();
+                assert!(report.contains(&format!("`{key}`")), "{report}");
+            })
+            .await;
+    }
+}
+
+/// A source that enables migrations in a build without the feature `data-migrate` fails the
+/// boot, naming the feature and the key; it is never silently left unmigrated.
+#[cfg(all(feature = "data-sqlite", not(feature = "data-migrate")))]
+#[tokio::test]
+async fn enabled_without_the_feature_names_the_feature() {
+    for (toml, key) in [
+        (
+            "[data]\nurl = \"sqlite::memory:\"\n[data.migrations]\nenabled = true\npath = '/secret-dir'",
+            "data.migrations.enabled",
+        ),
+        (
+            "[data]\nconnect-on-startup = false\n[data.sources.orders]\nurl = \"sqlite::memory:\"\n\
+             [data.sources.orders.migrations]\nenabled = true",
+            "data.sources.orders.migrations.enabled",
+        ),
+    ] {
+        ContextRunner::new()
+            .config_str(toml)
+            .auto_configuration::<DataAutoConfiguration>()
+            .run_failing(|view| {
+                assert_eq!(view.error().phase(), StartupPhase::Container, "{toml}");
+                let report = view.error().analysis().expect("a report").to_string();
+                assert!(report.contains("`data-migrate`"), "{report}");
+                assert!(report.contains(&format!("`{key}`")), "{report}");
+                for text in failure_texts(view) {
+                    assert!(!text.contains("secret-dir"), "{text}");
+                    assert!(!text.contains("sqlite:"), "{text}");
+                }
+            })
+            .await;
+    }
+    // `enabled = false` keeps working without the feature.
+    ContextRunner::new()
+        .config_str("[data]\nurl = \"sqlite::memory:\"\n[data.migrations]\nenabled = false")
+        .auto_configuration::<DataAutoConfiguration>()
+        .run(|view| assert!(view.contains::<oxbloom_boot::DataService>()))
+        .await;
+}
+
 // The path without the `ssl` feature (a named bundle is an error on its `ssl-bundle` key) has
 // no test here: a dev-dependency of this crate turns `ssl` on in every test build. The
 // non-`ssl` `bundle_material` is compiled by `cargo build -p oxbloom-boot --no-default-features

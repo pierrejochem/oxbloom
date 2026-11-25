@@ -302,20 +302,35 @@ fn actuator_controller(
 struct DataIndicators(Vec<Arc<dyn HealthIndicator>>);
 
 /// One `DataHealthIndicator` per source of the registry.
+///
+/// A source with migrations enabled also reports the latest applied migration version, read
+/// from the history table of its settings. An application that registers its own
+/// `DataSources` without a `data` section has no `DataSettings` bean: its indicators then
+/// report no migration version.
 #[cfg(any(
     feature = "data-postgres",
     feature = "data-mysql",
     feature = "data-sqlite"
 ))]
-fn data_indicators(sources: Arc<oxbloom_data::DataSources>) -> DataIndicators {
+fn data_indicators(
+    sources: Arc<oxbloom_data::DataSources>,
+    settings: Option<Arc<oxbloom_data::DataSettings>>,
+) -> DataIndicators {
     let indicators = sources
         .names()
         .into_iter()
         .map(|name| {
-            Arc::new(oxbloom_actuator::DataHealthIndicator::new(
-                Arc::clone(&sources),
-                name,
-            )) as Arc<dyn HealthIndicator>
+            let mut indicator =
+                oxbloom_actuator::DataHealthIndicator::new(Arc::clone(&sources), name);
+            let migrations = settings
+                .iter()
+                .flat_map(|settings| settings.sources.iter())
+                .find(|s| s.name == name)
+                .and_then(|s| s.migrations.as_ref());
+            if let Some(migrations) = migrations {
+                indicator = indicator.with_migrations_table(&migrations.table);
+            }
+            Arc::new(indicator) as Arc<dyn HealthIndicator>
         })
         .collect();
     DataIndicators(indicators)

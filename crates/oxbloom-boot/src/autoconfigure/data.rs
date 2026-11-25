@@ -9,6 +9,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use oxbloom_config::{Config, ConfigError};
+#[cfg(feature = "data-migrate")]
+use oxbloom_data::migrate::{EmbeddedMigrations, MigrateError};
 use oxbloom_data::{DataError, DataSettings, DataSources, Driver, SourceError, TlsMaterial};
 use oxbloom_di::{
     ConditionContext, ConditionOutcome, Conditions, Configuration, ContainerBuilder, DiError,
@@ -55,7 +57,12 @@ const TARGET: &str = "oxbloom::data";
 ///   type itself. Named sources are reachable through the registry only;
 /// - the [`DataService`] as a `dyn Service`, when the section configures a source (a
 ///   `data` section with only `connect-on-startup` registers none). The service does not keep
-///   running, so a run-to-completion application ends after its runners.
+///   running, so a run-to-completion application ends after its runners. With the feature
+///   `data-migrate`, it also applies the migrations of every source with
+///   `migrations.enabled = true` at start, from `migrations.path` or from the application's
+///   optional `EmbeddedMigrations` bean (see [`DataService`]). Without the feature, a source
+///   with `migrations.enabled = true` fails the build with a report naming the feature and
+///   the key.
 ///
 /// The pools are built while the container is built, which `OxbloomApplicationBuilder::run`
 /// does on the application's Tokio runtime; sqlx ties the maintenance task of a pool to that
@@ -194,9 +201,21 @@ impl AutoConfiguration for DataAutoConfiguration {
 }
 
 /// The settings of the `data` keys; the `ConfigError` names the full key and stays the typed
-/// source.
+/// source. Without the feature `data-migrate`, a source that enables migrations fails here, so
+/// it is never left unmigrated without a word.
 fn data_settings(config: Arc<Config>) -> Result<DataSettings, DiError> {
-    DataSettings::from_config(&config).map_err(DiError::creation_from::<DataSettings>)
+    let settings =
+        DataSettings::from_config(&config).map_err(DiError::creation_from::<DataSettings>)?;
+    #[cfg(not(feature = "data-migrate"))]
+    if let Some(source) = settings.sources.iter().find(|s| s.migrations.is_some()) {
+        return Err(DiError::creation_from::<DataSettings>(
+            MigrationsNeedFeature {
+                source_name: source.name.clone(),
+                key: format!("{}.migrations.enabled", source.config_prefix()),
+            },
+        ));
+    }
+    Ok(settings)
 }
 
 /// The registry of every source. The bundles are resolved first, so an unknown bundle name is
@@ -259,13 +278,32 @@ fn bundle_material(key: String) -> Result<TlsMaterial, ConfigError> {
     ))
 }
 
+#[cfg(not(feature = "data-migrate"))]
 fn data_service(sources: Arc<DataSources>, settings: Arc<DataSettings>) -> DataService {
     DataService::new(sources, settings.connect_on_startup)
+}
+
+/// The service with the migrations of the settings; the application's `EmbeddedMigrations`
+/// bean is optional.
+#[cfg(feature = "data-migrate")]
+fn data_service(
+    sources: Arc<DataSources>,
+    settings: Arc<DataSettings>,
+    embedded: Option<Arc<EmbeddedMigrations>>,
+) -> DataService {
+    let connect_on_startup = settings.connect_on_startup;
+    DataService::with_migrations(sources, settings, embedded, connect_on_startup)
 }
 
 /// Whether the `data` section configures a source: a named one under `data.sources`, or any
 /// key of the default source. Without a source there is nothing to connect or close, so no
 /// `DataService` is registered. The reason of a skip never contains a value.
+///
+/// The `data.migrations.*` keys count as keys of the default source: a `migrations` table
+/// without `data.url` is a default source without a URL, which the settings refuse with an
+/// error on `data.url` whether the table enables the migrations or not. A source that enables
+/// migrations always has a URL, so it registers the service, also with
+/// `data.connect-on-startup = false`.
 fn sources_configured(cx: &ConditionContext) -> ConditionOutcome {
     let default_keys = oxbloom_data::PROPERTIES
         .iter()
@@ -370,6 +408,57 @@ impl std::error::Error for DataUnreachable {
     }
 }
 
+/// The migrations of a source failed while the `DataService` started, with the driver of the
+/// source for the report. The `Display` is the fixed ``data source `<name>`: the migrations
+/// failed``; the [`MigrateError`] is the source.
+#[cfg(feature = "data-migrate")]
+#[derive(Debug)]
+pub(crate) struct DataMigrationFailed {
+    pub(crate) error: MigrateError,
+    pub(crate) driver: Option<Driver>,
+}
+
+#[cfg(feature = "data-migrate")]
+impl fmt::Display for DataMigrationFailed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "data source `{}`: the migrations failed",
+            self.error.source_name()
+        )
+    }
+}
+
+#[cfg(feature = "data-migrate")]
+impl std::error::Error for DataMigrationFailed {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.error)
+    }
+}
+
+/// A source enables migrations in a build without the feature `data-migrate`. The `Display`
+/// names the source, the key and the feature, never a value.
+#[cfg(not(feature = "data-migrate"))]
+#[derive(Debug)]
+pub(crate) struct MigrationsNeedFeature {
+    pub(crate) source_name: String,
+    pub(crate) key: String,
+}
+
+#[cfg(not(feature = "data-migrate"))]
+impl fmt::Display for MigrationsNeedFeature {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "data source `{}`: `{}` is true, but the `data-migrate` feature of `oxbloom-boot` is off",
+            self.source_name, self.key
+        )
+    }
+}
+
+#[cfg(not(feature = "data-migrate"))]
+impl std::error::Error for MigrationsNeedFeature {}
+
 /// The boot [`Service`] of the [`DataSources`] registry, registered by
 /// [`DataAutoConfiguration`].
 ///
@@ -386,6 +475,21 @@ impl std::error::Error for DataUnreachable {
 /// seconds, an unreachable Postgres or MySQL server therefore makes the start wait the full 10
 /// seconds of its check; set a shorter `acquire-timeout` to fail sooner. Without
 /// `data.connect-on-startup` the pools connect on first use.
+///
+/// With the feature `data-migrate` and a service made by `DataService::with_migrations` (as
+/// [`DataAutoConfiguration`] does), the
+/// start then applies the migrations of every source with `migrations.enabled = true`, one
+/// source after the other in the order of [`DataSources::names`], the default source first,
+/// before the service reports started; every service with a later phase therefore sees the
+/// migrated schema. The migrations come from the source's `migrations.path` directory, or
+/// else from the application's `EmbeddedMigrations` bean; a source with both uses the
+/// directory and logs one `info` event at target `oxbloom::data` that names only the source.
+/// The first failure stops the run and fails the start with an error whose `Display` is
+/// ``data source `<name>`: the migrations failed`` and whose source is the
+/// `oxbloom_data::migrate::MigrateError`; the failure report names the source, the version of
+/// the migration at fault and the key to change, never SQL, a path or the URL. Migrations win
+/// over `data.connect-on-startup = false`: a source that migrates is checked and connected at
+/// start, and the other sources stay unconnected.
 ///
 /// [`stop`](Service::stop) marks every pool closed at once, so none hands out a new
 /// connection, then waits up to 10 seconds in all for the pools to close, which needs the
@@ -434,6 +538,18 @@ impl std::error::Error for DataUnreachable {
 pub struct DataService {
     sources: Arc<DataSources>,
     connect_on_startup: bool,
+    /// The settings and embedded migrators of the migrations; `None` for a service made with
+    /// [`DataService::new`]. Boxed, so the service stays small without the migrations.
+    #[cfg(feature = "data-migrate")]
+    migrations: Option<Box<Migrations>>,
+}
+
+/// What [`DataService::with_migrations`] keeps for the migrations.
+#[cfg(feature = "data-migrate")]
+#[derive(Debug)]
+struct Migrations {
+    settings: Arc<DataSettings>,
+    embedded: Option<Arc<EmbeddedMigrations>>,
 }
 
 impl DataService {
@@ -472,7 +588,158 @@ impl DataService {
         DataService {
             sources,
             connect_on_startup,
+            #[cfg(feature = "data-migrate")]
+            migrations: None,
         }
+    }
+
+    /// A service for `sources` that also applies the migrations of every source of `settings`
+    /// with `migrations.enabled = true` at start, after the connectivity check. `embedded` is
+    /// the application's [`EmbeddedMigrations`], used for a source without a `migrations.path`.
+    /// A source that migrates is connected even when `connect_on_startup` is `false`; the
+    /// other sources then stay unconnected.
+    ///
+    /// Available with the cargo feature `data-migrate`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[cfg(all(feature = "data-sqlite", feature = "data-migrate"))]
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use std::sync::Arc;
+    /// use oxbloom_boot::{DataService, Service};
+    /// use oxbloom_config::Config;
+    /// use oxbloom_data::migrate::EmbeddedMigrations;
+    /// use oxbloom_data::sqlx::SqlSafeStr;
+    /// use oxbloom_data::sqlx::migrate::{Migration, MigrationType, Migrator};
+    /// use oxbloom_data::{DataError, DataSettings, DataSources};
+    ///
+    /// tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(async {
+    ///     let config = Config::from_str(
+    ///         "[data]\nurl = \"sqlite::memory:\"\nconnect-on-startup = false\n\
+    ///          [data.migrations]\nenabled = true",
+    ///     )?;
+    ///     let settings = Arc::new(DataSettings::from_config(&config)?);
+    ///     let sources = Arc::new(DataSources::build(&settings, &|_| Err(DataError::Tls))?);
+    ///     // In an application: `static MIGRATOR: Migrator = sqlx::migrate!("./migrations");`
+    ///     let migrator: &'static Migrator = Box::leak(Box::new(Migrator::with_migrations(vec![
+    ///         Migration::new(
+    ///             1,
+    ///             "create accounts".into(),
+    ///             MigrationType::Simple,
+    ///             "CREATE TABLE accounts (id INTEGER PRIMARY KEY)".into_sql_str(),
+    ///             false,
+    ///         ),
+    ///     ])));
+    ///     let embedded = Arc::new(EmbeddedMigrations::new().default_source(migrator));
+    ///     let connect_on_startup = settings.connect_on_startup;
+    ///     let service = DataService::with_migrations(
+    ///         sources.clone(),
+    ///         settings,
+    ///         Some(embedded),
+    ///         connect_on_startup,
+    ///     );
+    ///
+    ///     // The source migrates, so it connects although `connect-on-startup` is false.
+    ///     service.start().await?;
+    ///     let pool = sources.sqlite("default").ok_or("no default")?;
+    ///     let count: i64 = oxbloom_data::sqlx::query_scalar("SELECT count(*) FROM accounts")
+    ///         .fetch_one(pool)
+    ///         .await?;
+    ///     assert_eq!(count, 0);
+    ///     service.stop().await;
+    ///     Ok::<(), Box<dyn std::error::Error>>(())
+    /// })?;
+    /// # Ok(())
+    /// # }
+    /// # #[cfg(not(all(feature = "data-sqlite", feature = "data-migrate")))]
+    /// # fn main() {}
+    /// ```
+    #[cfg(feature = "data-migrate")]
+    pub fn with_migrations(
+        sources: Arc<DataSources>,
+        settings: Arc<DataSettings>,
+        embedded: Option<Arc<EmbeddedMigrations>>,
+        connect_on_startup: bool,
+    ) -> DataService {
+        DataService {
+            sources,
+            connect_on_startup,
+            migrations: Some(Box::new(Migrations { settings, embedded })),
+        }
+    }
+
+    /// The sources to migrate with their settings: the sources of the registry in the order of
+    /// [`DataSources::names`], then the sources the settings migrate but the registry lacks
+    /// (an application's own registry), whose run fails with an unknown source.
+    #[cfg(feature = "data-migrate")]
+    fn migration_plan(&self) -> Vec<(&str, &oxbloom_data::MigrationSettings)> {
+        let Some(migrations) = self.migrations.as_deref() else {
+            return Vec::new();
+        };
+        let enabled = |name: &str| {
+            migrations
+                .settings
+                .sources
+                .iter()
+                .find(|s| s.name == name)
+                .and_then(|s| s.migrations.as_ref())
+        };
+        let names = self.sources.names();
+        let mut plan: Vec<_> = names
+            .iter()
+            .filter_map(|&name| enabled(name).map(|m| (name, m)))
+            .collect();
+        plan.extend(migrations.settings.sources.iter().filter_map(|s| {
+            let m = s.migrations.as_ref()?;
+            (!names.contains(&s.name.as_str())).then_some((s.name.as_str(), m))
+        }));
+        plan
+    }
+
+    /// Applies the migrations of the plan one source at a time; the first failure stops the
+    /// run.
+    #[cfg(feature = "data-migrate")]
+    async fn migrate(
+        &self,
+        plan: &[(&str, &oxbloom_data::MigrationSettings)],
+    ) -> Result<(), ServiceError> {
+        let embedded = self
+            .migrations
+            .as_deref()
+            .and_then(|m| m.embedded.as_deref());
+        for &(name, settings) in plan {
+            let migrator = embedded.and_then(|e| e.get(name));
+            if settings.path.is_some() && migrator.is_some() {
+                tracing::info!(
+                    target: TARGET,
+                    source = name,
+                    "the migrations of this data source come from its `migrations.path`, not from its embedded migrations"
+                );
+            }
+            match oxbloom_data::migrate::run(&self.sources, name, settings, migrator).await {
+                Ok(report) if !report.is_empty() => tracing::info!(
+                    target: TARGET,
+                    source = name,
+                    applied = report.applied().len(),
+                    latest_version = report.latest_version(),
+                    "applied the pending migrations of this data source"
+                ),
+                Ok(_) => {}
+                Err(error) => {
+                    let driver = self.sources.driver_of(name).or_else(|| {
+                        let settings = &self.migrations.as_deref()?.settings;
+                        settings
+                            .sources
+                            .iter()
+                            .find(|s| s.name == name)
+                            .map(|s| s.driver)
+                    });
+                    return Err(ServiceError::new(DataMigrationFailed { error, driver }));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// The registry this service connects and closes.
@@ -507,21 +774,31 @@ impl DataService {
 
 #[async_trait]
 impl Service for DataService {
-    /// Checks every source when `data.connect-on-startup` is on; the first failing source
-    /// fails the start.
+    /// Checks every source when `data.connect-on-startup` is on, and every source that
+    /// migrates in any case; the first failing source fails the start. Then, with the feature
+    /// `data-migrate`, applies the migrations source by source; the first failure fails the
+    /// start.
     async fn start(&self) -> Result<(), ServiceError> {
-        if !self.connect_on_startup {
-            return Ok(());
-        }
+        #[cfg(feature = "data-migrate")]
+        let plan = self.migration_plan();
+        #[cfg(feature = "data-migrate")]
+        let check = |name: &str| self.connect_on_startup || plan.iter().any(|&(n, _)| n == name);
+        #[cfg(not(feature = "data-migrate"))]
+        let check = |_: &str| self.connect_on_startup;
         // One source at a time, stopping at the first failure, so several unreachable sources
         // do not each add their wait to the start.
         for name in self.sources.names() {
+            if !check(name) {
+                continue;
+            }
             if let Err(error) = self.sources.ping(name, PING_TIMEOUT).await {
                 return Err(ServiceError::new(DataUnreachable(SourceError::new(
                     name, error,
                 ))));
             }
         }
+        #[cfg(feature = "data-migrate")]
+        self.migrate(&plan).await?;
         Ok(())
     }
 

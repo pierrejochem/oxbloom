@@ -58,6 +58,7 @@ pub(crate) fn builtin() -> Vec<Arc<dyn FailureAnalyzer>> {
     {
         analyzers.push(Arc::new(data::DataConfigAnalyzer));
         analyzers.push(Arc::new(data::DataUnreachableAnalyzer));
+        analyzers.push(Arc::new(data::DataMigrationAnalyzer));
     }
     analyzers
 }

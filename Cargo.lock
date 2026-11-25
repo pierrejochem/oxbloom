@@ -1796,6 +1796,7 @@ dependencies = [
  "rcgen",
  "serde",
  "serde_json",
+ "sqlx",
  "tokio",
  "tracing",
 ]
@@ -1828,6 +1829,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tracing",
+ "tracing-subscriber",
  "trybuild",
 ]
 
@@ -1868,7 +1870,10 @@ dependencies = [
  "oxbloom-tasks",
  "serde",
  "sqlx",
+ "tempfile",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -2029,6 +2034,8 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-rustls",
+ "tracing",
+ "tracing-subscriber",
  "url",
 ]
 

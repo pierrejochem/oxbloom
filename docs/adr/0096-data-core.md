@@ -50,7 +50,7 @@ An Oxbloom application that stores data needs pooled connections to a SQL databa
 
 - An application chooses its driver features and writes plain `sqlx` queries; the framework supplies pools, TLS, transactions, health and shutdown.
 - Named sources are looked up by name on the `DataSources` bean and are not injectable by type; the default source is.
-- There are no migrations (M3b is next), no ambient transactions, no repository layer, no qualifier mechanism, no pools that follow bundle reloads, and no database other than PostgreSQL, MySQL and SQLite.
+- Migrations came afterwards with M3b (ADR 0097). There are no ambient transactions, no repository layer, no qualifier mechanism, no pools that follow bundle reloads, and no database other than PostgreSQL, MySQL and SQLite.
 - The `Send` limitation of borrowing closures is a compiler issue; the docs show the `async move` form.
 - A failed health check shows only a fixed text. The cause is not logged by the indicator, so diagnosing needs the application's own logs at the place where the pool is used.
 - The retry loop duplicates a little of the policy logic of `oxbloom-tasks` (the attempt count and the delay) to keep error text out of the logs.

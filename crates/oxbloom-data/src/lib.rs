@@ -7,7 +7,8 @@
 //! enabled driver's pool. The cargo feature `retry` (off by default) adds
 //! `transaction_with_retry`, which runs that work again after a serialization failure or a
 //! deadlock. The feature only adds that function, so turning it on never changes
-//! [`transaction`] or [`TransactionOptions`].
+//! [`transaction`] or [`TransactionOptions`]. The cargo feature `migrate` (off by default)
+//! adds the module `migrate`, which applies and reverts schema migrations with `sqlx::migrate`.
 //!
 //! # Examples
 //!
@@ -20,14 +21,20 @@
 //! ```
 
 mod error;
+#[cfg(feature = "migrate")]
+pub mod migrate;
 mod pool;
 mod settings;
 mod sources;
 mod transaction;
 
 pub use error::{DataError, SourceError};
+#[cfg(feature = "migrate")]
+pub use migrate::{
+    AppliedMigration, EmbeddedMigrations, MigrateError, MigrationReport, revert, run,
+};
 pub use pool::TlsMaterial;
-pub use settings::{DataSettings, Driver, PROPERTIES, SourceSettings, SslMode};
+pub use settings::{DataSettings, Driver, MigrationSettings, PROPERTIES, SourceSettings, SslMode};
 pub use sources::DataSources;
 pub use sqlx;
 #[cfg(feature = "retry")]

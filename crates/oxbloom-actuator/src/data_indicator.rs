@@ -26,6 +26,8 @@ const TIMED_OUT: &str = "timed out";
 /// failed query, a closed pool or an unknown source). The registry cannot tell a timeout from a
 /// closed pool by its error, so the indicator measures the time the check took. The report
 /// never contains the URL, a file path, a host, a user or the text of a driver error.
+/// [`with_migrations_table`](Self::with_migrations_table) adds the latest migration version to
+/// the up report.
 ///
 /// Available with the cargo feature `data`, which needs no driver of its own.
 ///
@@ -55,6 +57,7 @@ pub struct DataHealthIndicator {
     source: String,
     name: String,
     timeout: Duration,
+    migrations_table: Option<String>,
 }
 
 impl DataHealthIndicator {
@@ -96,6 +99,7 @@ impl DataHealthIndicator {
             source: name.to_owned(),
             name: component,
             timeout: TIMEOUT,
+            migrations_table: None,
         }
     }
 
@@ -140,6 +144,52 @@ impl DataHealthIndicator {
         self.timeout = timeout;
         self
     }
+
+    /// Adds the detail `migrations` to the up report: the highest version with
+    /// `success = true` in the migration history table `table` of the source, as a number.
+    ///
+    /// The read is one read-only statement through the application pool, and it shares the
+    /// timeout of the check with the `SELECT 1`. The detail never contains a description, a
+    /// file name or SQL. When the table does not exist, holds no applied version, has a name
+    /// that is not a plain identifier (`[A-Za-z_][A-Za-z0-9_]*`, at most 63 characters), or
+    /// the read fails for any other reason, the detail is absent and the status is unchanged.
+    /// A row with `success = false` is ignored, whatever its version. The detail is never
+    /// added to a down report.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use std::sync::Arc;
+    /// use oxbloom_actuator::{DataHealthIndicator, HealthIndicator, Status};
+    /// use oxbloom_config::Config;
+    /// use oxbloom_data::{DataError, DataSettings, DataSources};
+    ///
+    /// let config = Config::from_str("[data]\nurl = \"sqlite::memory:\"")?;
+    /// let settings = DataSettings::from_config(&config)?;
+    /// let sources = Arc::new(DataSources::build(&settings, &|_| Err(DataError::Tls))?);
+    /// let indicator = DataHealthIndicator::new(sources.clone(), "default")
+    ///     .with_migrations_table("_sqlx_migrations");
+    /// // Without the history table the status stays up and the detail is absent.
+    /// let health = indicator.health().await;
+    /// assert_eq!(health.status, Status::Up);
+    /// assert!(!health.details.contains_key("migrations"));
+    ///
+    /// let pool = sources.sqlite("default").ok_or("no default")?;
+    /// sqlx::query("CREATE TABLE _sqlx_migrations (version BIGINT PRIMARY KEY, success BOOLEAN NOT NULL)")
+    ///     .execute(pool).await?;
+    /// sqlx::query("INSERT INTO _sqlx_migrations VALUES (1, true), (2, false)")
+    ///     .execute(pool).await?;
+    /// let health = indicator.health().await;
+    /// assert_eq!(health.details["migrations"], 1);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_migrations_table(mut self, table: &str) -> Self {
+        self.migrations_table = Some(table.to_owned());
+        self
+    }
 }
 
 /// The fixed text of a failed check: `timed out` for a pool error after the whole timeout,
@@ -167,6 +217,17 @@ impl HealthIndicator for DataHealthIndicator {
                 let mut health = Health::new(Status::Up);
                 if let Some((size, idle)) = self.sources.pool_counts(&self.source) {
                     health = health.detail("size", size).detail("idle", idle);
+                }
+                if let Some(table) = &self.migrations_table {
+                    // The read shares the budget of the check; any failure leaves it absent.
+                    let left = self.timeout.saturating_sub(started.elapsed());
+                    let version = self
+                        .sources
+                        .latest_migration_version(&self.source, table, left)
+                        .await;
+                    if let Ok(Some(version)) = version {
+                        health = health.detail("migrations", version);
+                    }
                 }
                 health
             }
