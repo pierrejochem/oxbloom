@@ -1097,9 +1097,14 @@ Deferred minors from the M3a reviews (parked, small; the final fix wave closed t
 - A zero health timeout maps a closed pool to `timed out`, because the indicator tells the two apart by the time the check took.
 - `cargo test -p oxbloom-test --features data` alone runs no boot conformance tests; they need `data,web`, which `make test-db` gets through `--all-features`.
 - There is no end-to-end TLS test against a database: the compose services of `make test-db` run without TLS.
+- `DataSources::close_all_within` drops the unfinished close futures when the budget ends, so the idle connections of a pool that did not finish stay open until the pool itself is dropped (connections that are returned later are closed).
+- With a `data` section that holds only `connect-on-startup`, `DataService` is not registered, so boot neither pings nor closes an application's own `DataSources`.
+- `DataSettings` has no back-off for an application bean of the same type; a second `DataSettings` bean makes the registry and service wiring ambiguous.
+- Ctrl-C during the startup check of an application whose only service is `DataService` ends the process without a graceful pool close, because signal handlers are installed only when a service keeps running.
+- No test starts several unreachable sources to show that the start stops at the first failure.
 - `SourceError` has public fields next to its accessors; a SQLite URL with a percent-encoded `mode` or with repeated `cache` options is classified differently from `sqlx` (it only affects an explicit `max-connections`); a `TERM` sent only to the shell of `make test-db` is handled after `cargo` ends.
 
-Gate numbers at the end of M3a: to be filled by the controller.
+Gate numbers at the end of M3a: `cargo test --workspace --all-features --no-fail-fast` 4344 passed, 0 failed, 40 ignored (4129 passed and 8 ignored before M3a; the 32 new ignored tests are the PostgreSQL and MySQL conformance tests; counted by summing the `test result` lines, doctests included); `make test-db` against PostgreSQL 17 and MySQL 8.4: 16 `data_conformance_*` tests per driver passed, 0 failed, and the compose services were stopped afterwards; `make check-examples` 79 passed, 0 failed; clippy `-D warnings` for the workspace with all features and `cargo fmt --check` clean; the boot stack probes are unchanged at 238 KB passing and 237 KB overflowing (exit 101) with no features, and 239 KB passing and 238 KB overflowing (exit 101) with all features; the builds of `oxbloom-data` with no features, with each driver alone and with all drivers and `retry`, of `oxbloom-boot --no-default-features` with `data-sqlite`, `data-postgres`, `data-mysql`, `data-postgres,ssl` and `data-sqlite,actuator`, and of `oxbloom-security` and `oxbloom-http-client` with all features pass; `cargo tree -i ring --workspace --all-features` prints nothing.
 
 ### C10: Test support (`oxbloom-test`)
 
