@@ -40,7 +40,7 @@ data-sqlite = ["dep:oxbloom-data", "oxbloom-data/sqlite", "oxbloom-data/retry", 
 # `EmbeddedMigrations` bean. Additive: it does something only together with a driver feature,
 # but builds without one. Without it, a source that enables migrations fails the boot with a
 # report naming this feature.
-data-migrate = ["oxbloom-data/migrate"]
+data-migrate = ["oxbloom-data?/migrate"]
 
 [dependencies]
 oxbloom-actuator = { version = "0.1.0", path = "../oxbloom-actuator", optional = true }
