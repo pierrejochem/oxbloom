@@ -27,11 +27,19 @@ http-client = ["dep:oxbloom-http-client", "oxbloom-http-client/config"]
 # `security.oauth2.*` metadata, OAuth2 login in `SecurityAutoConfiguration` over the
 # `dyn HttpClient` bean, and the OAuth2 client of `oxbloom-security`.
 oauth2 = ["security", "http-client", "oxbloom-security/oauth2", "dep:serde"]
+# `DataAutoConfiguration`: the `DataSources` registry of the `data.*` keys, the default
+# source's pool bean and the service that connects and closes the pools. One feature per
+# driver, and no separate `data` feature; each also brings `transaction_with_retry`. `tracing`
+# logs a shutdown that does not close the pools in time.
+data-postgres = ["dep:oxbloom-data", "oxbloom-data/postgres", "oxbloom-data/retry", "dep:tracing"]
+data-mysql = ["dep:oxbloom-data", "oxbloom-data/mysql", "oxbloom-data/retry", "dep:tracing"]
+data-sqlite = ["dep:oxbloom-data", "oxbloom-data/sqlite", "oxbloom-data/retry", "dep:tracing"]
 
 [dependencies]
 oxbloom-actuator = { version = "0.1.0", path = "../oxbloom-actuator", optional = true }
 oxbloom-config = { version = "0.1.0", path = "../oxbloom-config", features = ["di"] }
 oxbloom-core = { version = "0.1.0", path = "../oxbloom-core" }
+oxbloom-data = { version = "0.1.0", path = "../oxbloom-data", optional = true }
 oxbloom-di = { version = "0.1.0", path = "../oxbloom-di" }
 oxbloom-http-client = { version = "0.1.0", path = "../oxbloom-http-client", optional = true }
 oxbloom-logging = { version = "0.1.0", path = "../oxbloom-logging", optional = true }

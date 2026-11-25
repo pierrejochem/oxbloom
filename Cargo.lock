@@ -1809,6 +1809,7 @@ dependencies = [
  "oxbloom-actuator",
  "oxbloom-config",
  "oxbloom-core",
+ "oxbloom-data",
  "oxbloom-di",
  "oxbloom-http-client",
  "oxbloom-logging",
