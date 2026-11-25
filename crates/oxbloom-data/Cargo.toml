@@ -16,6 +16,9 @@ sqlite = ["sqlx/sqlite", "sqlx/tls-rustls-aws-lc-rs-native-roots"]
 # function (it is additive). Off by default, so a build without it does not depend on
 # `oxbloom-tasks`; `fastrand` draws the jitter of the delays.
 retry = ["dep:oxbloom-tasks", "dep:fastrand"]
+# The migration runner (`oxbloom_data::migrate`): enables the `migrate` feature of `sqlx`. The feature
+# is additive and off by default, so a build without it does not compile the migration code.
+migrate = ["sqlx/migrate"]
 
 [dependencies]
 # The `data.*` keys: the lenient `Config` reading and `Secret` for the URL. Durations are read by
@@ -25,8 +28,9 @@ oxbloom-tasks = { version = "0.1.0", path = "../oxbloom-tasks", optional = true 
 fastrand = { version = "2.3.0", optional = true }
 serde = { version = "1.0.229", features = ["derive"] }
 # Each driver feature also enables rustls with aws-lc-rs and the platform root certificates
-# (never ring), so a build without drivers has no TLS crates. The migrate and macros features
-# are left to the application.
+# (never ring), so a build without drivers has no TLS crates. The `migrate` feature of this crate
+# enables the `migrate` feature of sqlx; the `macros` feature of sqlx (for `sqlx::migrate!`) is
+# left to the application.
 sqlx = { version = "0.9.1", default-features = false, features = ["runtime-tokio"] }
 # Already in the tree through sqlx: the runtime check before a pool is built and the timeout of
 # `DataSources::ping`.

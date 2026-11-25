@@ -20,6 +20,8 @@
 //! ```
 
 mod error;
+#[cfg(feature = "migrate")]
+pub mod migrate;
 mod pool;
 mod settings;
 mod sources;
