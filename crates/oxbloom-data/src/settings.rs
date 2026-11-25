@@ -645,7 +645,7 @@ fn migration_settings(
     }))
 }
 
-fn is_valid_table_name(name: &str) -> bool {
+pub(crate) fn is_valid_table_name(name: &str) -> bool {
     let mut bytes = name.bytes();
     name.len() <= MAX_TABLE_NAME_LEN
         && bytes

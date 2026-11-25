@@ -28,6 +28,8 @@ mod sources;
 mod transaction;
 
 pub use error::{DataError, SourceError};
+#[cfg(feature = "migrate")]
+pub use migrate::{AppliedMigration, EmbeddedMigrations, MigrateError, MigrationReport, run};
 pub use pool::TlsMaterial;
 pub use settings::{DataSettings, Driver, MigrationSettings, PROPERTIES, SourceSettings, SslMode};
 pub use sources::DataSources;
