@@ -39,6 +39,24 @@ mod tasks;
 
 #[cfg(feature = "actuator")]
 pub use actuator::ActuatorAutoConfiguration;
+#[cfg(all(
+    feature = "data-migrate",
+    any(
+        feature = "data-postgres",
+        feature = "data-mysql",
+        feature = "data-sqlite"
+    )
+))]
+pub(crate) use data::DataMigrationFailed;
+#[cfg(all(
+    not(feature = "data-migrate"),
+    any(
+        feature = "data-postgres",
+        feature = "data-mysql",
+        feature = "data-sqlite"
+    )
+))]
+pub(crate) use data::MigrationsNeedFeature;
 #[cfg(any(
     feature = "data-postgres",
     feature = "data-mysql",

@@ -1,9 +1,13 @@
-//! The data analyzers: an invalid `data` key or a source that cannot be built, and a source
-//! that is not reachable at start.
+//! The data analyzers: an invalid `data` key or a source that cannot be built, a source that
+//! is not reachable at start, and migrations that failed or cannot run.
 
 use oxbloom_config::ConfigError;
 use oxbloom_data::DataError;
 
+#[cfg(feature = "data-migrate")]
+use crate::autoconfigure::DataMigrationFailed;
+#[cfg(not(feature = "data-migrate"))]
+use crate::autoconfigure::MigrationsNeedFeature;
 use crate::autoconfigure::{DataUnreachable, SourceBuildError};
 use crate::error::StartupError;
 use crate::failure::{FailureAnalysis, FailureAnalyzer};
@@ -130,6 +134,258 @@ impl FailureAnalyzer for DataUnreachableAnalyzer {
     }
 }
 
+/// Recognises the migrations of a source that failed while the `DataService` started
+/// (feature `data-migrate`), and a source that enables migrations in a build without that
+/// feature. The text is fixed per kind of error; it names the source, the version of the
+/// migration at fault (with its description where the error has one) and the key to change.
+/// It never shows SQL, a path, a file name or the URL. The report for a dirty history says what
+/// the dirty state means for the driver of the source: on MySQL a script did not finish, on
+/// the others a transaction was interrupted.
+pub(crate) struct DataMigrationAnalyzer;
+
+impl FailureAnalyzer for DataMigrationAnalyzer {
+    #[cfg(feature = "data-migrate")]
+    fn analyze(&self, failure: &StartupError) -> Option<FailureAnalysis> {
+        let failed = failure.find_cause::<DataMigrationFailed>()?;
+        Some(migration_failure(&failed.error, failed.driver))
+    }
+
+    #[cfg(not(feature = "data-migrate"))]
+    fn analyze(&self, failure: &StartupError) -> Option<FailureAnalysis> {
+        let off = failure.find_cause::<MigrationsNeedFeature>()?;
+        Some(FailureAnalysis::new(
+            format!(
+                "The data source `{}` enables migrations in `{}`, but this build has no \
+                 migration support.",
+                off.source_name, off.key
+            ),
+            format!(
+                "Enable the `data-migrate` feature of `oxbloom-boot`, or set `{} = false`.",
+                off.key
+            ),
+        ))
+    }
+}
+
+/// The configuration prefix of the source `name`: `data` for the default source, and
+/// `data.sources.<name>` for a named one.
+#[cfg(feature = "data-migrate")]
+fn prefix_of(name: &str) -> String {
+    if name == "default" {
+        "data".to_owned()
+    } else {
+        format!("data.sources.{name}")
+    }
+}
+
+/// The report of a failed migration run, fixed per kind of [`MigrateError`].
+#[cfg(feature = "data-migrate")]
+fn migration_failure(
+    error: &oxbloom_data::MigrateError,
+    driver: Option<oxbloom_data::Driver>,
+) -> FailureAnalysis {
+    use oxbloom_data::Driver;
+    use oxbloom_data::MigrateError as E;
+    use oxbloom_data::migrate::LoadReason;
+
+    let name = error.source_name();
+    let prefix = prefix_of(name);
+    let key = |field: &str| format!("`{prefix}.migrations.{field}`");
+    let migration = |version: i64, description: Option<&str>| match description {
+        Some(description) => format!("migration {version} ({description})"),
+        None => format!("migration {version}"),
+    };
+    let mysql = driver == Some(Driver::Mysql);
+    let (description, action) = match error {
+        E::Load {
+            reason: LoadReason::NotConfigured,
+            ..
+        } => (
+            format!("The data source `{name}` enables migrations, but has none to run."),
+            format!(
+                "Set {} to the directory of the migration files, or register an \
+                 `EmbeddedMigrations` bean with an entry for the source `{name}`.",
+                key("path")
+            ),
+        ),
+        E::Load {
+            reason: LoadReason::Unreadable,
+            ..
+        } => (
+            format!("The migration directory of the data source `{name}` could not be read."),
+            format!(
+                "Check that {} names an existing directory the application can read. The \
+                 path is not shown.",
+                key("path")
+            ),
+        ),
+        E::Load {
+            reason: LoadReason::Empty,
+            ..
+        } => (
+            format!("The migration directory of the data source `{name}` holds no migrations."),
+            format!(
+                "Put the migration files (`<version>_<description>.sql`) into the directory of \
+                 {}, or point it at the right directory.",
+                key("path")
+            ),
+        ),
+        E::Load {
+            reason: LoadReason::InvalidTable,
+            ..
+        } => (
+            format!("The migration history table name of the data source `{name}` is invalid."),
+            format!(
+                "Set {} to a name that matches `[A-Za-z_][A-Za-z0-9_]*` and has at most 63 \
+                 characters.",
+                key("table")
+            ),
+        ),
+        E::Dirty {
+            version,
+            description,
+            ..
+        } => {
+            let meaning = if mysql {
+                "On MySQL this means a migration script did not finish: it failed part way, and \
+                 the statements before the failure stay applied, because MySQL commits each \
+                 schema change at once."
+            } else {
+                "This means the transaction of the migration was interrupted, for example by a \
+                 crash of the database server, before it was recorded as finished."
+            };
+            (
+                format!(
+                    "The migration history of the data source `{name}` is dirty: {} started and \
+                     did not finish. {meaning}",
+                    migration(*version, description.as_deref())
+                ),
+                format!(
+                    "Repair the database by hand: finish or undo what migration {version} \
+                     changed, then delete its row from the history table ({}). The next start \
+                     applies it again.",
+                    key("table")
+                ),
+            )
+        }
+        E::ChecksumMismatch {
+            version,
+            description,
+            ..
+        } => (
+            format!(
+                "{} of the data source `{name}` was applied, but its file has changed since.",
+                capitalize(&migration(*version, Some(description)))
+            ),
+            format!(
+                "Restore migration {version} as it was applied, and put the change into a new \
+                 migration with a higher version."
+            ),
+        ),
+        E::MissingFile { version, .. } => (
+            format!(
+                "Migration {version} of the data source `{name}` was applied, but its file is \
+                 missing."
+            ),
+            format!(
+                "Restore the file of migration {version}, or set {} to accept applied \
+                 migrations without a file.",
+                key("ignore-missing")
+            ),
+        ),
+        E::NotReversible { version, .. } => (
+            format!(
+                "Migration {version} of the data source `{name}` has no down file, so it \
+                 cannot be reverted."
+            ),
+            format!("Add a down file for migration {version}."),
+        ),
+        E::Script {
+            version,
+            description,
+            ..
+        } => (
+            format!(
+                "{} of the data source `{name}` failed.",
+                capitalize(&migration(*version, Some(description)))
+            ),
+            if mysql {
+                format!(
+                    "Fix migration {version} and start again. MySQL commits each schema change \
+                     at once, so the statements before the failure may stay applied and the \
+                     next start may report a dirty history that needs a repair first. The SQL \
+                     and the database message are not shown."
+                )
+            } else {
+                format!(
+                    "Fix migration {version} and start again; its transaction was rolled back, \
+                     so it left no changes. The SQL and the database message are not shown."
+                )
+            },
+        ),
+        E::Timeout { .. } => (
+            format!(
+                "The migrations of the data source `{name}` did not finish within the timeout."
+            ),
+            format!(
+                "Raise {} or make the migrations faster; the time includes the wait for the \
+                 migration lock that another instance may hold.",
+                key("timeout")
+            ),
+        ),
+        E::UnknownSource { .. } => (
+            format!("The data source `{name}` enables migrations, but it does not exist."),
+            format!(
+                "Configure the source `{name}` (with `{prefix}.url`), register it in the \
+                 application's `DataSources`, or set {} to false.",
+                key("enabled")
+            ),
+        ),
+        E::PrivateMemory { .. } => (
+            format!(
+                "The data source `{name}` is an in-memory SQLite database with a private \
+                 cache, which cannot be migrated."
+            ),
+            format!(
+                "Add `cache=shared` to the URL in `{prefix}.url`, or use a database file. The \
+                 URL is not shown."
+            ),
+        ),
+        E::DriverDisabled { .. } => (
+            format!("The database driver of the data source `{name}` is not in this build."),
+            match driver {
+                Some(driver) => format!("Enable the `data-{driver}` feature of `oxbloom-boot`."),
+                None => "Enable the `data-*` feature of `oxbloom-boot` for the driver of the \
+                         source."
+                    .to_owned(),
+            },
+        ),
+        E::Database { .. } => (
+            format!("The database failed while the migrations of the data source `{name}` ran."),
+            format!(
+                "Check that the database is reachable through `{prefix}.url` and that its user \
+                 may create and write the history table ({}). The database message is not \
+                 shown.",
+                key("table")
+            ),
+        ),
+        _ => (
+            format!("The migrations of the data source `{name}` failed."),
+            "Check the migration settings and files of the source.".to_owned(),
+        ),
+    };
+    FailureAnalysis::new(description, action)
+}
+
+/// `text` with its first letter in upper case.
+#[cfg(feature = "data-migrate")]
+fn capitalize(text: &str) -> String {
+    let mut chars = text.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -240,6 +496,172 @@ mod tests {
             a.description(),
             "The data source `default` failed the start-up check: the TLS configuration of the \
              database is unusable."
+        );
+    }
+
+    #[cfg(feature = "data-migrate")]
+    fn migration_report(
+        error: oxbloom_data::MigrateError,
+        driver: Option<oxbloom_data::Driver>,
+    ) -> FailureAnalysis {
+        let failed = ServiceError::new(DataMigrationFailed { error, driver });
+        analyze(&DataMigrationAnalyzer, failed).unwrap()
+    }
+
+    #[cfg(feature = "data-migrate")]
+    #[test]
+    fn a_dirty_history_says_what_it_means_for_the_driver() {
+        use oxbloom_data::{Driver, MigrateError};
+        let dirty = || MigrateError::Dirty {
+            source_name: "orders".into(),
+            version: 20261125,
+            description: Some("add totals".into()),
+        };
+        let mysql = migration_report(dirty(), Some(Driver::Mysql)).to_string();
+        assert!(mysql.contains("`orders`"), "{mysql}");
+        assert!(mysql.contains("migration 20261125 (add totals)"), "{mysql}");
+        assert!(mysql.contains("script did not finish"), "{mysql}");
+        assert!(!mysql.contains("transaction"), "{mysql}");
+        assert!(
+            mysql.contains("`data.sources.orders.migrations.table`"),
+            "{mysql}"
+        );
+        for driver in [Driver::Postgres, Driver::Sqlite] {
+            let other = migration_report(dirty(), Some(driver)).to_string();
+            assert!(other.contains("transaction"), "{other}");
+            assert!(other.contains("interrupted"), "{other}");
+            assert!(other.contains("migration 20261125"), "{other}");
+        }
+    }
+
+    #[cfg(feature = "data-migrate")]
+    #[test]
+    fn every_migration_error_names_the_source_and_its_key_or_version() {
+        use oxbloom_data::migrate::LoadReason;
+        use oxbloom_data::{Driver, MigrateError as E};
+        let s = || "default".to_string();
+        let cases: Vec<(E, &[&str])> = vec![
+            (
+                E::Load {
+                    source_name: s(),
+                    reason: LoadReason::NotConfigured,
+                },
+                &["`data.migrations.path`", "`EmbeddedMigrations`"],
+            ),
+            (
+                E::Load {
+                    source_name: s(),
+                    reason: LoadReason::Unreadable,
+                },
+                &["`data.migrations.path`"],
+            ),
+            (
+                E::Load {
+                    source_name: s(),
+                    reason: LoadReason::Empty,
+                },
+                &["`data.migrations.path`"],
+            ),
+            (
+                E::Load {
+                    source_name: s(),
+                    reason: LoadReason::InvalidTable,
+                },
+                &["`data.migrations.table`"],
+            ),
+            (
+                E::ChecksumMismatch {
+                    source_name: s(),
+                    version: 3,
+                    description: "x".into(),
+                },
+                &["Migration 3 (x)", "changed", "migration 3"],
+            ),
+            (
+                E::MissingFile {
+                    source_name: s(),
+                    version: 4,
+                },
+                &["Migration 4", "`data.migrations.ignore-missing`"],
+            ),
+            (
+                E::NotReversible {
+                    source_name: s(),
+                    version: 5,
+                },
+                &["Migration 5", "down file"],
+            ),
+            (
+                E::Timeout { source_name: s() },
+                &["`data.migrations.timeout`"],
+            ),
+            (
+                E::UnknownSource { source_name: s() },
+                &["does not exist", "`data.migrations.enabled`"],
+            ),
+            (
+                E::PrivateMemory { source_name: s() },
+                &["`data.url`", "cache=shared"],
+            ),
+            (E::DriverDisabled { source_name: s() }, &["`data-sqlite`"]),
+            (
+                E::Database {
+                    source_name: s(),
+                    cause: None,
+                },
+                &["`data.url`"],
+            ),
+        ];
+        for (error, expected) in cases {
+            let text = migration_report(error, Some(Driver::Sqlite)).to_string();
+            assert!(text.contains("`default`"), "{text}");
+            for part in expected {
+                assert!(text.contains(part), "{part}: {text}");
+            }
+        }
+    }
+
+    #[cfg(feature = "data-migrate")]
+    #[test]
+    fn a_failed_script_says_whether_it_was_rolled_back() {
+        use oxbloom_data::{Driver, MigrateError};
+        let script = || MigrateError::Script {
+            source_name: "default".into(),
+            version: 2,
+            description: "seed".into(),
+            cause: oxbloom_data::sqlx::Error::RowNotFound,
+        };
+        let sqlite = migration_report(script(), Some(Driver::Sqlite)).to_string();
+        assert!(sqlite.contains("Migration 2 (seed)"), "{sqlite}");
+        assert!(sqlite.contains("rolled back"), "{sqlite}");
+        let mysql = migration_report(script(), Some(Driver::Mysql)).to_string();
+        assert!(mysql.contains("dirty history"), "{mysql}");
+        assert!(!mysql.contains("rolled back"), "{mysql}");
+        // The display of the wrapper is the fixed text.
+        let failed = DataMigrationFailed {
+            error: script(),
+            driver: None,
+        };
+        assert_eq!(
+            failed.to_string(),
+            "data source `default`: the migrations failed"
+        );
+    }
+
+    #[cfg(not(feature = "data-migrate"))]
+    #[test]
+    fn migrations_without_the_feature_name_the_feature_and_the_key() {
+        let off = MigrationsNeedFeature {
+            source_name: "orders".into(),
+            key: "data.sources.orders.migrations.enabled".into(),
+        };
+        let di = DiError::creation_from::<oxbloom_data::DataSettings>(off);
+        let a = analyze(&DataMigrationAnalyzer, di).unwrap().to_string();
+        assert!(a.contains("`orders`"), "{a}");
+        assert!(a.contains("`data-migrate`"), "{a}");
+        assert!(
+            a.contains("`data.sources.orders.migrations.enabled = false`"),
+            "{a}"
         );
     }
 }
