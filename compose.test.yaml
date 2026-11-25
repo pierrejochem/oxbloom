@@ -1,0 +1,32 @@
+# Throwaway Postgres and MySQL servers for the database conformance tests (`make test-db`).
+# The ports are bound to the loopback interface only and the credentials are not secret; the
+# data lives in tmpfs, so it is gone when the services stop.
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: oxbloom
+      POSTGRES_PASSWORD: oxbloom
+      POSTGRES_DB: postgres
+    ports:
+      - "127.0.0.1:55432:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oxbloom -d postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: oxbloom
+    ports:
+      - "127.0.0.1:53306:3306"
+    tmpfs:
+      - /var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -poxbloom --silent"]
+      interval: 2s
+      timeout: 3s
+      retries: 60

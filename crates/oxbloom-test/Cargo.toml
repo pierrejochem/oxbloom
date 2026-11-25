@@ -30,6 +30,12 @@ http-client = ["oxbloom-boot/http-client", "dep:oxbloom-http-client", "dep:async
 # `FakeProvider`: an OpenID Connect provider over `MockHttpClient` that signs id tokens with an
 # ES256 key generated at construction (`aws-lc-rs`, no `ring`).
 oauth2 = ["http-client", "dep:jsonwebtoken", "dep:aws-lc-rs", "dep:base64"]
+# `TestDatabase` over SQLite; `oxbloom-boot/data-sqlite` lets `ContextRunner` run
+# `DataAutoConfiguration` on the `config_snippet`.
+data = ["dep:oxbloom-data", "oxbloom-data/sqlite", "oxbloom-boot/data-sqlite"]
+# `TestDatabase::postgres` and `TestDatabase::mysql`; `url` rewrites the database of the server URL.
+data-postgres = ["data", "oxbloom-data/postgres", "oxbloom-boot/data-postgres", "dep:url"]
+data-mysql = ["data", "oxbloom-data/mysql", "oxbloom-boot/data-mysql", "dep:url"]
 
 [dependencies]
 # The ES256 key pair of `FakeProvider` (feature `oauth2`); `aws-lc-sys` only, no `ring`.
@@ -46,6 +52,7 @@ jsonwebtoken = { version = "12.0.0", features = ["rust_crypto"], optional = true
 oxbloom-boot = { version = "0.1.0", path = "../oxbloom-boot" }
 oxbloom-config = { version = "0.1.0", path = "../oxbloom-config" }
 oxbloom-core = { version = "0.1.0", path = "../oxbloom-core" }
+oxbloom-data = { version = "0.1.0", path = "../oxbloom-data", optional = true }
 oxbloom-di = { version = "0.1.0", path = "../oxbloom-di" }
 oxbloom-http-client = { version = "0.1.0", path = "../oxbloom-http-client", default-features = false, features = ["json"], optional = true }
 oxbloom-security = { version = "0.1.0", path = "../oxbloom-security", optional = true }
@@ -59,6 +66,8 @@ serde_json = { version = "1.0.154", optional = true }
 tempfile = "3.27.0"
 tokio = { version = "1.54.1", features = ["rt", "time", "macros"] }
 tokio-rustls = { version = "0.26.6", default-features = false, optional = true }
+# Replaces the database in the server URLs of `TestDatabase` (features `data-postgres`, `data-mysql`).
+url = { version = "2.5.8", optional = true }
 
 [dev-dependencies]
 bytes = "1.12.1"

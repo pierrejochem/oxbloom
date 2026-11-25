@@ -2014,6 +2014,7 @@ dependencies = [
  "oxbloom-boot",
  "oxbloom-config",
  "oxbloom-core",
+ "oxbloom-data",
  "oxbloom-di",
  "oxbloom-http-client",
  "oxbloom-security",
@@ -2025,6 +2026,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-rustls",
+ "url",
 ]
 
 [[package]]
