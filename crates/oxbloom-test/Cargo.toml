@@ -71,6 +71,12 @@ url = { version = "2.5.8", optional = true }
 
 [dev-dependencies]
 bytes = "1.12.1"
+# The data conformance suites (`tests/data_conformance.rs`, `tests/data_conformance_boot.rs`):
+# the `DataHealthIndicator`, the actuator health endpoint of a `TestApp`, and the retry policy
+# of `transaction_with_retry`.
+oxbloom-actuator = { version = "0.1.0", path = "../oxbloom-actuator", features = ["data"] }
+oxbloom-boot = { version = "0.1.0", path = "../oxbloom-boot", features = ["actuator"] }
+oxbloom-tasks = { version = "0.1.0", path = "../oxbloom-tasks" }
 http = "1.5.0"
 jsonwebtoken = { version = "12.0.0", features = ["rust_crypto"] }
 oxbloom-security = { version = "0.1.0", path = "../oxbloom-security" }
