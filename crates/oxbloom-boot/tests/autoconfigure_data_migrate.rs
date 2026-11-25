@@ -710,6 +710,21 @@ async fn the_data_service_runs_the_migrations_itself() {
     let _ = DataService::new(sources, true);
 }
 
+#[tokio::test]
+async fn the_debug_of_the_data_service_hides_the_migration_path() {
+    let config = oxbloom_config::Config::from_str(
+        "[data]\nurl = \"sqlite::memory:\"\n[data.migrations]\nenabled = true\n\
+         path = \"/srv/oxbloom-secret-dir/migrations\"",
+    )
+    .unwrap();
+    let settings = Arc::new(DataSettings::from_config(&config).unwrap());
+    let sources = Arc::new(DataSources::build(&settings, &|_| Err(DataError::Tls)).unwrap());
+    let service = DataService::with_migrations(sources, settings, None, false);
+    let text = format!("{service:?}");
+    assert!(text.contains("<redacted>"), "{text}");
+    assert!(!text.contains("oxbloom-secret-dir"), "{text}");
+}
+
 #[test]
 fn the_property_metadata_lists_the_migration_keys() {
     let keys: Vec<_> = DataAutoConfiguration::properties()

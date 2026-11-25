@@ -489,6 +489,32 @@ fn every_key_is_read_for_the_default_and_a_named_source() {
 }
 
 #[test]
+fn debug_hides_the_migration_path() {
+    let s = settings(&format!(
+        "{SQLITE}[data.migrations]\nenabled = true\npath = \"/srv/oxbloom-secret-dir/migrations\""
+    ))
+    .unwrap();
+    let source = &s.sources[0];
+    let migrations = source.migrations.as_ref().unwrap();
+    for text in [
+        format!("{migrations:?}"),
+        format!("{source:?}"),
+        format!("{s:?}"),
+    ] {
+        assert!(text.contains("<redacted>"), "{text}");
+        assert!(!text.contains("oxbloom-secret-dir"), "{text}");
+        assert!(text.contains("_sqlx_migrations"), "{text}");
+    }
+    // Without a path there is nothing to hide.
+    let s = settings(&format!("{SQLITE}[data.migrations]\nenabled = true")).unwrap();
+    let text = format!("{:?}", s.sources[0].migrations.as_ref().unwrap());
+    assert!(
+        text.contains("path: None") && !text.contains("<redacted>"),
+        "{text}"
+    );
+}
+
+#[test]
 fn other_keys_are_validated_but_dropped_when_not_enabled() {
     let s = settings(&format!(
         "{SQLITE}[data.migrations]\nenabled = false\ntable = \"ok_name\""

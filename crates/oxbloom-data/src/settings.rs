@@ -211,7 +211,8 @@ pub struct SourceSettings {
 /// placed in SQL by the runner, so it is restricted to `[A-Za-z_][A-Za-z0-9_]*` with at most
 /// 63 characters. Renaming the history table of an existing database needs a copy of its
 /// contents first, as `sqlx` warns. `path` is read as written and is not checked against the
-/// file system here.
+/// file system here. `Debug` shows a set `path` as `"<redacted>"`, so a debug print of the
+/// settings never names the directory.
 ///
 /// # Examples
 ///
@@ -230,7 +231,7 @@ pub struct SourceSettings {
 /// assert!(migrations.locking && !migrations.ignore_missing && migrations.path.is_none());
 /// # Ok::<(), oxbloom_config::ConfigError>(())
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct MigrationSettings {
     /// The directory with the migration files. Unset means the embedded migrator.
     pub path: Option<std::path::PathBuf>,
@@ -244,6 +245,18 @@ pub struct MigrationSettings {
     pub timeout: Duration,
     /// Whether `sqlx` takes its database lock. Default true.
     pub locking: bool,
+}
+
+impl fmt::Debug for MigrationSettings {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MigrationSettings")
+            .field("path", &self.path.as_ref().map(|_| "<redacted>"))
+            .field("table", &self.table)
+            .field("ignore_missing", &self.ignore_missing)
+            .field("timeout", &self.timeout)
+            .field("locking", &self.locking)
+            .finish()
+    }
 }
 
 impl SourceSettings {
