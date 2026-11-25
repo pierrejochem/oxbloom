@@ -359,7 +359,7 @@ Register it with `.instance(..)` as shown (see [Dependency injection](03-depende
 - Sources migrate one after the other, the default source first. A failure stops the rest and fails the start. Migrating several sources at once is not supported.
 - A source with migrations enabled connects and migrates even when `data.connect-on-startup` is `false`. The other sources stay lazy.
 - The failure report names the source, the version of the migration at fault and the key to change. It never contains SQL, a file path or the URL. The error text is fixed (`MigrateError`); the database error stays available through `source()` and may contain SQL object names, so do not log it.
-- A dirty history means a migration started and did not finish. On MySQL it means a script failed part way and its earlier statements stay applied. On the other databases it means the transaction was interrupted, for example by a crash of the server. The report names the version and says what to repair; see MySQL below.
+- A dirty history means a migration started and did not finish. On MySQL it means a script failed part way and its earlier statements stay applied. PostgreSQL and SQLite run an ordinary script in a transaction, so a failed ordinary script leaves no dirty row. There a dirty history typically means a `-- no-transaction` migration that failed, or a crash of the server during a migration. The report names the version and says what to repair; see MySQL below.
 - A migration runs on a connection of its own with statement logging switched off, so the SQL text never reaches the logs of `sqlx`.
 
 ### Transactions, locking and the databases
@@ -451,11 +451,11 @@ For PostgreSQL and MySQL, the features `data-postgres` and `data-mysql` of `oxbl
 
 ### The conformance suite and `make test-db`
 
-The conformance suite runs the same transaction, rollback, savepoint, retry, health, startup and secrecy checks against every driver. The tests are named `data_conformance_*` and live in `crates/oxbloom-test/tests/`, not in `oxbloom-data`: a dev-dependency of `oxbloom-test` on `oxbloom-data` would turn on `sqlite` and `retry` in every test build of `oxbloom-data`, and the builds without a driver would no longer be tested.
+The conformance suite runs the same transaction, rollback, savepoint, retry, health, startup and secrecy checks against every driver. The transaction tests are named `data_conformance_*` and the migration tests `data_migrate_conformance*`; both live in `crates/oxbloom-test/tests/`, not in `oxbloom-data`: a dev-dependency of `oxbloom-test` on `oxbloom-data` would turn on `sqlite` and `retry` in every test build of `oxbloom-data`, and the builds without a driver would no longer be tested.
 
 - The SQLite tests always run, with `cargo test`.
 - The PostgreSQL and MySQL tests are `#[ignore]`d. They need the two environment variables above.
-- `make test-db` starts both servers from `compose.test.yaml` (`postgres:17` on 127.0.0.1:55432 and `mysql:8.4` on 127.0.0.1:53306, both on tmpfs), exports the two URLs, runs `cargo test --workspace --all-features -- --ignored data_conformance` and removes the containers with `down -v`, also when the tests fail. It needs `docker compose`, `docker-compose` or `podman compose`.
+- `make test-db` starts both servers from `compose.test.yaml` (`postgres:17` on 127.0.0.1:55432 and `mysql:8.4` on 127.0.0.1:53306, both on tmpfs), exports the two URLs, runs `cargo test --workspace --all-features --no-fail-fast -- --ignored data_conformance data_migrate_conformance`, so every test binary runs even when one fails, and removes the containers with `down -v`, also when the tests fail. It needs `docker compose`, `docker-compose` or `podman compose`.
 - The MySQL isolation check reads `information_schema.innodb_trx`, which needs the `PROCESS` privilege. A restricted `OXBLOOM_TEST_MYSQL_URL` user fails that test.
 
 ## Limits
