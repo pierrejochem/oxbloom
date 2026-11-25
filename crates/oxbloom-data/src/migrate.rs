@@ -3,7 +3,8 @@
 //! This module is only available with the cargo feature `migrate`. [`run`] applies the pending
 //! migrations of one source, read from the directory of [`MigrationSettings::path`] or taken
 //! from an embedded [`Migrator`] (registered per source in [`EmbeddedMigrations`]), and
-//! returns a [`MigrationReport`] with the versions it applied. The files and the history table
+//! returns a [`MigrationReport`] with the versions it applied. [`revert`] goes back to a target
+//! version with the down files. The files and the history table
 //! are those of `sqlx`, so an application can move between Oxbloom and `sqlx-cli` without a
 //! conversion.
 //!
@@ -192,12 +193,13 @@ pub struct AppliedMigration {
     pub description: String,
 }
 
-/// The migrations one [`run`] applied, in the order of their versions.
+/// The migrations one [`run`] applied, in the order of their versions, or the migrations one
+/// [`revert`] reverted, highest version first.
 ///
 /// The versions are the difference between the history table before and after the run. With
 /// several runners on one database a report can name a migration that another runner applied
 /// at the same time. The `Debug` output shows the versions only; the `Display` text lists the
-/// versions with their descriptions.
+/// versions with their descriptions and starts with `applied` or `reverted`.
 ///
 /// # Examples
 ///
@@ -212,10 +214,13 @@ pub struct AppliedMigration {
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct MigrationReport {
     applied: Vec<AppliedMigration>,
+    /// Whether the report is the result of a revert.
+    reverted: bool,
 }
 
 impl MigrationReport {
-    /// The applied migrations, in the order of their versions.
+    /// The applied migrations, in the order of their versions; for the report of a
+    /// [`revert`], the reverted migrations, highest version first.
     ///
     /// # Examples
     ///
@@ -285,7 +290,8 @@ impl MigrationReport {
         self.applied.is_empty()
     }
 
-    /// The highest version the run applied, or `None` when it applied nothing.
+    /// The highest version the run applied or the revert reverted, or `None` when it changed
+    /// nothing.
     ///
     /// # Examples
     ///
@@ -314,7 +320,7 @@ impl MigrationReport {
     /// # fn main() {}
     /// ```
     pub fn latest_version(&self) -> Option<i64> {
-        self.applied.last().map(|m| m.version)
+        self.applied.iter().map(|m| m.version).max()
     }
 }
 
@@ -329,10 +335,11 @@ impl fmt::Debug for MigrationReport {
 
 impl fmt::Display for MigrationReport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let verb = if self.reverted { "reverted" } else { "applied" };
         match self.applied.len() {
-            0 => return f.write_str("applied no migrations"),
-            1 => f.write_str("applied 1 migration: ")?,
-            n => write!(f, "applied {n} migrations: ")?,
+            0 => return write!(f, "{verb} no migrations"),
+            1 => write!(f, "{verb} 1 migration: ")?,
+            n => write!(f, "{verb} {n} migrations: ")?,
         }
         for (i, m) in self.applied.iter().enumerate() {
             if i > 0 {
@@ -371,7 +378,7 @@ pub enum LoadReason {
     InvalidTable,
 }
 
-/// The failure of a [`run`].
+/// The failure of a [`run`] or a [`revert`].
 ///
 /// The `Display` text is fixed per variant apart from the source name, the version and the
 /// description; it never contains SQL, file contents, a file path or the URL. The `Debug`
@@ -433,6 +440,14 @@ pub enum MigrateError {
         /// The version of the missing migration.
         version: i64,
     },
+    /// A migration that has to be reverted has no down file, so [`revert`] reverted nothing.
+    NotReversible {
+        /// The source.
+        source_name: String,
+        /// The version of the migration without a down file; the highest one when several
+        /// have none.
+        version: i64,
+    },
     /// A migration script failed. On Postgres and SQLite it was rolled back; on MySQL it may
     /// be partly applied.
     Script {
@@ -488,6 +503,7 @@ impl MigrateError {
             | Self::Dirty { source_name, .. }
             | Self::ChecksumMismatch { source_name, .. }
             | Self::MissingFile { source_name, .. }
+            | Self::NotReversible { source_name, .. }
             | Self::Script { source_name, .. }
             | Self::Timeout { source_name }
             | Self::UnknownSource { source_name }
@@ -513,6 +529,7 @@ impl MigrateError {
             Self::Dirty { version, .. }
             | Self::ChecksumMismatch { version, .. }
             | Self::MissingFile { version, .. }
+            | Self::NotReversible { version, .. }
             | Self::Script { version, .. } => Some(*version),
             Self::Load { .. }
             | Self::Timeout { .. }
@@ -569,6 +586,10 @@ impl fmt::Display for MigrateError {
                     "migration {version} was applied, but its file is missing"
                 )
             }
+            Self::NotReversible { version, .. } => write!(
+                f,
+                "migration {version} has no down file, so it cannot be reverted"
+            ),
             Self::Script {
                 version,
                 description,
@@ -621,6 +642,14 @@ impl fmt::Debug for MigrateError {
                 version,
             } => f
                 .debug_struct("MissingFile")
+                .field("source_name", source_name)
+                .field("version", version)
+                .finish(),
+            Self::NotReversible {
+                source_name,
+                version,
+            } => f
+                .debug_struct("NotReversible")
                 .field("source_name", source_name)
                 .field("version", version)
                 .finish(),
@@ -683,6 +712,12 @@ impl std::error::Error for MigrateError {
 /// On Postgres and MySQL the run uses a connection of its own, which is closed afterwards, so
 /// a database lock that `sqlx` leaves behind after a failure is released with it.
 ///
+/// The work runs on a connection of its own with `sqlx` statement logging off, so no migration
+/// SQL reaches the `tracing` output through the `sqlx::query` events.
+///
+/// A long migration on SQLite holds the write lock for its whole run, so a second instance that
+/// starts meanwhile can hit the busy timeout of SQLite and fail.
+///
 /// # Errors
 ///
 /// - [`MigrateError::UnknownSource`] when there is no source `name`, and
@@ -737,6 +772,107 @@ pub async fn run(
     settings: &MigrationSettings,
     embedded: Option<&Migrator>,
 ) -> Result<MigrationReport, MigrateError> {
+    execute(sources, name, settings, embedded, Op::Run).await
+}
+
+/// Reverts the migrations of the source `name` that are above `target_version`, newest first,
+/// with their down files, and reports the migrations it reverted, highest version first.
+///
+/// The source of the migrations, the history `table`, `ignore_missing`, `locking` and the
+/// `timeout` work as they do for [`run`], and a changed or missing file, a dirty history and a
+/// failing script fail the revert with the same errors. A migration is only reversible when
+/// the migrations hold a down file for it (`N_name.down.sql` next to `N_name.up.sql`, or a
+/// [`MigrationType::ReversibleDown`](sqlx::migrate::MigrationType::ReversibleDown) migration in
+/// an embedded migrator). The check runs before the first script: when an applied migration
+/// above `target_version` has no down file, nothing is reverted and the error names the
+/// highest such version. A `target_version` at or above the newest applied version reverts
+/// nothing, and `0` reverts everything.
+///
+/// On SQLite the revert holds the write lock of the database for its whole run, as [`run`]
+/// does, and a failure is not repeated. On Postgres and MySQL it uses a connection of its own,
+/// which is closed afterwards.
+///
+/// # Errors
+///
+/// The errors of [`run`], and [`MigrateError::NotReversible`] for an applied migration above
+/// `target_version` that has no down file.
+///
+/// # Examples
+///
+/// ```
+/// # #[cfg(feature = "sqlite")]
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// use oxbloom_config::Config;
+/// use oxbloom_data::migrate::{self, MigrateError};
+/// use oxbloom_data::sqlx::SqlSafeStr;
+/// use oxbloom_data::sqlx::migrate::{Migration, MigrationType, Migrator};
+/// use oxbloom_data::{DataError, DataSettings, DataSources};
+///
+/// let config = Config::from_str("[data]\nurl = \"sqlite::memory:\"\n[data.migrations]\nenabled = true")?;
+/// let settings = DataSettings::from_config(&config)?;
+/// let sources = DataSources::build(&settings, &|_| Err(DataError::Tls))?;
+/// let migrations = settings.sources[0].migrations.as_ref().ok_or("no migrations")?;
+///
+/// let migration = |version, kind, sql: &'static str| {
+///     Migration::new(version, "create accounts".into(), kind, sql.into_sql_str(), false)
+/// };
+/// let migrator = Migrator::with_migrations(vec![
+///     migration(1, MigrationType::ReversibleUp, "CREATE TABLE accounts (id INTEGER)"),
+///     migration(1, MigrationType::ReversibleDown, "DROP TABLE accounts"),
+///     migration(2, MigrationType::Simple, "CREATE TABLE orders (id INTEGER)"),
+/// ]);
+/// migrate::run(&sources, "default", migrations, Some(&migrator)).await?;
+///
+/// // Migration 2 has no down file, so nothing is reverted.
+/// let err = migrate::revert(&sources, "default", migrations, Some(&migrator), 0).await.unwrap_err();
+/// assert!(matches!(err, MigrateError::NotReversible { version: 2, .. }));
+///
+/// // Going back to version 1 only needs the down files above it, and there are none.
+/// let report = migrate::revert(&sources, "default", migrations, Some(&migrator), 2).await?;
+/// assert!(report.is_empty());
+/// # Ok(())
+/// # }
+/// # #[cfg(not(feature = "sqlite"))]
+/// # fn main() {}
+/// ```
+pub async fn revert(
+    sources: &DataSources,
+    name: &str,
+    settings: &MigrationSettings,
+    embedded: Option<&Migrator>,
+    target_version: i64,
+) -> Result<MigrationReport, MigrateError> {
+    execute(
+        sources,
+        name,
+        settings,
+        embedded,
+        Op::Revert(target_version),
+    )
+    .await
+}
+
+/// What a call does to the history. Without a driver feature nothing reads the target.
+#[derive(Clone, Copy)]
+#[cfg_attr(
+    not(any(feature = "postgres", feature = "mysql", feature = "sqlite")),
+    allow(dead_code)
+)]
+enum Op {
+    Run,
+    Revert(i64),
+}
+
+/// The shared path of [`run`] and [`revert`]: the checks that need no database, the migrator,
+/// and the work under the timeout.
+async fn execute(
+    sources: &DataSources,
+    name: &str,
+    settings: &MigrationSettings,
+    embedded: Option<&Migrator>,
+    op: Op,
+) -> Result<MigrationReport, MigrateError> {
     let Some(driver) = sources.driver_of(name) else {
         return Err(MigrateError::UnknownSource {
             source_name: name.to_string(),
@@ -745,9 +881,15 @@ pub async fn run(
     if !is_valid_table_name(&settings.table) {
         return Err(load_error(name, LoadReason::InvalidTable));
     }
+    // Before the directory is read, so a disabled driver is not hidden by a load error.
+    if !driver_enabled(driver) {
+        return Err(MigrateError::DriverDisabled {
+            source_name: name.to_string(),
+        });
+    }
     let work = async {
         let migrator = build_migrator(name, settings, embedded).await?;
-        dispatch(sources, name, driver, &migrator, settings).await
+        dispatch(sources, name, driver, &migrator, settings, op).await
     };
     tokio::time::timeout(settings.timeout, work)
         .await
@@ -756,6 +898,13 @@ pub async fn run(
                 source_name: name.to_string(),
             })
         })
+}
+
+/// Whether the cargo feature of `driver` is on in this build.
+fn driver_enabled(driver: Driver) -> bool {
+    (cfg!(feature = "postgres") && driver == Driver::Postgres)
+        || (cfg!(feature = "mysql") && driver == Driver::Mysql)
+        || (cfg!(feature = "sqlite") && driver == Driver::Sqlite)
 }
 
 fn load_error(name: &str, reason: LoadReason) -> MigrateError {
@@ -803,6 +952,7 @@ async fn dispatch(
     driver: Driver,
     migrator: &Migrator,
     settings: &MigrationSettings,
+    op: Op,
 ) -> Result<MigrationReport, MigrateError> {
     let unknown = || MigrateError::UnknownSource {
         source_name: name.to_string(),
@@ -811,21 +961,21 @@ async fn dispatch(
         #[cfg(feature = "postgres")]
         Driver::Postgres => {
             let pool = sources.postgres(name).ok_or_else(unknown)?;
-            migrate_pool(pool, name, migrator, settings).await
+            migrate_pool(pool, name, migrator, settings, op).await
         }
         #[cfg(feature = "mysql")]
         Driver::Mysql => {
             let pool = sources.mysql(name).ok_or_else(unknown)?;
-            migrate_pool(pool, name, migrator, settings).await
+            migrate_pool(pool, name, migrator, settings, op).await
         }
         #[cfg(feature = "sqlite")]
         Driver::Sqlite => {
             let pool = sources.sqlite(name).ok_or_else(unknown)?;
-            migrate_pool(pool, name, migrator, settings).await
+            migrate_pool(pool, name, migrator, settings, op).await
         }
         #[allow(unreachable_patterns)]
         _ => {
-            let _ = (sources, migrator, settings, unknown);
+            let _ = (sources, migrator, settings, op, unknown);
             Err(MigrateError::DriverDisabled {
                 source_name: name.to_string(),
             })
@@ -833,116 +983,263 @@ async fn dispatch(
     }
 }
 
-/// Runs the migrator on `pool`, once more on SQLite after a failure that a second run can
-/// resolve, and maps the outcome.
+/// Runs `op` on `pool`, a run once more on SQLite after a failure that a second run can
+/// resolve, and maps the outcome. The history before the work is read once, by the first
+/// attempt that gets that far, so the report of a repeated run keeps what the first attempt
+/// applied.
 #[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
 async fn migrate_pool<DB: private::MigrateDatabase>(
     pool: &sqlx::Pool<DB>,
     name: &str,
     migrator: &Migrator,
     settings: &MigrationSettings,
-) -> Result<MigrationReport, MigrateError> {
-    let applied = match attempt(pool, migrator, settings).await {
-        Err(error)
+    op: Op,
+) -> Result<MigrationReport, MigrateError>
+where
+    DB::Connection: sqlx::migrate::Migrate,
+{
+    let mut before = None;
+    let outcome = match attempt(pool, migrator, settings, op, &mut before).await {
+        Err(Fail::Sqlx(error))
             if DB::RUN_TWICE_ON_FAILURE
+                && matches!(op, Op::Run)
                 && !matches!(
                     error,
                     SqlxMigrateError::Dirty(_) | SqlxMigrateError::VersionMismatch(_)
                 ) =>
         {
-            attempt(pool, migrator, settings).await
+            attempt(pool, migrator, settings, op, &mut before).await
         }
         other => other,
     };
-    match applied {
-        Ok(versions) => Ok(report(migrator, &versions)),
-        Err(error) => Err(map_error(name, migrator, error)),
+    match outcome {
+        Ok(after) => Ok(report(migrator, &before.unwrap_or_default(), &after, op)),
+        Err(fail) => Err(map_error(name, migrator, fail)),
     }
 }
 
-/// One run on one connection of `pool`.
+/// Why one attempt failed.
+#[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
+enum Fail {
+    Sqlx(SqlxMigrateError),
+    /// The applied migration with this version has no down file.
+    NotReversible(i64),
+}
+
+#[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
+impl From<SqlxMigrateError> for Fail {
+    fn from(error: SqlxMigrateError) -> Self {
+        Self::Sqlx(error)
+    }
+}
+
+/// One attempt on a connection of its own, opened with the connect options of `pool` and with
+/// statement logging off; returns the versions in the history afterwards.
+///
+/// `sqlx` logs every statement it runs at `debug` (and a slow one at `warn`) through `tracing`,
+/// and that text would put the SQL of a migration into the application's logs. The pool's
+/// connections log by default, so the work does not use them. A connection of its own also
+/// ends its session when it is dropped, even after a failure or a cancelled run, so a
+/// database lock that sqlx did not release (it does not after a failure) goes with it. On
+/// SQLite a pool connection is held meanwhile, because closing the last connection of an
+/// in-memory database drops it and the connection of its own would otherwise be the last.
 #[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
 async fn attempt<DB: private::MigrateDatabase>(
     pool: &sqlx::Pool<DB>,
     migrator: &Migrator,
     settings: &MigrationSettings,
-) -> Result<BTreeSet<i64>, SqlxMigrateError> {
-    let mut conn = pool.acquire().await?;
-    if DB::CLOSE_AFTER_RUN {
-        // Ends the session after the run, even when it fails or is cancelled, so a database
-        // lock that sqlx did not release (it does not after a failure) goes with it.
-        conn.close_on_drop();
-    }
-    DB::attempt_on(migrator, &mut *conn, &settings.table, settings.locking).await
+    op: Op,
+    before: &mut Option<BTreeSet<i64>>,
+) -> Result<BTreeSet<i64>, Fail>
+where
+    DB::Connection: sqlx::migrate::Migrate,
+{
+    use sqlx::{ConnectOptions, Connection};
+
+    let keep_alive = if DB::HOLD_POOL_CONNECTION {
+        Some(pool.acquire().await.map_err(SqlxMigrateError::from)?)
+    } else {
+        None
+    };
+    let options = (*pool.connect_options())
+        .clone()
+        .disable_statement_logging();
+    let mut conn = options.connect().await.map_err(SqlxMigrateError::from)?;
+    let result = DB::attempt_on(
+        migrator,
+        &mut conn,
+        &settings.table,
+        settings.locking,
+        op,
+        before,
+    )
+    .await;
+    // A failed close changes nothing about the outcome of the work.
+    let _ = conn.close().await;
+    drop(keep_alive);
+    result
 }
 
-/// Runs `migrator` on `conn` as `Migrator::run` does, and returns the versions that are in
-/// the history afterwards and were not before.
+/// Does `op` on `conn` as `Migrator::run` or `Migrator::undo` does, and returns the versions
+/// that are in the history afterwards. `before` is filled with the versions in the history
+/// before the work, unless an earlier attempt filled it.
 ///
 /// `Migrator::run` on a connection does not compile as a `Send` future ("implementation of
-/// `Acquire` is not general enough"), so this calls `run_direct`, the public method (hidden
+/// `Acquire` is not general enough"), so a run calls `run_direct`, the public method (hidden
 /// from the docs) that `sqlx` keeps for that case and that `run` itself calls with
-/// `(None, conn, false)`.
+/// `(None, conn, false)`. `Migrator::undo` has the same problem and no `undo_direct`, so a
+/// revert goes through [`undo_direct`].
 #[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
-async fn newly_applied<C: sqlx::migrate::Migrate>(
+async fn apply_op<C: sqlx::migrate::Migrate>(
     migrator: &Migrator,
     conn: &mut C,
     table: &str,
-) -> Result<BTreeSet<i64>, SqlxMigrateError> {
-    // The table does not exist before the first run; that reads as an empty history.
-    let before: BTreeSet<i64> = conn
-        .list_applied_migrations(table)
-        .await
-        .map(|applied| applied.iter().map(|m| m.version).collect())
-        .unwrap_or_default();
-    migrator.run_direct(None, conn, false).await?;
+    op: Op,
+    before: &mut Option<BTreeSet<i64>>,
+) -> Result<BTreeSet<i64>, Fail> {
+    if before.is_none() {
+        // The table does not exist before the first run; that reads as an empty history.
+        *before = Some(
+            conn.list_applied_migrations(table)
+                .await
+                .map(|applied| applied.iter().map(|m| m.version).collect())
+                .unwrap_or_default(),
+        );
+    }
+    match op {
+        Op::Run => migrator.run_direct(None, conn, false).await?,
+        Op::Revert(target) => {
+            undo_direct(migrator, conn, table, target).await?;
+        }
+    }
     let after = conn.list_applied_migrations(table).await?;
-    Ok(after
-        .iter()
-        .map(|m| m.version)
-        .filter(|v| !before.contains(v))
-        .collect())
+    Ok(after.iter().map(|m| m.version).collect())
 }
 
-/// The SQLite run. The `sqlx` lock is a no-op on SQLite, so with `locking` the run takes
+/// `Migrator::undo` on an open connection, step by step as `sqlx` does it: the lock, the
+/// history table, the dirty check, the check that every applied migration has a file (unless
+/// `ignore_missing`), the down files of everything above `target`, and then the down migrations above `target`, newest first. `sqlx` does
+/// not release the lock after a failure, and neither does this; the connection of a run is
+/// closed instead (see `CLOSE_AFTER_RUN`).
+#[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
+async fn undo_direct<C: sqlx::migrate::Migrate>(
+    migrator: &Migrator,
+    conn: &mut C,
+    table: &str,
+    target: i64,
+) -> Result<(), Fail> {
+    if migrator.locking {
+        conn.lock().await?;
+    }
+    conn.ensure_migrations_table(table).await?;
+    if let Some(version) = conn.dirty_version(table).await? {
+        return Err(Fail::Sqlx(SqlxMigrateError::Dirty(version)));
+    }
+    let applied = conn.list_applied_migrations(table).await?;
+    if !migrator.ignore_missing {
+        let known: BTreeSet<i64> = migrator.iter().map(|m| m.version).collect();
+        if let Some(missing) = applied.iter().find(|m| !known.contains(&m.version)) {
+            return Err(Fail::Sqlx(SqlxMigrateError::VersionMissing(
+                missing.version,
+            )));
+        }
+    }
+    let applied: BTreeSet<i64> = applied.iter().map(|m| m.version).collect();
+    // `undo` skips an applied migration that has no down file without a word. That would leave
+    // the database half way, so the check is made before the first down script, and the
+    // highest version without a down file is named.
+    if let Some(version) = applied
+        .iter()
+        .rev()
+        .find(|v| **v > target && !has_down(migrator, **v))
+    {
+        return Err(Fail::NotReversible(*version));
+    }
+    for migration in migrator
+        .iter()
+        .rev()
+        .filter(|m| m.migration_type.is_down_migration())
+        .filter(|m| applied.contains(&m.version))
+        .filter(|m| m.version > target)
+    {
+        conn.revert(table, migration).await?;
+    }
+    if migrator.locking {
+        conn.unlock().await?;
+    }
+    Ok(())
+}
+
+/// Whether the migrator has a down migration for `version`.
+#[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
+fn has_down(migrator: &Migrator, version: i64) -> bool {
+    migrator
+        .iter()
+        .any(|m| m.version == version && m.migration_type.is_down_migration())
+}
+
+/// The SQLite attempt. The `sqlx` lock is a no-op on SQLite, so with `locking` the work takes
 /// SQLite's write lock itself: it runs inside a `BEGIN IMMEDIATE` transaction, and each
 /// migration's own transaction becomes a savepoint in it. A second runner waits for the lock
 /// (up to the busy timeout of the connection) and then finds everything applied. The
 /// transaction is committed after a failure as well, so the migrations before the failing one
-/// stay applied, as they do without it. A migration marked `-- no-transaction` cannot run
-/// inside a transaction, so a migrator that has one runs without this lock.
+/// stay applied (or reverted), as they do without it. A migration marked `-- no-transaction`
+/// cannot run inside a transaction, so a migrator that has one runs without this lock.
 #[cfg(feature = "sqlite")]
 async fn sqlite_attempt(
     migrator: &Migrator,
     conn: &mut sqlx::SqliteConnection,
     table: &str,
     locking: bool,
-) -> Result<BTreeSet<i64>, SqlxMigrateError> {
+    op: Op,
+    before: &mut Option<BTreeSet<i64>>,
+) -> Result<BTreeSet<i64>, Fail> {
     use sqlx::Connection;
 
     if !locking || migrator.iter().any(|m| m.no_tx) {
-        return newly_applied(migrator, conn, table).await;
+        return apply_op(migrator, conn, table, op, before).await;
     }
-    let mut tx = conn.begin_with("BEGIN IMMEDIATE").await?;
-    let result = newly_applied(migrator, &mut *tx, table).await;
+    let mut tx = conn
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(SqlxMigrateError::from)?;
+    let result = apply_op(migrator, &mut *tx, table, op, before).await;
     let committed = tx.commit().await;
-    let applied = result?;
-    committed?;
-    Ok(applied)
+    let after = result?;
+    committed.map_err(SqlxMigrateError::from)?;
+    Ok(after)
 }
 
-/// The report of the newly applied `versions`, with the descriptions of the migrator.
+/// The report of the work: the migrations that entered the history for a run, and those that
+/// left it (highest version first) for a revert, with the descriptions of the migrator.
 #[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
-fn report(migrator: &Migrator, versions: &BTreeSet<i64>) -> MigrationReport {
-    let applied = migrator
+fn report(
+    migrator: &Migrator,
+    before: &BTreeSet<i64>,
+    after: &BTreeSet<i64>,
+    op: Op,
+) -> MigrationReport {
+    let reverted = matches!(op, Op::Revert(_));
+    let versions: BTreeSet<i64> = if reverted {
+        before.difference(after).copied().collect()
+    } else {
+        after.difference(before).copied().collect()
+    };
+    let mut applied: Vec<AppliedMigration> = migrator
         .iter()
-        .filter(|m| !m.migration_type.is_down_migration() && versions.contains(&m.version))
+        .filter(|m| {
+            m.migration_type.is_down_migration() == reverted && versions.contains(&m.version)
+        })
         .map(|m| AppliedMigration {
             version: m.version,
             description: m.description.to_string(),
         })
         .collect();
-    MigrationReport { applied }
+    applied.sort_by_key(|m| m.version);
+    if reverted {
+        applied.reverse();
+    }
+    MigrationReport { applied, reverted }
 }
 
 /// The description of the up migration `version`, if the migrator has it.
@@ -957,8 +1254,17 @@ fn description(migrator: &Migrator, version: i64) -> Option<String> {
 /// Maps an error of sqlx to the fixed-text [`MigrateError`]; the text of sqlx is never kept
 /// for display.
 #[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
-fn map_error(name: &str, migrator: &Migrator, error: SqlxMigrateError) -> MigrateError {
+fn map_error(name: &str, migrator: &Migrator, fail: Fail) -> MigrateError {
     let source_name = name.to_string();
+    let error = match fail {
+        Fail::Sqlx(error) => error,
+        Fail::NotReversible(version) => {
+            return MigrateError::NotReversible {
+                source_name,
+                version,
+            };
+        }
+    };
     match error {
         SqlxMigrateError::Dirty(version) => MigrateError::Dirty {
             source_name,
@@ -997,73 +1303,98 @@ mod private {
     use std::future::Future;
     use std::pin::Pin;
 
-    use super::{Migrator, SqlxMigrateError};
+    use super::{Fail, Migrator, Op};
 
-    /// The future of one run: the newly applied versions.
-    pub type Attempt<'c> =
-        Pin<Box<dyn Future<Output = Result<BTreeSet<i64>, SqlxMigrateError>> + Send + 'c>>;
+    /// The future of one attempt: the versions in the history afterwards.
+    pub type Attempt<'c> = Pin<Box<dyn Future<Output = Result<BTreeSet<i64>, Fail>> + Send + 'c>>;
 
-    /// The per-driver part of a run, implemented for the enabled drivers only. On Postgres
+    /// The per-driver part of the work, implemented for the enabled drivers only. On Postgres
     /// and MySQL `locking` is applied by `sqlx` through the migrator.
-    pub trait MigrateDatabase: sqlx::Database {
+    pub trait MigrateDatabase: sqlx::Database
+    where
+        <Self as sqlx::Database>::Connection: sqlx::migrate::Migrate,
+    {
         /// Whether a failed run is repeated once (SQLite, whose sqlx lock is a no-op).
         const RUN_TWICE_ON_FAILURE: bool;
-        /// Whether the connection of a run is closed afterwards instead of returned to the
-        /// pool. Not on SQLite, where closing the last connection of an in-memory database
-        /// would drop the database.
-        const CLOSE_AFTER_RUN: bool;
+        /// Whether a pool connection is held while the work runs on its own connection (SQLite,
+        /// where the last connection of an in-memory database keeps the database alive).
+        const HOLD_POOL_CONNECTION: bool;
 
-        /// One run of `migrator` on `conn`; returns the newly applied versions.
+        /// One attempt of `op` on `conn`; returns the versions in the history afterwards.
         fn attempt_on<'c>(
             migrator: &'c Migrator,
             conn: &'c mut Self::Connection,
             table: &'c str,
             locking: bool,
+            op: Op,
+            before: &'c mut Option<BTreeSet<i64>>,
         ) -> Attempt<'c>;
     }
 
     #[cfg(feature = "postgres")]
     impl MigrateDatabase for sqlx::Postgres {
         const RUN_TWICE_ON_FAILURE: bool = false;
-        const CLOSE_AFTER_RUN: bool = true;
+        const HOLD_POOL_CONNECTION: bool = false;
 
         fn attempt_on<'c>(
             migrator: &'c Migrator,
             conn: &'c mut sqlx::PgConnection,
             table: &'c str,
             _locking: bool,
+            op: Op,
+            before: &'c mut Option<BTreeSet<i64>>,
         ) -> Attempt<'c> {
-            Box::pin(super::newly_applied(migrator, conn, table))
+            Box::pin(super::apply_op(migrator, conn, table, op, before))
         }
     }
 
     #[cfg(feature = "mysql")]
     impl MigrateDatabase for sqlx::MySql {
         const RUN_TWICE_ON_FAILURE: bool = false;
-        const CLOSE_AFTER_RUN: bool = true;
+        const HOLD_POOL_CONNECTION: bool = false;
 
         fn attempt_on<'c>(
             migrator: &'c Migrator,
             conn: &'c mut sqlx::MySqlConnection,
             table: &'c str,
             _locking: bool,
+            op: Op,
+            before: &'c mut Option<BTreeSet<i64>>,
         ) -> Attempt<'c> {
-            Box::pin(super::newly_applied(migrator, conn, table))
+            Box::pin(super::apply_op(migrator, conn, table, op, before))
         }
     }
 
     #[cfg(feature = "sqlite")]
     impl MigrateDatabase for sqlx::Sqlite {
         const RUN_TWICE_ON_FAILURE: bool = true;
-        const CLOSE_AFTER_RUN: bool = false;
+        const HOLD_POOL_CONNECTION: bool = true;
 
         fn attempt_on<'c>(
             migrator: &'c Migrator,
             conn: &'c mut sqlx::SqliteConnection,
             table: &'c str,
             locking: bool,
+            op: Op,
+            before: &'c mut Option<BTreeSet<i64>>,
         ) -> Attempt<'c> {
-            Box::pin(super::sqlite_attempt(migrator, conn, table, locking))
+            Box::pin(super::sqlite_attempt(
+                migrator, conn, table, locking, op, before,
+            ))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A source of a disabled driver cannot be built (`DataSources::build` refuses it), so the
+    /// check in `execute` is out of reach of an integration test; this pins what it tests.
+    #[test]
+    fn a_driver_is_enabled_exactly_when_its_feature_is() {
+        assert_eq!(driver_enabled(Driver::Postgres), cfg!(feature = "postgres"));
+        assert_eq!(driver_enabled(Driver::Mysql), cfg!(feature = "mysql"));
+        assert_eq!(driver_enabled(Driver::Sqlite), cfg!(feature = "sqlite"));
     }
 }

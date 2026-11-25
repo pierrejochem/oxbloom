@@ -10,7 +10,9 @@
 #![cfg(all(feature = "migrate", feature = "sqlite"))]
 
 use std::borrow::Cow;
+use std::io::Write;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use oxbloom_config::Config;
@@ -19,6 +21,7 @@ use oxbloom_data::sqlx::migrate::{Migration, MigrationType, Migrator};
 use oxbloom_data::sqlx::{self, SqlSafeStr, SqlitePool};
 use oxbloom_data::{DataError, DataSettings, DataSources, MigrationSettings};
 use tempfile::TempDir;
+use tracing_subscriber::fmt::MakeWriter;
 
 /// The three migrations most tests use. The second one needs the first, so it proves the order.
 const THREE: [(&str, &str); 3] = [
@@ -666,5 +669,421 @@ async fn the_report_debug_shows_versions_and_its_display_lists_descriptions() {
     assert_eq!(
         report.to_string(),
         "applied 3 migrations: 1 (create accounts), 2 (index accounts), 3 (create invoices)"
+    );
+}
+
+/// Reversible pairs 1 to 3: each up file creates a table and each down file drops it.
+const REVERSIBLE: [(&str, &str); 6] = [
+    (
+        "1_create_accounts.up.sql",
+        "CREATE TABLE accounts (id INTEGER PRIMARY KEY);",
+    ),
+    ("1_create_accounts.down.sql", "DROP TABLE accounts;"),
+    (
+        "2_create_orders.up.sql",
+        "CREATE TABLE orders (id INTEGER PRIMARY KEY);",
+    ),
+    ("2_create_orders.down.sql", "DROP TABLE orders;"),
+    (
+        "3_create_invoices.up.sql",
+        "CREATE TABLE invoices (id INTEGER PRIMARY KEY);",
+    ),
+    ("3_create_invoices.down.sql", "DROP TABLE invoices;"),
+];
+
+#[tokio::test]
+async fn revert_goes_back_to_the_target_version() {
+    let fixture = Fixture::new(&REVERSIBLE);
+    let sources = fixture.sources();
+    migrate::run(&sources, "default", &fixture.settings(), None)
+        .await
+        .unwrap();
+
+    let report = migrate::revert(&sources, "default", &fixture.settings(), None, 1)
+        .await
+        .unwrap();
+
+    assert_eq!(versions(&report), [3, 2]);
+    assert_eq!(report.latest_version(), Some(3));
+    assert_eq!(
+        report.to_string(),
+        "reverted 2 migrations: 3 (create invoices), 2 (create orders)"
+    );
+    assert!(table_exists(pool(&sources), "accounts").await);
+    assert!(!table_exists(pool(&sources), "orders").await);
+    assert!(!table_exists(pool(&sources), "invoices").await);
+    assert_eq!(history(pool(&sources), "_sqlx_migrations").await, [1]);
+
+    // A later run applies the reverted migrations again.
+    let again = migrate::run(&sources, "default", &fixture.settings(), None)
+        .await
+        .unwrap();
+    assert_eq!(versions(&again), [2, 3]);
+}
+
+#[tokio::test]
+async fn revert_to_the_current_version_does_nothing() {
+    let fixture = Fixture::new(&REVERSIBLE);
+    let sources = fixture.sources();
+    migrate::run(&sources, "default", &fixture.settings(), None)
+        .await
+        .unwrap();
+
+    for target in [3, 4, i64::MAX] {
+        let report = migrate::revert(&sources, "default", &fixture.settings(), None, target)
+            .await
+            .unwrap();
+        assert!(report.is_empty(), "target {target}");
+        assert_eq!(report.latest_version(), None);
+    }
+    assert_eq!(history(pool(&sources), "_sqlx_migrations").await, [1, 2, 3]);
+    assert!(table_exists(pool(&sources), "invoices").await);
+
+    // An empty database has nothing to revert either.
+    let empty = Fixture::new(&REVERSIBLE);
+    let report = migrate::revert(&empty.sources(), "default", &empty.settings(), None, 0)
+        .await
+        .unwrap();
+    assert!(report.is_empty());
+}
+
+#[tokio::test]
+async fn revert_to_zero_reverts_everything() {
+    let fixture = Fixture::new(&REVERSIBLE);
+    let sources = fixture.sources();
+    migrate::run(&sources, "default", &fixture.settings(), None)
+        .await
+        .unwrap();
+
+    let report = migrate::revert(&sources, "default", &fixture.settings(), None, 0)
+        .await
+        .unwrap();
+
+    assert_eq!(versions(&report), [3, 2, 1]);
+    assert!(history(pool(&sources), "_sqlx_migrations").await.is_empty());
+}
+
+#[tokio::test]
+async fn a_migration_without_a_down_file_is_not_reversible_and_named_by_version() {
+    let fixture = Fixture::new(&REVERSIBLE);
+    fixture.remove("2_create_orders.down.sql");
+    let sources = fixture.sources();
+    migrate::run(&sources, "default", &fixture.settings(), None)
+        .await
+        .unwrap();
+
+    let err = migrate::revert(&sources, "default", &fixture.settings(), None, 0)
+        .await
+        .unwrap_err();
+
+    assert!(
+        matches!(
+            &err,
+            MigrateError::NotReversible { source_name, version: 2 } if source_name == "default"
+        ),
+        "{err:?}"
+    );
+    assert_eq!(err.version(), Some(2));
+    assert_eq!(err.source_name(), "default");
+    assert_eq!(
+        err.to_string(),
+        "data source `default`: migration 2 has no down file, so it cannot be reverted"
+    );
+    assert!(std::error::Error::source(&err).is_none());
+    // Nothing was reverted, not even the reversible migration 3 above it.
+    assert_eq!(history(pool(&sources), "_sqlx_migrations").await, [1, 2, 3]);
+    assert!(table_exists(pool(&sources), "invoices").await);
+
+    // Reverting only as far as the reversible migration 3 still works.
+    let report = migrate::revert(&sources, "default", &fixture.settings(), None, 2)
+        .await
+        .unwrap();
+    assert_eq!(versions(&report), [3]);
+}
+
+#[tokio::test]
+async fn an_embedded_migrator_is_reverted_like_a_directory() {
+    let migration = |version, kind, description: &'static str, sql: &'static str| {
+        Migration::new(
+            version,
+            Cow::Borrowed(description),
+            kind,
+            sql.into_sql_str(),
+            false,
+        )
+    };
+    let embedded = Migrator::with_migrations(vec![
+        migration(
+            1,
+            MigrationType::ReversibleUp,
+            "create accounts",
+            "CREATE TABLE accounts (id INTEGER);",
+        ),
+        migration(
+            1,
+            MigrationType::ReversibleDown,
+            "create accounts",
+            "DROP TABLE accounts;",
+        ),
+    ]);
+    let fixture = Fixture::new(&[]);
+    let sources = fixture.sources();
+    migrate::run(&sources, "default", &settings(None), Some(&embedded))
+        .await
+        .unwrap();
+
+    let report = migrate::revert(&sources, "default", &settings(None), Some(&embedded), 0)
+        .await
+        .unwrap();
+
+    assert_eq!(versions(&report), [1]);
+    assert!(!table_exists(pool(&sources), "accounts").await);
+}
+
+#[tokio::test]
+async fn revert_fails_on_a_changed_file_a_missing_file_and_a_dirty_history() {
+    let fixture = Fixture::new(&REVERSIBLE);
+    let sources = fixture.sources();
+    migrate::run(&sources, "default", &fixture.settings(), None)
+        .await
+        .unwrap();
+
+    // A missing file fails unless `ignore_missing` is set.
+    fixture.remove("3_create_invoices.up.sql");
+    fixture.remove("3_create_invoices.down.sql");
+    let err = migrate::revert(&sources, "default", &fixture.settings(), None, 0)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, MigrateError::MissingFile { version: 3, .. }),
+        "{err:?}"
+    );
+    let mut lenient = fixture.settings();
+    lenient.ignore_missing = true;
+    // Version 3 is applied but has no down file at all, so it cannot be reverted.
+    let err = migrate::revert(&sources, "default", &lenient, None, 0)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, MigrateError::NotReversible { version: 3, .. }),
+        "{err:?}"
+    );
+
+    // A dirty history is named before anything is reverted.
+    sqlx::query("UPDATE _sqlx_migrations SET success = 0 WHERE version = 2")
+        .execute(pool(&sources))
+        .await
+        .unwrap();
+    let err = migrate::revert(&sources, "default", &lenient, None, 0)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, MigrateError::Dirty { version: 2, .. }),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn revert_uses_the_same_timeout_and_table() {
+    let fixture = Fixture::new(&[
+        ("1_slow.up.sql", "CREATE TABLE slow (id INTEGER);"),
+        (
+            "1_slow.down.sql",
+            "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < 30000000) \
+             SELECT count(*) FROM n;",
+        ),
+        ("2_fast.up.sql", "CREATE TABLE fast (id INTEGER);"),
+        ("2_fast.down.sql", "DROP TABLE fast;"),
+    ]);
+    let sources = fixture.sources();
+    let mut custom = fixture.settings();
+    custom.table = "app_history".to_string();
+    migrate::run(&sources, "default", &custom, None)
+        .await
+        .unwrap();
+    assert!(!table_exists(pool(&sources), "_sqlx_migrations").await);
+
+    // The custom table is the one that shrinks.
+    let report = migrate::revert(&sources, "default", &custom, None, 1)
+        .await
+        .unwrap();
+    assert_eq!(versions(&report), [2]);
+    assert_eq!(history(pool(&sources), "app_history").await, [1]);
+    assert!(!table_exists(pool(&sources), "_sqlx_migrations").await);
+
+    // The timeout bounds the revert as it bounds the run.
+    custom.timeout = Duration::from_millis(50);
+    let started = std::time::Instant::now();
+    let err = migrate::revert(&sources, "default", &custom, None, 0)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, MigrateError::Timeout { source_name } if source_name == "default"),
+        "{err:?}"
+    );
+    assert!(started.elapsed() < Duration::from_secs(5));
+}
+
+#[tokio::test]
+async fn revert_reports_load_unknown_source_and_table_errors_like_run() {
+    let fixture = Fixture::new(&REVERSIBLE);
+    let sources = fixture.sources();
+
+    let err = migrate::revert(&sources, "default", &settings(None), None, 0)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            MigrateError::Load {
+                reason: LoadReason::NotConfigured,
+                ..
+            }
+        ),
+        "{err:?}"
+    );
+    let err = migrate::revert(&sources, "nope", &fixture.settings(), None, 0)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, MigrateError::UnknownSource { .. }), "{err:?}");
+    let mut bad = fixture.settings();
+    bad.table = "history; DROP TABLE accounts".to_string();
+    let err = migrate::revert(&sources, "default", &bad, None, 0)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            MigrateError::Load {
+                reason: LoadReason::InvalidTable,
+                ..
+            }
+        ),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_retry_keeps_the_versions_applied_by_the_first_attempt() {
+    // Migration 2 fails the first time and succeeds the second time: it is a `no-transaction`
+    // migration, so the first statement stays when the second one fails, and the second
+    // statement only passes when it finds the row the first attempt left behind.
+    let fixture = Fixture::new(&[
+        (
+            "1_create_accounts.sql",
+            "CREATE TABLE accounts (id INTEGER);",
+        ),
+        (
+            "2_flaky.sql",
+            "-- no-transaction\n\
+             CREATE TABLE IF NOT EXISTS seen (x INTEGER);\n\
+             CREATE TABLE IF NOT EXISTS probe (x INTEGER NOT NULL);\n\
+             INSERT INTO seen VALUES (1);\n\
+             INSERT INTO probe VALUES (CASE WHEN (SELECT count(*) FROM seen) > 1 THEN 1 END);",
+        ),
+    ]);
+    let sources = fixture.sources();
+
+    let report = migrate::run(&sources, "default", &fixture.settings(), None)
+        .await
+        .unwrap();
+
+    assert_eq!(history(pool(&sources), "_sqlx_migrations").await, [1, 2]);
+    assert_eq!(versions(&report), [1, 2]);
+}
+
+#[derive(Clone, Default)]
+struct LogBuffer(Arc<Mutex<Vec<u8>>>);
+
+impl Write for LogBuffer {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> MakeWriter<'a> for LogBuffer {
+    type Writer = LogBuffer;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+/// Installs a subscriber for the whole test binary that keeps every event at `debug` and
+/// below in memory. The events of the `sqlx` worker threads need a global subscriber.
+fn logs() -> LogBuffer {
+    static LOGS: OnceLock<LogBuffer> = OnceLock::new();
+    LOGS.get_or_init(|| {
+        let logs = LogBuffer::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(logs.clone())
+            .with_max_level(tracing::Level::DEBUG)
+            .with_ansi(false)
+            .finish();
+        tracing::subscriber::set_global_default(subscriber).unwrap();
+        logs
+    })
+    .clone()
+}
+
+#[tokio::test]
+async fn run_and_revert_emit_no_sql_in_tracing_output() {
+    let logs = logs();
+    let fixture = Fixture::new(&[
+        (
+            "1_create_accounts.up.sql",
+            "CREATE TABLE accounts (SECRET_MARKER_SQL_ok INTEGER);",
+        ),
+        (
+            "1_create_accounts.down.sql",
+            "DROP TABLE accounts; -- SECRET_MARKER_SQL_down",
+        ),
+        (
+            "2_broken.up.sql",
+            "SELECT SECRET_MARKER_SQL FROM no_such_table;",
+        ),
+        ("2_broken.down.sql", "DROP TABLE SECRET_MARKER_SQL_gone;"),
+    ]);
+    let sources = fixture.sources();
+
+    let err = migrate::run(&sources, "default", &fixture.settings(), None)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, MigrateError::Script { version: 2, .. }),
+        "{err:?}"
+    );
+    // The history now holds migration 1, so the revert runs its down script, and a revert of
+    // the never applied migration 2 is not attempted.
+    migrate::revert(&sources, "default", &fixture.settings(), None, 0)
+        .await
+        .unwrap();
+    // A failing down script is covered as well.
+    fixture.remove("2_broken.up.sql");
+    fixture.write("2_broken.up.sql", "CREATE TABLE fine (id INTEGER);");
+    migrate::run(&sources, "default", &fixture.settings(), None)
+        .await
+        .unwrap();
+    let err = migrate::revert(&sources, "default", &fixture.settings(), None, 0)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, MigrateError::Script { version: 2, .. }),
+        "{err:?}"
+    );
+
+    let captured = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+    assert!(
+        captured.contains("sqlx"),
+        "the capture saw no sqlx event, so this test proves nothing: {captured}"
+    );
+    assert!(
+        !captured.contains("SECRET_MARKER_SQL"),
+        "a statement of a migration reached the tracing output: {captured}"
     );
 }
