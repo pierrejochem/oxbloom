@@ -3361,7 +3361,10 @@ services in reverse order under one deadline, shuts the container down and retur
 `ExitStatus`. The README section "Application lifecycle" describes the run order and the limits in
 one place. Rules to remember:
 
-- With no `Service` bean, `run()` returns right after the runners and listens for no signal.
+- With no `Service` bean, `run()` returns right after the runners and listens for no signal. With
+  services of which none keeps running (`Service::keeps_running` returns `false`, as for
+  `DataService`), it starts and stops them and listens for no signal either; it waits only when a
+  started service keeps running.
 - Boot registers `Config`, `ApplicationArguments` and `ShutdownHandle` as instances; registering
   one of them again is a `StartupError` in the `Container` phase. It also sets `Config` as the
   container `environment` before the `configure` closures run, so a property condition in a
@@ -4512,13 +4515,17 @@ let status = OxbloomApplication::builder()
 assert_eq!(status.code(), 0);
 ```
 
-#### `Service`: `start`, `stop`, `phase`, `name`
+#### `Service`: `start`, `stop`, `phase`, `name`, `keeps_running`
 
 A long-running part of the application. `start` returns once the service runs (spawn long-running
 work); `stop` runs in its own task under the shared deadline, and a panic in it is reported while
 the next service still stops. `phase()` (default 0) orders the start, lower first; stop is in
-reverse. `name()` (default: the type name) is used in diagnostics. A start error stops the services
-started so far and fails the run in the `Service` phase.
+reverse. `name()` (default: the type name) is used in diagnostics. `keeps_running()` (default
+`true`) says whether the service works on its own until it is stopped; `run()` waits for a
+shutdown signal, and installs the signal handlers, only when a started service keeps running, so a
+service that only holds resources (return `false`) lets a run-to-completion application end after
+its runners. A start error stops the services started so far and fails the run in the `Service`
+phase.
 
 ```rust
 struct Worker;
@@ -6825,12 +6832,12 @@ assert!(!code.is_empty() && fake.token_requests().is_empty());
 
 Pooled SQL access on `sqlx` for PostgreSQL, MySQL (and MariaDB) and SQLite: the `data.*` settings, the `DataSources` registry of lazy pools, `transaction` with savepoints and per-driver options, `transaction_with_retry` (feature `retry`), the boot wiring (`DataAutoConfiguration`, `DataService`; features `data-postgres`, `data-mysql` and `data-sqlite` of `oxbloom-boot`), `DataHealthIndicator` (feature `data` of `oxbloom-actuator`), `TestDatabase` (feature `data` of `oxbloom-test`) and the PEM accessors of `oxbloom-ssl`. The crate re-exports `sqlx` as `oxbloom_data::sqlx`. The guide chapter is [Data](guide/29-data.md#data) and the decisions are in [ADR 0096](adr/0096-data-core.md). Rules to remember:
 
-- The cargo features `postgres`, `mysql` and `sqlite` of `oxbloom-data` are off by default and each turns on the `sqlx` driver and rustls with `aws-lc-rs` and the platform roots (never `ring`). `retry` adds `transaction_with_retry`; it is additive and never changes `transaction`. The boot features `data-*` enable `oxbloom-data/retry`.
+- The cargo features `postgres`, `mysql` and `sqlite` of `oxbloom-data` are off by default and each turns on the `sqlx` driver and rustls with `aws-lc-rs` and the platform roots (never `ring`); `sqlite` carries that TLS stack too and also compiles SQLite from source, which needs a C compiler and adds build time. `retry` adds `transaction_with_retry`; it is additive and never changes `transaction`. The boot features `data-*` enable `oxbloom-data/retry`.
 - Pools are lazy and need the application's Tokio runtime: `DataSources::build` outside one fails with `DataError::Pool`.
 - Every `DataError` has a fixed text. `DataSources::build` returns a `SourceError` with the source name and the configuration key. The URL, password, user, host and SQLite paths never appear in an error, in `Debug`, in a log event or in health details. `sqlx`'s own `Debug` of `connect_options()` includes the password: never log it.
-- A source with `ssl-bundle` and no `ssl-mode` uses `verify-full` (MySQL `VerifyIdentity`), overriding the URL and `PGSSLMODE`. An explicit `prefer` or `require` does not check the bundle's trust. `ssl-bundle` with `ssl-mode = "disable"` is a settings error. A bundle with only a client certificate and no `ssl-mode` also uses `verify-full` against the platform roots. Pools do not follow bundle reloads.
+- For a database the bundle's trust is added to the platform roots (elsewhere a bundle's trust replaces them), so `verify-full` also accepts a publicly trusted certificate for the host name, and `ssl-mode = "verify-ca"` with a bundle that has a trust store is refused with `DataError::VerifyCaWithTrust` (the report names `<prefix>.ssl-mode`). A source with `ssl-bundle` and no `ssl-mode` uses `verify-full` (MySQL `VerifyIdentity`), overriding the URL and `PGSSLMODE`. An explicit `prefer` or `require` does not check the certificate. `ssl-bundle` with `ssl-mode = "disable"` is a settings error. A bundle with only a client certificate and no `ssl-mode` also uses `verify-full` against the platform roots, so a server behind a private authority needs that authority in the bundle's trust or an explicit `ssl-mode`. Pools do not follow bundle reloads.
 - An in-memory SQLite source has one connection by default, refuses an explicit `max-connections` above 1 without `cache=shared` and has no idle timeout and no maximum lifetime unless you set them (a set value can destroy a non-shared in-memory database).
-- `DataService` pings each source at start (10 seconds each, default `connect-on-startup = true`) and closes the pools at stop (10 seconds; a fixed warning at target `oxbloom::data` lists the source names). A failed start does not call stop. With your own `DataSources` bean there is no back-off.
+- `DataService` pings the sources one at a time at start (10 seconds each, default `connect-on-startup = true`) and stops at the first failure. At stop it marks every pool closed at once and waits 10 seconds in all for the closes (`close_all_within`); one fixed warning at target `oxbloom::data` lists only the sources that did not finish closing. It does not keep running, so a run-to-completion application ends after its runners. A failed start does not call stop. Your own `DataSources` bean wins over boot's.
 - The future of `transaction` is not `Send` when the closure borrows from the surrounding code (rust-lang/rust#110338); inside `tokio::spawn` use `async move` over owned data.
 - There are no migrations yet (M3b is next), no ambient transactions, no repository layer, no qualifier mechanism and no databases other than the three.
 
@@ -6862,8 +6869,8 @@ use oxbloom_test::TestDatabase;
 | `data.max-connections` | `10` | The most connections of the pool; 1 for an in-memory SQLite URL. |
 | `data.min-connections` | `0` | The connections the pool keeps open; not above `max-connections`; loosely honoured by a lazy pool. |
 | `data.acquire-timeout` | `30s` | How long acquiring a connection may wait; above zero. |
-| `data.idle-timeout` | unset | How long a connection may sit idle; above zero. |
-| `data.max-lifetime` | unset | How long a connection may live; above zero. |
+| `data.idle-timeout` | unset (`sqlx` default of 10 minutes; never for an in-memory SQLite URL) | How long a connection may sit idle; above zero. |
+| `data.max-lifetime` | unset (`sqlx` default of 30 minutes; never for an in-memory SQLite URL) | How long a connection may live; above zero. |
 | `data.test-before-acquire` | `true` | Whether a connection is checked before it is handed out. |
 | `data.ssl-mode` | unset | `disable`, `prefer`, `require`, `verify-ca` or `verify-full`; not for SQLite. |
 | `data.ssl-bundle` | unset | The SSL bundle with the trust roots or client certificate; implies `verify-full` when `ssl-mode` is unset; not for SQLite or `ssl-mode = "disable"`. |
@@ -6878,7 +6885,7 @@ assert_eq!((*key, *ty, *default), ("data.max-connections", "u32", Some("10")));
 
 #### `DataSettings::from_config`, `SourceSettings`, `Driver` and `SslMode`
 
-`DataSettings::from_config(&config)` reads the `data` section (a missing section gives no sources and `connect_on_startup` true). `settings.sources` lists `default` first when configured, then the named sources in name order. A `SourceSettings` has `name`, `url` (a `Secret`, hidden by `Debug`), `driver`, the pool limits, `ssl_mode` and `ssl_bundle`, and `config_prefix()` (`data` or `data.sources.<name>`). `Driver` is `Postgres`, `Mysql` or `Sqlite` and displays as `postgres`, `mysql` or `sqlite`. `SslMode` is `Disable`, `Prefer`, `Require`, `VerifyCa` or `VerifyFull`. Errors are `ConfigError::Invalid` that name the full key and never the value.
+`DataSettings::from_config(&config)` reads the `data` section (a missing section gives no sources and `connect_on_startup` true). `settings.sources` lists `default` first when configured, then the named sources in name order. A `SourceSettings` has `name`, `url` (a `Secret`, hidden by `Debug`), `driver`, the pool limits, `ssl_mode` and `ssl_bundle`, and `config_prefix()` (`data` or `data.sources.<name>`). `Driver` is `Postgres`, `Mysql` or `Sqlite` (`non_exhaustive`) and displays as `postgres`, `mysql` or `sqlite`; `Driver::from_url(url)` gives the driver of a URL by the scheme rule of the settings (lowercase, `://` for the network schemes) or `None`. `SslMode` is `Disable`, `Prefer`, `Require`, `VerifyCa` or `VerifyFull`. Errors are `ConfigError::Invalid` that name the full key and never the value.
 
 ```rust
 let config = Config::from_str("[data]\nurl = \"postgres://app:pw@db/app\"\nssl-mode = \"verify-ca\"")?;
@@ -6892,11 +6899,13 @@ assert!(!format!("{source:?}").contains("pw"));
 // An in-memory SQLite database gets one connection unless told otherwise.
 let config = Config::from_str("[data]\nurl = \"sqlite::memory:\"")?;
 assert_eq!(DataSettings::from_config(&config)?.sources[0].max_connections, 1);
+assert_eq!(oxbloom_data::Driver::from_url("mariadb://db/app"), Some(oxbloom_data::Driver::Mysql));
+assert_eq!(oxbloom_data::Driver::from_url("MYSQL://db/app"), None);
 ```
 
 #### `DataSources::build(&settings, &tls)`
 
-Builds a lazy pool for every source. `tls` resolves a bundle name to a `TlsMaterial` (`trust_pem` and `identity`, both PEM) and is called only for a source with an `ssl-bundle`; the `Debug` output of `TlsMaterial` redacts the PEM. The first failing source stops the build with a `SourceError`: `Unsupported` for a driver whose feature is off, `Config` for a URL the driver refuses, any error of `tls`, and `Pool` outside a Tokio runtime. `source_name()`, `error()` and `config_prefix()` describe it, and its `Display` is "data source `<name>`: <fixed text>".
+Builds a lazy pool for every source. `tls` resolves a bundle name to a `TlsMaterial` (`trust_pem` and `identity`, both PEM) and is called only for a source with an `ssl-bundle`; the `Debug` output of `TlsMaterial` redacts the PEM. The first failing source stops the build with a `SourceError`: `Unsupported` for a driver whose feature is off, `Config` for a URL the driver refuses, any error of `tls`, `VerifyCaWithTrust` for `ssl-mode = "verify-ca"` with a bundle that has a trust store, and `Pool` outside a Tokio runtime. `SourceError::new(name, error)` builds one, `source_name()`, `error()` and `config_prefix()` describe it, and its `Display` is "data source `<name>`: <fixed text>".
 
 ```rust
 let config = Config::from_str("[data]\nurl = \"sqlite::memory:\"\nmax-connections = 1\nacquire-timeout = \"5s\"")?;
@@ -6912,9 +6921,9 @@ assert_eq!(err.config_prefix(), "data");
 assert_eq!(err.to_string(), "data source `default`: the database driver is not available in this build");
 ```
 
-#### `DataSources`: lookups, `ping`, `ping_all`, `pool_counts` and `close_all`
+#### `DataSources`: lookups, `ping`, `ping_all`, `pool_counts`, `close_all` and `close_all_within`
 
-`names()` lists `default` first and then the named sources in name order, `default_name()` is `Some("default")` when the unnamed keys configure a source, `driver_of(name)`, `len()` and `is_empty()` describe the registry, and `postgres(name)`, `mysql(name)` and `sqlite(name)` return the typed pool (each exists when its driver feature is on; `None` for an unknown name or another driver). `ping(name, timeout)` runs a trivial query within the timeout (`Config` for an unknown name, `Connect` when the connection or query fails, `Pool` on a timeout or a closed pool). `ping_all(timeout)` pings every source one after the other and returns the result per name. `pool_counts(name)` returns `(size, idle)`. `close_all()` closes every pool and waits for the connections in use. The `Debug` output shows source names and drivers only.
+`names()` lists `default` first and then the named sources in name order, `default_name()` is `Some("default")` when the unnamed keys configure a source, `driver_of(name)`, `len()` and `is_empty()` describe the registry, and `postgres(name)`, `mysql(name)` and `sqlite(name)` return the typed pool (each exists when its driver feature is on; `None` for an unknown name or another driver). `ping(name, timeout)` runs a trivial query within the timeout (`Config` for an unknown name, `Connect` when the connection or query fails, `Pool` on a timeout or a closed pool). `ping_all(timeout)` pings every source one after the other and returns the result per name. `pool_counts(name)` returns `(size, idle)`. `close_all()` marks every pool closed at once, then closes them concurrently and waits for the connections in use. `close_all_within(timeout)` does the same but waits at most `timeout` in all and returns the names of the sources whose close did not finish (empty when all closed); those pools refuse new connections all the same. The `Debug` output shows source names and drivers only.
 
 ```rust
 let config = Config::from_str("[data]\nurl = \"sqlite::memory:\"\n[data.sources.cache]\nurl = \"sqlite::memory:\"")?;
@@ -6925,12 +6934,15 @@ sources.ping("default", Duration::from_secs(2)).await?;
 assert_eq!(sources.ping("reports", Duration::from_secs(2)).await, Err(DataError::Config));
 let one: i64 = sqlx::query_scalar("SELECT 1").fetch_one(sources.sqlite("default").ok_or("no default")?).await?;
 assert_eq!(one, 1);
+let held = sources.sqlite("cache").ok_or("no cache")?.acquire().await?;
+assert_eq!(sources.close_all_within(Duration::from_millis(100)).await, ["cache"]);
+drop(held);
 sources.close_all().await;
 ```
 
 #### `DataError`
 
-`Config`, `Connect`, `Pool`, `Unsupported` and `Tls`, each with a fixed `Display` text and no payload; it is `Copy` and `non_exhaustive`.
+`Config`, `Connect`, `Pool`, `Unsupported`, `Tls` and `VerifyCaWithTrust`, each with a fixed `Display` text and no payload; it is `Copy` and `non_exhaustive`.
 
 ```rust
 assert_eq!(DataError::Connect.to_string(), "could not connect to the database");
@@ -6995,7 +7007,7 @@ assert!(matches!(err, Err(TransactionError::Unsupported)));
 
 #### `TransactionError`
 
-`Begin`, `Commit`, `Unsupported` and `Inner(E)`. The `Display` text is fixed and `Debug` names only the variant (`Inner(..)` for the work's error), so no SQL or driver text leaks. `into_inner()` returns the work's error, and `source()` returns it when it is a standard error.
+`Begin`, `Commit`, `Unsupported` and `Inner(E)`. `Commit` is a refused commit (the transaction is rolled back) or a connection lost during the `COMMIT` (the outcome is unknown). The `Display` text is fixed and `Debug` names only the variant (`Inner(..)` for the work's error), so no SQL or driver text leaks. `into_inner()` returns an `Option<E>`: the work's error for `Inner`, `None` otherwise; `source()` returns it when it is a standard error.
 
 ```rust
 let err: TransactionError<std::io::Error> = TransactionError::Commit;
@@ -7029,12 +7041,13 @@ assert!(!OrderError::Database(sqlx::Error::RowNotFound).is_retryable());
 
 #### `DataAutoConfiguration` and `DataService` (features `data-*` of `oxbloom-boot`)
 
-`DataAutoConfiguration` runs when the configuration has a `data` section. It registers the `DataSettings` and `DataSources` beans (fallible, so a bad key or an unknown `ssl-bundle` fails the start with the key named), the `DataService`, and the default pool bean `PgPool`, `MySqlPool` or `SqlitePool`, each behind its driver feature and `on_missing_bean`. It runs after `SslAutoConfiguration` when the feature `ssl` is on. `DataService::new(sources, connect_on_startup)` is a `Service` with phase `i32::MIN` and the name `DataSources`; `sources()` returns the registry. Its `start` pings each source with a 10 second timeout; its `stop` closes the pools with a 10 second timeout. The failure reports (`DataConfigAnalyzer` and `DataUnreachableAnalyzer`, crate-private) name the source and the key and never the URL.
+`DataAutoConfiguration` runs when the configuration has a `data` section. It registers the `DataSettings` bean and the `DataSources` bean (fallible, so a bad key or an unknown `ssl-bundle` fails the start with the key named; `on_missing_bean`, so an application's own registry wins), the `DataService` (only when the section configures a source), and the default pool bean `PgPool`, `MySqlPool` or `SqlitePool`, each behind its driver feature and `on_missing_bean`. It runs after `SslAutoConfiguration` when the feature `ssl` is on. `DataService::new(sources, connect_on_startup)` is a `Service` with phase `i32::MIN`, the name `DataSources` and `keeps_running()` `false`; `sources()` returns the registry. Its `start` pings the sources one at a time with a 10 second timeout each and stops at the first failure; its `stop` calls `close_all_within` with 10 seconds and logs one warning that lists only the sources that did not finish closing. The failure reports (`DataConfigAnalyzer` and `DataUnreachableAnalyzer`, crate-private) name the source and the key and never the URL.
 
 ```rust
 let service = DataService::new(sources.clone(), true);
 assert_eq!(service.phase(), i32::MIN);
 assert_eq!(service.name(), "DataSources");
+assert!(!service.keeps_running());
 service.start().await?;
 service.stop().await;
 ```
@@ -7051,7 +7064,7 @@ assert_eq!(DataHealthIndicator::new(sources, "replica").name(), "db.replica");
 
 #### `TestDatabase` (feature `data` of `oxbloom-test`)
 
-`TestDatabase::sqlite()` is a unique shared-cache in-memory SQLite database with one connection kept open; `url()`, `config_snippet()` (a `[data]` section for `ContextRunner`) and `sqlite_pool()` read it, and `close(self).await` ends it. With the features `data-postgres` and `data-mysql`, `postgres().await` and `mysql().await` create an `oxbloom_test_*` database on the server named by `OXBLOOM_TEST_POSTGRES_URL` or `OXBLOOM_TEST_MYSQL_URL`, with `postgres_pool()` and `mysql_pool()`, and `close` drops it. `Debug` and errors never show the URL. The `Drop` cleanup is best effort, so a test that panics before `close` leaks its database on a persistent server. `make test-db` starts `postgres:17` (127.0.0.1:55432) and `mysql:8.4` (127.0.0.1:53306) from `compose.test.yaml`, runs the ignored tests named `data_conformance_*` of `crates/oxbloom-test/tests/` and removes the containers with `down -v`; the SQLite conformance tests always run.
+`TestDatabase::sqlite()` is a unique shared-cache in-memory SQLite database with one connection kept open; `url()` (a connection of your own to it reaches the same database), `config_snippet()` (a `[data]` section for `ContextRunner`) and `sqlite_pool()` read it, and `close(self).await` ends it. With the features `data-postgres` and `data-mysql`, `postgres().await` and `mysql().await` create an `oxbloom_test_*` database on the server named by `OXBLOOM_TEST_POSTGRES_URL` or `OXBLOOM_TEST_MYSQL_URL`, with `postgres_pool()` and `mysql_pool()`, and `close` drops it. `Debug` and errors never show the URL. The `Drop` cleanup is best effort, so a test that panics before `close` leaks its database on a persistent server. `make test-db` starts `postgres:17` (127.0.0.1:55432) and `mysql:8.4` (127.0.0.1:53306) from `compose.test.yaml`, runs the ignored tests named `data_conformance_*` of `crates/oxbloom-test/tests/` and removes the containers with `down -v`; the SQLite conformance tests always run.
 
 ```rust
 let db = TestDatabase::sqlite();
@@ -7062,7 +7075,7 @@ db.close().await;
 
 #### `SslBundle::trust_pem()` and `SslBundle::identity_pem()` (`oxbloom-ssl`)
 
-`trust_pem()` returns every trust certificate as concatenated `CERTIFICATE` blocks, or `None` without a trust store. `identity_pem()` returns the chain (leaf first) and the private key as PEM, or `None` without an identity. The key keeps its encoding under its label: `PRIVATE KEY` (PKCS#8, also for PKCS#12), `RSA PRIVATE KEY` or `EC PRIVATE KEY`. `sqlx` with rustls reads all three; native-tls needs PKCS#8. A reload changes the result. The key is a plain `Vec<u8>`: never log it.
+`trust_pem()` returns every trust certificate as concatenated `CERTIFICATE` blocks, or `None` without a trust store. `identity_pem()` returns the chain (leaf first) and the private key as PEM, or `None` without an identity. The key keeps its encoding under its label: `PRIVATE KEY` (PKCS#8, also for PKCS#12), `RSA PRIVATE KEY` or `EC PRIVATE KEY`. `sqlx` with rustls reads all three; native-tls needs PKCS#8. A reload changes the result, also for a clone of the bundle taken before it. The key is a plain `Vec<u8>`: never log it. The bundle wipes its own copy of the key DER when the material is dropped.
 
 ```rust
 let client = SslBundles::from_config(&Config::from_str(&format!("[ssl.bundle.pem.client]\ntrust = '''\n{ca}'''"))?)?

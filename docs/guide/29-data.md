@@ -10,9 +10,9 @@ oxbloom-boot = { version = "0.1", features = ["data-postgres", "actuator"] }   #
 oxbloom-test = { version = "0.1", features = ["data"] }            # TestDatabase (dev-dependency)
 ```
 
-The decisions are in [ADR 0096](../adr/0096-data-core.md) and every public item has an example in the [API reference](../API.md#416-oxbloom-data). The design is a local file under `docs/superpowers`, so this page names it without a link.
+The decisions are in [ADR 0096](../adr/0096-data-core.md) and every public item has an example in the [API reference](../API.md#416-oxbloom-data).
 
-The features of `oxbloom-boot` are `data-postgres`, `data-mysql` and `data-sqlite`; name the drivers your application uses. Each one turns on the matching driver of `oxbloom-data`, rustls with `aws-lc-rs` and the platform root certificates (never `ring`) and `transaction_with_retry`. Without the `data-*` features of boot, use `oxbloom-data` directly with its own features `postgres`, `mysql`, `sqlite` and `retry`. With no driver feature, `oxbloom-data` builds without any TLS crate, and a source whose driver is missing fails with `Unsupported`.
+The features of `oxbloom-boot` are `data-postgres`, `data-mysql` and `data-sqlite`; name the drivers your application uses. Each one turns on the matching driver of `oxbloom-data`, rustls with `aws-lc-rs` and the platform root certificates (never `ring`) and `transaction_with_retry`. Without the `data-*` features of boot, use `oxbloom-data` directly with its own features `postgres`, `mysql`, `sqlite` and `retry`. With no driver feature, `oxbloom-data` builds without any TLS crate, and a source whose driver is missing fails with `Unsupported`. Every driver feature, `sqlite` included, carries the rustls and `aws-lc-rs` stack. The `sqlite` feature also compiles SQLite itself from source (`sqlx` bundles it), so it needs a C compiler and adds build time.
 
 ## Configuration
 
@@ -36,8 +36,8 @@ max-connections = 4
 | `data.max-connections` | `10` (1 for an in-memory SQLite URL) | The most connections of the pool. |
 | `data.min-connections` | `0` | The connections the pool keeps open. Not above `max-connections`. A lazy pool honours it only loosely. |
 | `data.acquire-timeout` | `30s` | How long acquiring a connection may wait. Above zero. |
-| `data.idle-timeout` | `sqlx` default (10 minutes) | How long a connection may sit idle. Above zero. |
-| `data.max-lifetime` | `sqlx` default (30 minutes) | How long a connection may live. Above zero. |
+| `data.idle-timeout` | `sqlx` default (10 minutes); never for an in-memory SQLite URL | How long a connection may sit idle. Above zero. |
+| `data.max-lifetime` | `sqlx` default (30 minutes); never for an in-memory SQLite URL | How long a connection may live. Above zero. |
 | `data.test-before-acquire` | `true` | Whether a connection is checked before it is handed out. |
 | `data.ssl-mode` | the driver | `disable`, `prefer`, `require`, `verify-ca` or `verify-full`. Not for SQLite. |
 | `data.ssl-bundle` | unset | The name of an SSL bundle. See [TLS with an SSL bundle](#tls-with-an-ssl-bundle). Not for SQLite. |
@@ -46,7 +46,7 @@ max-connections = 4
 Rules for every source:
 
 - A source needs a `url`. A name is `[a-z0-9-]+` and is not `default`. Names with a dash are best set in the configuration file, because an environment variable override such as `..._DATA__SOURCES__REPORTING_DB__URL` spells the name `reporting_db`, which is refused. Schemes are matched in lower case, and the network schemes need `://`.
-- An unknown key, a value of the wrong type, a bad duration, a zero `max-connections`, `min-connections` above `max-connections`, an unknown `ssl-mode`, and `ssl-mode` or `ssl-bundle` on a SQLite source are errors. Each error names the full key and never the value.
+- An unknown key, a value of the wrong type, a bad duration, a zero `max-connections`, `min-connections` above `max-connections`, an unknown `ssl-mode`, an empty `ssl-bundle`, and `ssl-mode` or `ssl-bundle` on a SQLite source are errors. Each error names the full key and never the value.
 - The URL is a `Secret`. No error, `Debug` output, log event or health detail contains the URL, the password, the user, the host or a SQLite path.
 - A password with special characters must be percent-encoded in the URL.
 - The property metadata lists every key, and the conditions report says why `DataAutoConfiguration` ran or not. It runs when the configuration has a `data` section.
@@ -54,6 +54,8 @@ Rules for every source:
 ## Injecting the pool
 
 With a `data` section, the default source also becomes a bean of its pool type: `sqlx::PgPool`, `sqlx::MySqlPool` or `sqlx::SqlitePool`, injected as `Arc<..>`. The bean backs off when your application registers its own bean of that type. Named sources are not beans: take the `DataSources` bean and ask for a pool by name.
+
+Register the component like any other, for example with `.configure(|b| b.component::<Orders>())` on the application builder (see [Dependency injection](03-dependency-injection.md)).
 
 ```rust
 use std::sync::Arc;
@@ -79,7 +81,7 @@ impl Orders {
 }
 ```
 
-`DataSources` has `postgres(name)`, `mysql(name)` and `sqlite(name)` (each exists when the driver feature is on, and returns `None` for an unknown name or another driver), and also `names`, `default_name`, `driver_of`, `len` and `is_empty`.
+`DataSources` has `postgres(name)`, `mysql(name)` and `sqlite(name)` (each exists when the driver feature is on, and returns `None` for an unknown name or another driver), and also `names`, `default_name`, `driver_of`, `len`, `is_empty`, `ping`, `ping_all`, `pool_counts`, `close_all` and `close_all_within`. `Driver::from_url` tells the driver of a URL by the same scheme rule as the settings.
 
 Pools are lazy. Building them opens no connection and needs no database; the first use connects. A lazy pool needs a Tokio runtime, because `sqlx` ties the maintenance task of a pool to the runtime that is current when it is built. Bean creation runs on the application's runtime, so this holds in an application. `DataSources::build` called outside a runtime fails with `DataError::Pool`, and a pool you build on a temporary runtime stops working when that runtime ends.
 
@@ -127,16 +129,17 @@ let result = transaction(&pool, &options, async |tx| {
 assert!(matches!(result, Err(TransactionError::Inner(TransferError::InsufficientFunds))));
 ```
 
-`TransactionError<E>` is `Begin` (no connection, or the begin statement failed), `Commit`, `Unsupported` (the driver cannot honor the options; nothing ran) and `Inner(E)`. The `Display` text of the first three is fixed and the `Debug` output names only the variant, so no SQL, row data or driver text reaches a log. `into_inner` returns the error of the closure, and `source` returns it when it is a standard error. Because `Debug` of the `Inner` variant prints `Inner(..)`, log your own error where you have it.
+`TransactionError<E>` is `Begin` (no connection, or the begin statement failed), `Commit`, `Unsupported` (the driver cannot honor the options; nothing ran) and `Inner(E)`. `Commit` means the database refused the commit, and then the transaction is rolled back, or the connection was lost during the `COMMIT`, and then the outcome is unknown: the transaction may or may not have been committed. The `Display` text of the first three is fixed and the `Debug` output names only the variant, so no SQL, row data or driver text reaches a log. `into_inner` returns an `Option<E>`: the error of the closure for `Inner`, `None` for the other variants. `source` returns that error when it is a standard error. Because `Debug` of the `Inner` variant prints `Inner(..)`, log your own error where you have it.
 
 There are no ambient transactions. A function does not join a transaction by itself; pass the `&mut Transaction` along, or run its statements inside the closure.
 
 ### Savepoints
 
-A nested unit of work inside the closure uses `tx.begin()` (from `sqlx::Acquire`), which creates a savepoint. Rolling the savepoint back undoes only what ran after it.
+A nested unit of work inside the closure uses `tx.begin()` (from `sqlx::Acquire`), which creates a savepoint. Rolling the savepoint back undoes only what ran after it. This example continues the previous one: `pool` is the pool from there.
 
 ```rust
 use oxbloom_data::sqlx::{self, Acquire};
+use oxbloom_data::{TransactionOptions, transaction};
 
 transaction(&pool, &TransactionOptions::default(), async |tx| {
     sqlx::query("INSERT INTO log VALUES ('kept')").execute(&mut **tx).await?;
@@ -162,9 +165,12 @@ An option the driver cannot honor is refused with `TransactionError::Unsupported
 
 ### Transactions in spawned tasks and handlers
 
-When the closure borrows from the surrounding code, the future of `transaction` is not `Send`, because of a current limitation of the compiler with async closures (rust-lang/rust#110338). Where the future must be `Send`, as in `tokio::spawn`, write the closure as `async move` over owned data and clone the pool in first:
+When the closure borrows from the surrounding code, the future of `transaction` is not `Send`, because of a current limitation of the compiler with async closures (rust-lang/rust#110338). Where the future must be `Send`, as in `tokio::spawn`, write the closure as `async move` over owned data and clone the pool in first. This example also continues the transaction example above, with its `pool`:
 
 ```rust
+use oxbloom_data::sqlx;
+use oxbloom_data::{TransactionOptions, transaction};
+
 let task_pool = pool.clone();
 let name = String::from("alice");
 tokio::spawn(async move {
@@ -210,14 +216,15 @@ The closure must be idempotent. Everything it did in the database is rolled back
 
 ## Startup, shutdown and errors
 
-`DataService` is a boot service with the lowest phase, so it starts before every other service and stops after them.
+`DataService` is a boot service with the lowest phase, so it starts before every other service and stops after them. It is registered only when the `data` section configures a source; a section with nothing but `connect-on-startup` registers none.
 
-- At start, with `data.connect-on-startup = true` (the default), it pings every source one after the other, each with a 10 second timeout. An unreachable database fails the start. The failure report names the source and the key `<prefix>.url` and never shows the URL. A refused connection can end as a pool timeout, because `sqlx` retries it until the `acquire-timeout`; the report treats both as unreachable. With the default `acquire-timeout` of 30 seconds, an unreachable network server makes the start wait the full 10 seconds, once per source. Set a shorter `acquire-timeout` to fail sooner. With `connect-on-startup = false`, the pools connect on first use.
-- At stop, it closes every pool and waits up to 10 seconds for the connections in use. When that runs out, it logs a warning at target `oxbloom::data` with the fixed text "the data sources did not close within 10 seconds" and the source names (all of them, not only the one that failed to close).
+- At start, with `data.connect-on-startup = true` (the default), it pings the sources one at a time, in the order of `DataSources::names`, each with a 10 second timeout, and stops at the first one that fails, so several unreachable sources cost one wait, not one each. An unreachable database fails the start. The failure report names the source and the key `<prefix>.url` and never shows the URL. A refused connection can end as a pool timeout, because `sqlx` retries it until the `acquire-timeout`; the report treats both as unreachable. With the default `acquire-timeout` of 30 seconds, an unreachable network server makes the start wait the full 10 seconds of its check. Set a shorter `acquire-timeout` to fail sooner. With `connect-on-startup = false`, the pools connect on first use.
+- At stop, it marks every pool closed at once, so no pool hands out a new connection, and then waits up to 10 seconds in all for the pools to close, which needs the connections in use to be returned (`DataSources::close_all_within`). When that time runs out, it logs one warning at target `oxbloom::data` with the fixed text "these data sources did not close within 10 seconds" and a `sources` field that lists only the sources whose close did not finish. Their connections in use are closed when they are returned. `Service::stop` returns nothing, so this warning is the only report of it.
+- `DataService` does not keep running (`Service::keeps_running` is `false`): it only holds the pools between start and stop. An application whose runners do the work and that has no service that keeps running, such as a web server or a scheduler, therefore ends after its runners, and the pools are still closed on the way out. With a web server, the application waits for a shutdown signal as before.
 - A failed start does not call `stop`; the pools are dropped with the container.
-- When your application registers its own `DataSources` bean, there is no back-off for it: the default pool bean and the service use whichever bean the container resolves.
+- When your application registers its own `DataSources` bean, it wins: boot builds no registry of its own, and the default pool bean, `DataService` and the health indicators use your bean.
 
-Errors have fixed text. `DataError` is `Config`, `Connect`, `Pool`, `Unsupported` and `Tls`, none with a payload. `DataSources::build` returns a `SourceError` that names the source (`source_name()`), the `DataError` (`error()`) and the key to fix (`config_prefix()`, which is `data` or `data.sources.<name>`); its text is "data source `<name>`: <fixed text>". The startup failure report gives an action for each case: the missing `data-<driver>` feature for `Unsupported`, the TLS keys for `Tls`, a Tokio runtime for `Pool` outside one, and the URL options for the rest.
+Errors have fixed text. `DataError` is `Config`, `Connect`, `Pool`, `Unsupported`, `Tls` and `VerifyCaWithTrust`, none with a payload; the enum is `#[non_exhaustive]`, like `Driver`. `DataSources::build` returns a `SourceError` that names the source (`source_name()`), the `DataError` (`error()`) and the key to fix (`config_prefix()`, which is `data` or `data.sources.<name>`); its text is "data source `<name>`: <fixed text>". The startup failure report gives an action for each case: the missing `data-<driver>` feature for `Unsupported`, the TLS keys for `Tls`, the key `<prefix>.ssl-mode` and `verify-full` for `VerifyCaWithTrust`, a Tokio runtime for `Pool` outside one, and the URL options for the rest.
 
 ## Health
 
@@ -245,12 +252,15 @@ url        = "postgres://app:${DB_PASSWORD}@db.internal/app"
 ssl-bundle = "dbclient"
 ```
 
-Rules (ruling R4 of the design):
+Rules:
 
-- A source with `ssl-bundle` and no `ssl-mode` connects with `verify-full` (MySQL `VerifyIdentity`): the certificate must chain to the bundle's trust and the host name must match. This overrides a mode in the URL and the `PGSSLMODE` variable.
-- An explicit `ssl-mode` wins. `prefer` and `require` encrypt but do not check the certificate against the bundle's trust, and `prefer` falls back to plain text. `verify-ca` and `verify-full` check it.
+- For a database, the bundle's trust certificates are **added** to the platform root certificates; they do not replace them. `sqlx` loads the platform roots and then adds the bundle's certificates. This is unlike the other users of an SSL bundle, such as the HTTP client, where the bundle's trust replaces the platform roots.
+- A source with `ssl-bundle` and no `ssl-mode` connects with `verify-full` (MySQL `VerifyIdentity`): the certificate must chain to the bundle's trust or to a platform root, and the host name must match. Because the platform roots stay, `verify-full` also accepts a publicly trusted certificate for the database's host name. This overrides a mode in the URL and the `PGSSLMODE` variable.
+- An explicit `ssl-mode` wins. `prefer` and `require` encrypt but do not check the certificate, and `prefer` falls back to plain text, also with a bundle. `verify-full` checks it.
+- `ssl-mode = "verify-ca"` together with a bundle that has a trust store is refused when the pools are built: `verify-ca` does not check the host name, and with the platform roots added it would accept any publicly trusted certificate for any host. The startup failure report names `<prefix>.ssl-mode` and says to use `verify-full`. `verify-ca` with a bundle that holds only a client certificate stays allowed; it then checks the certificate against the platform roots.
 - `ssl-bundle` with `ssl-mode = "disable"` is a settings error.
 - A bundle that holds only a client certificate and no trust store, with no `ssl-mode`, also defaults to `verify-full`, against the platform roots. A server behind a private CA then needs the CA in the bundle's trust or an explicit `ssl-mode`.
+- The `oxbloom-ssl` bundle wipes its copy of the private key DER when the material is dropped, but `sqlx` keeps its own copy of the client key PEM in the connect options of each pool, unwiped, for the lifetime of the pool.
 - An unknown bundle name fails the start on `<prefix>.ssl-bundle` and lists the bundles that exist. Without the `ssl` feature of boot, naming a bundle is an error on the same key.
 - The PEM is parsed on the first connection, so a bad PEM shows up as `DataError::Connect` then, not at build time.
 - Pools keep the material they were built with. They do not follow a reload of the bundle (see [SSL bundles](16-ssl-bundles.md#ssl-bundles)): restart the application after a rotation.
@@ -322,6 +332,7 @@ The conformance suite runs the same transaction, rollback, savepoint, retry, hea
 - **`transaction_with_retry` needs an idempotent closure.** Effects outside the database are not rolled back, and SQLite `LOCKED` from a conflict within one connection is retried until the attempts run out.
 - **SQLite accepts only the default isolation and `Serializable`,** and no read-only transactions. In-memory SQLite has the rules above.
 - **Health indicators are not `dyn HealthIndicator` beans.** An application that collects those beans itself does not see them.
-- **No back-off for your own `DataSources` bean.** The default pool bean and the service use whichever bean the container resolves.
+- **No end-to-end TLS test.** The compose services of `make test-db` run without TLS, so the TLS settings are tested by the connect options they produce, not against a TLS server.
+- **Bundle trust is added to the platform roots.** `verify-full` also accepts a publicly trusted certificate for the host name, and `verify-ca` with a bundle that has a trust store is refused.
 - **A test that panics before `close` leaks a database** on a persistent PostgreSQL or MySQL server.
 - **PostgreSQL and MySQL tests are env-gated.** They run only with the two URLs set, for example through `make test-db`.

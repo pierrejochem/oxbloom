@@ -1083,24 +1083,21 @@ Known minors left after the last review of Slice 9 (parked, small): `docs/API.md
 Done on 2026-11-25 on the branch `m3a-data`; design in `docs/superpowers/specs/2026-11-24-data-core-design.md`, plan in `docs/superpowers/plans/2026-11-24-data-core.md` (local files, named without a link), decisions in ADR 0096, usage in the guide chapter 29 (the roadmap chapter is now 30) and `docs/API.md` (section 4.16).
 
 Delivered:
-- The crate `oxbloom-data` on `sqlx` 0.9.1 (rustls with `aws-lc-rs` and the platform roots, no `ring`): the cargo features `postgres`, `mysql`, `sqlite` and `retry`, the `data.*` settings (`DataSettings`, `SourceSettings`, `PROPERTIES`), `DataSources` with lazy pools for a default and named sources, `DataError` and `SourceError` with fixed text, and `TlsMaterial` for sources that use an SSL bundle (a bundle without `ssl-mode` means `verify-full`).
+- The crate `oxbloom-data` on `sqlx` 0.9.1 (rustls with `aws-lc-rs` and the platform roots, no `ring`): the cargo features `postgres`, `mysql`, `sqlite` and `retry`, the `data.*` settings (`DataSettings`, `SourceSettings`, `PROPERTIES`), `DataSources` with lazy pools for a default and named sources, `DataError` and `SourceError` with fixed text, `TlsMaterial` for sources that use an SSL bundle (a bundle without `ssl-mode` means `verify-full`; the bundle's trust is added to the platform roots, so `verify-ca` with a bundle that has a trust store is refused), and `Driver::from_url`.
 - Transactions: `transaction` with `TransactionOptions` and `Isolation` (per-driver begin statements, refusal of options a driver cannot honor), `TransactionError`, savepoints through `tx.begin()`, and `transaction_with_retry` with `RetryableError` behind the additive feature `retry`.
-- `oxbloom-ssl`: `SslBundle::trust_pem` and `SslBundle::identity_pem`.
-- `oxbloom-boot`: the features `data-postgres`, `data-mysql` and `data-sqlite`, `DataAutoConfiguration` (settings, registry and default pool beans), `DataService` (ping at start, bounded close at stop) and analyzers for configuration and unreachable sources.
+- `oxbloom-ssl`: `SslBundle::trust_pem` and `SslBundle::identity_pem`; the retained key DER is wiped on drop.
+- `oxbloom-boot`: the features `data-postgres`, `data-mysql` and `data-sqlite`, `DataAutoConfiguration` (settings, registry and default pool beans), `DataService` (one source at a time at start, stopping at the first failure; every pool marked closed at stop and one bounded wait through `DataSources::close_all_within`; it does not keep running, through the new defaulted `Service::keeps_running`, so a run-to-completion application ends after its runners), back-off for an application's own `DataSources` bean, and analyzers for configuration and unreachable sources.
 - `oxbloom-actuator`: `DataHealthIndicator` (feature `data`), registered by boot through one `DataIndicators` bean as `db` and `db.<name>`.
 - `oxbloom-test`: `TestDatabase` (SQLite always, PostgreSQL and MySQL with `data-postgres` and `data-mysql`), the per-driver conformance suite `data_conformance_*` in `crates/oxbloom-test/tests/`, `compose.test.yaml` and `make test-db`.
 - Verified against real servers with `make test-db`: PostgreSQL 17 and MySQL 8.4, including the MySQL begin statement and the induced serialization failures.
 
 Not in M3a: migrations (M3b, next), ambient transactions, a repository layer or query builder, a qualifier mechanism for pools, pools that follow SSL bundle reloads, and databases other than the three.
 
-Deferred minors from the M3a reviews (parked, small):
-- `DataService::stop` logs the names of all sources when the close times out, not the one that failed to close; `start` pings with `ping_all`, so N unreachable sources cost up to N times 10 seconds.
-- The boot copy of the URL scheme rule (`driver_of`) duplicates the rule of `oxbloom-data`; a public `Driver::from_url` would remove it.
-- The wording of the failure report for an `ssl-bundle` settings message reads awkwardly, and the analyzer prefix duplicates `SourceError::config_prefix()`.
-- The retained key DER of an SSL bundle is not wiped on drop (a `zeroize` on `Material` is parked), and no test covers the `RSA PRIVATE KEY` label or the change of the accessors after `SslBundles::reload`.
-- The SQLite retry conformance test uses a 200 ms sleep and does not assert the busy code; the no-password tests do not walk the `source()` chain and capture no logs; a panic between role or user creation and drop leaks a cluster-wide role or user in the percent-encoding tests of PostgreSQL and MySQL.
-- A zero health timeout maps a closed pool to `timed out`; no integration test drives a real health timeout.
+Deferred minors from the M3a reviews (parked, small; the final fix wave closed the others):
+- A zero health timeout maps a closed pool to `timed out`, because the indicator tells the two apart by the time the check took.
 - `cargo test -p oxbloom-test --features data` alone runs no boot conformance tests; they need `data,web`, which `make test-db` gets through `--all-features`.
+- There is no end-to-end TLS test against a database: the compose services of `make test-db` run without TLS.
+- `SourceError` has public fields next to its accessors; a SQLite URL with a percent-encoded `mode` or with repeated `cache` options is classified differently from `sqlx` (it only affects an explicit `max-connections`); a `TERM` sent only to the shell of `make test-db` is handled after `cargo` ends.
 
 Gate numbers at the end of M3a: to be filled by the controller.
 
