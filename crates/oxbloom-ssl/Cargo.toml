@@ -14,6 +14,8 @@ oxbloom-config = { version = "0.1.0", path = "../oxbloom-config" }
 oxbloom-core = { version = "0.1.0", path = "../oxbloom-core" }
 oxbloom-di = { version = "0.1.0", path = "../oxbloom-di", optional = true }
 # The `pbes1` feature reads PKCS#12 files written by older tools (3DES and RC2 key bags).
+# Encodes the DER of certificates and keys as PEM; already in the tree through `p12-keystore`.
+pem-rfc7468 = { version = "1.0.0", default-features = false, features = ["alloc"] }
 p12-keystore = { version = "0.4.1", default-features = false, features = ["pbes1"] }
 # `aws-lc-rs` is the only crypto provider: no `ring`.
 rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs", "std", "tls12", "logging"] }
@@ -22,6 +24,9 @@ rustls-platform-verifier = "0.7.1"
 serde = { version = "1.0.229", features = ["derive"] }
 tokio = { version = "1.54.1", features = ["rt", "sync", "time"] }
 tracing = "0.1.44"
+# Wipes the retained private key DER and the PEM bytes it was read from; already in the tree
+# through `rustls-pki-types`.
+zeroize = { version = "1.9.1", default-features = false, features = ["alloc"] }
 # Reads the subject and validity dates of each certificate for the validity warnings.
 x509-parser = { version = "0.18.1", default-features = false }
 

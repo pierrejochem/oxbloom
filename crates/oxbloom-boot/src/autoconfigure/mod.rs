@@ -8,6 +8,12 @@
 
 #[cfg(feature = "actuator")]
 mod actuator;
+#[cfg(any(
+    feature = "data-postgres",
+    feature = "data-mysql",
+    feature = "data-sqlite"
+))]
+mod data;
 #[cfg(feature = "http-client")]
 mod http_client;
 #[cfg(feature = "security")]
@@ -33,6 +39,18 @@ mod tasks;
 
 #[cfg(feature = "actuator")]
 pub use actuator::ActuatorAutoConfiguration;
+#[cfg(any(
+    feature = "data-postgres",
+    feature = "data-mysql",
+    feature = "data-sqlite"
+))]
+pub use data::{DataAutoConfiguration, DataService};
+#[cfg(any(
+    feature = "data-postgres",
+    feature = "data-mysql",
+    feature = "data-sqlite"
+))]
+pub(crate) use data::{DataUnreachable, SourceBuildError};
 #[cfg(feature = "http-client")]
 pub use http_client::HttpClientAutoConfiguration;
 #[cfg(feature = "security")]
@@ -69,7 +87,8 @@ use crate::autoconfig::AutoConfigurations;
 /// `RequestLogAutoConfiguration` and then `WebServerAutoConfiguration` (after the others when
 /// several features are on); with `tasks`, `TasksAutoConfiguration` and then
 /// `RetryAutoConfiguration`; with `http-client`, `HttpClientAutoConfiguration`; with `oauth2`,
-/// `OAuth2ClientAutoConfiguration` last. Remove one with
+/// `OAuth2ClientAutoConfiguration`; with any of `data-postgres`, `data-mysql` and
+/// `data-sqlite`, `DataAutoConfiguration` last. Remove one with
 /// [`exclude`](crate::OxbloomApplicationBuilder::exclude).
 ///
 /// # Examples
@@ -79,14 +98,19 @@ use crate::autoconfig::AutoConfigurations;
 /// use oxbloom_config::Config;
 ///
 /// // `security` adds four auto-configurations, `ssl` one, `actuator` one, `web` two, `tasks`
-/// // two, `http-client` one and `oauth2` one.
+/// // two, `http-client` one, `oauth2` one and the `data-*` features one together.
 /// let expected = 4 * usize::from(cfg!(feature = "security"))
 ///     + usize::from(cfg!(feature = "ssl"))
 ///     + usize::from(cfg!(feature = "actuator"))
 ///     + 2 * usize::from(cfg!(feature = "web"))
 ///     + 2 * usize::from(cfg!(feature = "tasks"))
 ///     + usize::from(cfg!(feature = "http-client"))
-///     + usize::from(cfg!(feature = "oauth2"));
+///     + usize::from(cfg!(feature = "oauth2"))
+///     + usize::from(cfg!(any(
+///         feature = "data-postgres",
+///         feature = "data-mysql",
+///         feature = "data-sqlite"
+///     )));
 /// assert_eq!(auto_configurations().len(), expected);
 ///
 /// # tokio::runtime::Builder::new_current_thread().build()?.block_on(async {
@@ -168,6 +192,12 @@ use crate::autoconfig::AutoConfigurations;
 ///     assert_eq!(keys(all(), "http.client."), 12);
 ///     assert_eq!(keys(all().exclude::<HttpClientAutoConfiguration>(), "http.client."), 0);
 /// }
+/// #[cfg(any(feature = "data-postgres", feature = "data-mysql", feature = "data-sqlite"))]
+/// {
+///     use oxbloom_boot::DataAutoConfiguration;
+///     assert_eq!(keys(all(), "data."), oxbloom_data::PROPERTIES.len());
+///     assert_eq!(keys(all().exclude::<DataAutoConfiguration>(), "data."), 0);
+/// }
 /// # let _ = (keys, all);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// # })?;
@@ -197,5 +227,11 @@ pub fn auto_configurations() -> AutoConfigurations {
     let list = list.add::<HttpClientAutoConfiguration>();
     #[cfg(feature = "oauth2")]
     let list = list.add::<OAuth2ClientAutoConfiguration>();
+    #[cfg(any(
+        feature = "data-postgres",
+        feature = "data-mysql",
+        feature = "data-sqlite"
+    ))]
+    let list = list.add::<DataAutoConfiguration>();
     list
 }

@@ -1079,6 +1079,33 @@ Gate numbers at the end of Slice 9 part C: `cargo test --workspace --all-feature
 
 Known minors left after the last review of Slice 9 (parked, small): `docs/API.md` still says in the JWT paragraph that a JWT claim `oxbloom.remembered` counts for `is_remembered()` (stale since the converter drops `oauth2.` and `oxbloom.` claims); the guide chapter 27 line and the `security.oauth2.base-url` property description say "required when a registration exists" and should add "and OAuth2 login is on (`security.oauth2.login.enabled`)"; the cross-registration token test does not check that the second registration's tokens are stored; the combination of `security.oauth2.login.enabled = false` and an application `oauth2_login` customizer keeps the customizer's login and is not documented; the slice 7b minor about a JWT claim `oxbloom.remembered` above is superseded.
 
+### M3a: Data core (`oxbloom-data`, `oxbloom-ssl`, `oxbloom-boot`, `oxbloom-actuator`, `oxbloom-test`) — done
+Done on 2026-11-25 on the branch `m3a-data`; design in `docs/superpowers/specs/2026-11-24-data-core-design.md`, plan in `docs/superpowers/plans/2026-11-24-data-core.md` (local files, named without a link), decisions in ADR 0096, usage in the guide chapter 29 (the roadmap chapter is now 30) and `docs/API.md` (section 4.16).
+
+Delivered:
+- The crate `oxbloom-data` on `sqlx` 0.9.1 (rustls with `aws-lc-rs` and the platform roots, no `ring`): the cargo features `postgres`, `mysql`, `sqlite` and `retry`, the `data.*` settings (`DataSettings`, `SourceSettings`, `PROPERTIES`), `DataSources` with lazy pools for a default and named sources, `DataError` and `SourceError` with fixed text, `TlsMaterial` for sources that use an SSL bundle (a bundle without `ssl-mode` means `verify-full`; the bundle's trust is added to the platform roots, so `verify-ca` with a bundle that has a trust store is refused), and `Driver::from_url`.
+- Transactions: `transaction` with `TransactionOptions` and `Isolation` (per-driver begin statements, refusal of options a driver cannot honor), `TransactionError`, savepoints through `tx.begin()`, and `transaction_with_retry` with `RetryableError` behind the additive feature `retry`.
+- `oxbloom-ssl`: `SslBundle::trust_pem` and `SslBundle::identity_pem`; the retained key DER is wiped on drop.
+- `oxbloom-boot`: the features `data-postgres`, `data-mysql` and `data-sqlite`, `DataAutoConfiguration` (settings, registry and default pool beans), `DataService` (one source at a time at start, stopping at the first failure; every pool marked closed at stop and one bounded wait through `DataSources::close_all_within`; it does not keep running, through the new defaulted `Service::keeps_running`, so a run-to-completion application ends after its runners), back-off for an application's own `DataSources` bean, and analyzers for configuration and unreachable sources.
+- `oxbloom-actuator`: `DataHealthIndicator` (feature `data`), registered by boot through one `DataIndicators` bean as `db` and `db.<name>`.
+- `oxbloom-test`: `TestDatabase` (SQLite always, PostgreSQL and MySQL with `data-postgres` and `data-mysql`), the per-driver conformance suite `data_conformance_*` in `crates/oxbloom-test/tests/`, `compose.test.yaml` and `make test-db`.
+- Verified against real servers with `make test-db`: PostgreSQL 17 and MySQL 8.4, including the MySQL begin statement and the induced serialization failures.
+
+Not in M3a: migrations (M3b, next), ambient transactions, a repository layer or query builder, a qualifier mechanism for pools, pools that follow SSL bundle reloads, and databases other than the three.
+
+Deferred minors from the M3a reviews (parked, small; the final fix wave closed the others):
+- A zero health timeout maps a closed pool to `timed out`, because the indicator tells the two apart by the time the check took.
+- `cargo test -p oxbloom-test --features data` alone runs no boot conformance tests; they need `data,web`, which `make test-db` gets through `--all-features`.
+- There is no end-to-end TLS test against a database: the compose services of `make test-db` run without TLS.
+- `DataSources::close_all_within` drops the unfinished close futures when the budget ends, so the idle connections of a pool that did not finish stay open until the pool itself is dropped (connections that are returned later are closed).
+- With a `data` section that holds only `connect-on-startup`, `DataService` is not registered, so boot neither pings nor closes an application's own `DataSources`.
+- `DataSettings` has no back-off for an application bean of the same type; a second `DataSettings` bean makes the registry and service wiring ambiguous.
+- Ctrl-C during the startup check of an application whose only service is `DataService` ends the process without a graceful pool close, because signal handlers are installed only when a service keeps running.
+- No test starts several unreachable sources to show that the start stops at the first failure.
+- `SourceError` has public fields next to its accessors; a SQLite URL with a percent-encoded `mode` or with repeated `cache` options is classified differently from `sqlx` (it only affects an explicit `max-connections`); a `TERM` sent only to the shell of `make test-db` is handled after `cargo` ends.
+
+Gate numbers at the end of M3a: `cargo test --workspace --all-features --no-fail-fast` 4344 passed, 0 failed, 40 ignored (4129 passed and 8 ignored before M3a; the 32 new ignored tests are the PostgreSQL and MySQL conformance tests; counted by summing the `test result` lines, doctests included); `make test-db` against PostgreSQL 17 and MySQL 8.4: 16 `data_conformance_*` tests per driver passed, 0 failed, and the compose services were stopped afterwards; `make check-examples` 79 passed, 0 failed; clippy `-D warnings` for the workspace with all features and `cargo fmt --check` clean; the boot stack probes are unchanged at 238 KB passing and 237 KB overflowing (exit 101) with no features, and 239 KB passing and 238 KB overflowing (exit 101) with all features; the builds of `oxbloom-data` with no features, with each driver alone and with all drivers and `retry`, of `oxbloom-boot --no-default-features` with `data-sqlite`, `data-postgres`, `data-mysql`, `data-postgres,ssl` and `data-sqlite,actuator`, and of `oxbloom-security` and `oxbloom-http-client` with all features pass; `cargo tree -i ring --workspace --all-features` prints nothing.
+
 ### C10: Test support (`oxbloom-test`)
 
 #### C10a: Context runner and clock — done
@@ -1138,7 +1165,7 @@ Deferred minors from the C10b reviews:
 6. **C4 Conditions and auto-configuration** (C4a, the mechanism, and C4b, auto-configuring the existing wiring with property metadata, done).
 7. **C10 Test support** (C10a, the context runner and clock, and C10b, `TestApp`, `TestClient` and slicing, done).
 8. **C7 SSL bundles** (done) and **C8 Availability, info and health** (done), **C9a Tasks and scheduling** (done) and **C9b Retry** (done).
-9. Security Slice 8 (method security, done) and 9 (the HTTP client and module M1, OAuth2 login and the OAuth2 client, done). Next candidates, on the user's request: `oxbloom-ai`, the database module (`oxbloom-data`, M3), jobs and the rest of `IDEA.md`.
+9. Security Slice 8 (method security, done) and 9 (the HTTP client and module M1, OAuth2 login and the OAuth2 client, done). M3a (the data core, `oxbloom-data`) is done; next candidates, on the user's request: M3b (migrations), `oxbloom-ai`, jobs and the rest of `IDEA.md`.
 10. **C11 Service connections** after the database and queue crates exist.
 
 ## Open questions for the design steps

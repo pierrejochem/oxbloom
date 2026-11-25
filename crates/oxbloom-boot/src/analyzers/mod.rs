@@ -5,6 +5,12 @@ use std::sync::Arc;
 mod autoconfig;
 mod beans;
 mod config;
+#[cfg(any(
+    feature = "data-postgres",
+    feature = "data-mysql",
+    feature = "data-sqlite"
+))]
+mod data;
 #[cfg(feature = "http-client")]
 mod http_client;
 #[cfg(feature = "logging")]
@@ -44,5 +50,14 @@ pub(crate) fn builtin() -> Vec<Arc<dyn FailureAnalyzer>> {
     analyzers.push(Arc::new(ssl::SslAnalyzer));
     #[cfg(feature = "http-client")]
     analyzers.push(Arc::new(http_client::HttpClientConfigAnalyzer));
+    #[cfg(any(
+        feature = "data-postgres",
+        feature = "data-mysql",
+        feature = "data-sqlite"
+    ))]
+    {
+        analyzers.push(Arc::new(data::DataConfigAnalyzer));
+        analyzers.push(Arc::new(data::DataUnreachableAnalyzer));
+    }
     analyzers
 }

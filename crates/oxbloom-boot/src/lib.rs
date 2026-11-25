@@ -13,8 +13,8 @@
 //! 4. run the [`ApplicationRunner`] and [`CommandLineRunner`] beans;
 //! 5. start the [`Service`] beans in ascending phase;
 //! 6. fire `started` and `ready`;
-//! 7. with at least one service, wait for Ctrl-C, SIGTERM (Unix) or a
-//!    [`ShutdownHandle`] trigger;
+//! 7. with at least one service that [keeps running](Service::keeps_running),
+//!    wait for Ctrl-C, SIGTERM (Unix) or a [`ShutdownHandle`] trigger;
 //! 8. stop the services in reverse order under one deadline (`stopping`);
 //! 9. shut the container down;
 //! 10. compute the [`ExitStatus`] from the [`ExitCodeGenerator`] beans
@@ -110,6 +110,12 @@
 //! `OAuth2ClientAutoConfiguration`, which registers an `oxbloom_security::OAuth2Client` bean for
 //! the same registrations over the `dyn HttpClient` bean.
 //!
+//! Cargo features `data-postgres`, `data-mysql` and `data-sqlite` each turn on that driver of
+//! `oxbloom-data` and add `DataAutoConfiguration`, which registers the `DataSources` registry
+//! of the `data.*` keys, the default source's sqlx pool as a bean, and `DataService`, which
+//! checks the sources at start (`data.connect-on-startup`) and closes the pools at shutdown,
+//! with failure reports for an invalid `data` key and for an unreachable source.
+//!
 //! Cargo feature `logging` installs the `oxbloom_logging` subscriber, configured by the
 //! `logging.*` keys, and registers its `LoggingSystem` as a bean so levels can be changed at
 //! runtime. Turn it off with `OxbloomApplicationBuilder::logging(false)` or
@@ -160,7 +166,10 @@ mod autoconfig;
     feature = "security",
     feature = "web",
     feature = "tasks",
-    feature = "http-client"
+    feature = "http-client",
+    feature = "data-postgres",
+    feature = "data-mysql",
+    feature = "data-sqlite"
 ))]
 mod autoconfigure;
 mod banner;
@@ -194,9 +203,18 @@ pub use autoconfigure::SslAutoConfiguration;
     feature = "security",
     feature = "web",
     feature = "tasks",
-    feature = "http-client"
+    feature = "http-client",
+    feature = "data-postgres",
+    feature = "data-mysql",
+    feature = "data-sqlite"
 ))]
 pub use autoconfigure::auto_configurations;
+#[cfg(any(
+    feature = "data-postgres",
+    feature = "data-mysql",
+    feature = "data-sqlite"
+))]
+pub use autoconfigure::{DataAutoConfiguration, DataService};
 #[cfg(feature = "security")]
 pub use autoconfigure::{
     JwtDecoderAutoConfiguration, PasswordEncoderAutoConfiguration, SecurityAutoConfiguration,

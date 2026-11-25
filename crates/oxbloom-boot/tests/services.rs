@@ -623,3 +623,63 @@ async fn lower_order_starts_first_within_a_phase() {
         ]
     );
 }
+
+/// A service that holds a resource between start and stop and does no work of its own.
+struct Resource(Log);
+
+#[async_trait]
+impl Service for Resource {
+    async fn start(&self) -> Result<(), ServiceError> {
+        self.0.push("start:resource");
+        Ok(())
+    }
+
+    async fn stop(&self) {
+        self.0.push("stop:resource");
+    }
+
+    fn keeps_running(&self) -> bool {
+        false
+    }
+}
+
+#[tokio::test]
+async fn services_that_do_not_keep_running_are_started_and_stopped_without_a_wait() {
+    let log = Log::new();
+    let l = log.clone();
+    // The handle is never triggered: a wait would hang until the watchdog fires.
+    let status = within(
+        base()
+            .configure(move |b| service!(b, Resource(l.clone()), Resource))
+            .run(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(status.code(), 0);
+    assert_eq!(log.entries(), ["start:resource", "stop:resource"]);
+}
+
+#[tokio::test]
+async fn one_service_that_keeps_running_still_makes_the_run_wait() {
+    let log = Log::new();
+    let l = log.clone();
+    let builder = base();
+    let handle = builder.shutdown_handle();
+    let run = tokio::spawn(
+        builder
+            .configure(move |b| {
+                let b = service!(b, Resource(l.clone()), Resource);
+                service!(b, Svc::<1>::new("a", 0, &l), Svc<1>)
+            })
+            .run(),
+    );
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!run.is_finished(), "run must wait for the shutdown trigger");
+    handle.trigger();
+    let status = within(run).await.unwrap().unwrap();
+    assert_eq!(status.code(), 0);
+    assert_eq!(
+        log.entries(),
+        ["start:resource", "start:a", "stop:a", "stop:resource"]
+    );
+}

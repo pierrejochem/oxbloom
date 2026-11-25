@@ -16,8 +16,12 @@
 //! the same name and adds `MockHttpClient` and `MockResponse`, a scripted `HttpClient` that
 //! records the requests it gets. The feature `oauth2` turns on `http-client` and adds
 //! `FakeProvider`, an OpenID Connect provider over `MockHttpClient` that signs id tokens with a
-//! key generated at construction, with `FakeUser`, `Fault` and `TokenRequest`. `web`,
-//! `security`, `logging`, `tls`, `http-client` and `oauth2` are off by default.
+//! key generated at construction, with `FakeUser`, `Fault` and `TokenRequest`.
+//! The feature `data` adds `TestDatabase`, a uniquely named in-memory SQLite database with a
+//! `[data]` snippet for `ContextRunner`; `data-postgres` and `data-mysql` add
+//! `TestDatabase::postgres` and `TestDatabase::mysql`, which create a throwaway database on the
+//! server named by `OXBLOOM_TEST_POSTGRES_URL` or `OXBLOOM_TEST_MYSQL_URL` (see `make test-db`).
+//! `web`, `security`, `logging`, `tls`, `http-client`, `oauth2` and `data` are off by default.
 //!
 //! # Examples
 //!
@@ -35,6 +39,8 @@ mod captured;
 mod client;
 mod clock;
 mod config_dir;
+#[cfg(feature = "data")]
+mod data;
 #[cfg(feature = "oauth2")]
 mod fake_provider;
 mod lifecycle;
@@ -52,6 +58,8 @@ pub use captured::Captured;
 pub use client::{RequestBuilder, TestClient, TestResponse};
 pub use clock::{FixedClock, ManualClock};
 pub use config_dir::TempConfigDir;
+#[cfg(feature = "data")]
+pub use data::TestDatabase;
 #[cfg(feature = "oauth2")]
 pub use fake_provider::{FakeProvider, FakeUser, Fault, TokenRequest};
 pub use log::Log;

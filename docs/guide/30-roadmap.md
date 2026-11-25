@@ -1,0 +1,27 @@
+# Roadmap
+
+Security slices:
+
+| Slice | Content |
+|---|---|
+| 5 (done) | Filter layer, security core, JWT resource server (static keys, JWKS) |
+| 6a (done) | `PasswordEncoder` (Argon2id), `UserDetailsService`, `DaoAuthenticationProvider`, HTTP Basic; see [Password login](19-password-login.md#password-login) |
+| 6b (done) | Sessions: `Session`, `SessionFilter`, an in-memory store and a stateless encrypted cookie; see [Sessions](20-sessions.md#sessions) |
+| 6c (done) | Form login: login and logout handlers, the `Authentication` in the session, a saved request, a default login page, sampled eviction; see [Form login](21-form-login.md#form-login) |
+| 6d (done) | CSRF protection: a synchronizer token in the session, checked in the chain, the login page field and framing headers, an optional token endpoint; see [CSRF protection](22-csrf.md#csrf-protection) |
+| 7a (done) | Security headers added by the chain, a per-user view of the in-memory sessions with a limit at login and `SessionRegistry`, and a revalidation of the stored login on an interval; see [Session management and security headers](23-session-management.md#session-management-and-security-headers) |
+| 7b (done) | Remember-me: a signed cookie bound to the password hash that logs a user in again after the session is gone, the `remembered` marker and `fully_authenticated()`, and the enforced reserved session key prefix; see [Remember-me](24-remember-me.md#remember-me) |
+| 8 (done) | Method security: `#[method_security]` with `#[pre_authorize]`, `#[post_authorize]`, `#[pre_filter]` and `#[post_filter]`, a task-local security context that fails closed, `spawn` and `with_authentication`; see [Method security](25-method-security.md#method-security) |
+| 9 part A (done) | The outbound HTTP client `oxbloom-http-client`; see [HTTP client](26-http-client.md#http-client) |
+| 9 part B (done) | OAuth2 and OpenID Connect login: the authorization code flow with PKCE, discovery and id token validation, the login in the form login session, `security.oauth2.*` in boot, `FakeProvider`; see [OAuth2 login](27-oauth2-login.md#oauth2-login) |
+| 9 part C (done) | The OAuth2 client: client credentials with a token cache, the refresh of the logged-in user's tokens, the bearer interceptors, `OAuth2ClientAutoConfiguration`; see [OAuth2 client](28-oauth2-client.md#oauth2-client) |
+
+Module slices:
+
+| Slice | Content |
+|---|---|
+| M1 (done) | The outbound HTTP client, delivered as security Slice 9 part A (see above) |
+| M3a (done) | The data core `oxbloom-data` on `sqlx`: pools for PostgreSQL, MySQL and SQLite from the `data.*` keys, `DataSources`, `transaction` with savepoints and per-driver options, `transaction_with_retry`, a health indicator, TLS from SSL bundles, `TestDatabase` and `make test-db`; see [Data](29-data.md#data) |
+| M3b (next) | Schema migrations in `oxbloom-data` |
+
+Core features modelled on Spring Boot are tracked in [`docs/ROADMAP-core.md`](../ROADMAP-core.md). Slices C1 (DI v2), C3 (application lifecycle in `oxbloom-boot`: C3a, the lifecycle, and C3b, failure analyzers and the startup failure report), C4a (conditions and the auto-configuration mechanism) and C4b (the web server and security auto-configurations, property metadata) and C5a (logging: levels, groups, runtime change and startup events), C5b (file and JSON output, request logging) and C6a (filter order, uniform errors, `server.*` keys) and C6b-1 (`Json<T>`, `Request::json`, content negotiation) and C6b-2 (CORS, compression, static resources) and C10a (test support: `ContextRunner`, clocks) and C10b (`TestClient`, `TestApp`, `App::handle_from`) and C7 (SSL bundles: `oxbloom-ssl`, HTTPS for the web server, a bundle for the JWKS fetcher, `TestClient::connect_tls`; see [SSL bundles](16-ssl-bundles.md#ssl-bundles)) and C8 (the actuator: health, liveness and readiness, info and log level endpoints; see [Actuator](17-actuator.md#actuator)) and C9a (task scheduling: `#[scheduling]`, cron, fixed rate and fixed delay, the boot scheduler service; see [Task scheduling](18-tasks.md#task-scheduling)) and C9b (retry: `#[retryable]`, `RetryPolicy`, the `tasks.retry.*` keys; see [Retry](18-tasks.md#retry)) and security Slice 6a (password login: Argon2id encoder, user store, HTTP Basic; see [Password login](19-password-login.md#password-login)) and security Slice 6b (sessions: the session filter, an in-memory store, a stateless encrypted cookie; see [Sessions](20-sessions.md#sessions)) and security Slice 6c (form login and logout; see [Form login](21-form-login.md#form-login)) and security Slices 6d, 7a, 7b and 8 (CSRF tokens, session management and security headers, remember-me, and method security; see [CSRF protection](22-csrf.md#csrf-protection), [Session management](23-session-management.md#session-management-and-security-headers), [Remember-me](24-remember-me.md#remember-me) and [Method security](25-method-security.md#method-security)) and security Slice 9 (the HTTP client, OAuth2 login and the OAuth2 client; see [HTTP client](26-http-client.md#http-client), [OAuth2 login](27-oauth2-login.md#oauth2-login) and [OAuth2 client](28-oauth2-client.md#oauth2-client)) and M3a (the data core; see [Data](29-data.md#data)) are done. The web layer has no open slice. The data layer's next slice is M3b, migrations. The overall project plan is in `IDEA.md`.

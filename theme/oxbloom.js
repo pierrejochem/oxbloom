@@ -25,6 +25,7 @@
     folder: '<path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
     code: '<path d="M8 8l-5 4 5 4M16 8l5 4-5 4M14 5l-4 14"/>',
     network: '<rect x="9" y="3" width="6" height="5" rx="1"/><rect x="3" y="16" width="6" height="5" rx="1"/><rect x="15" y="16" width="6" height="5" rx="1"/><path d="M12 8v4M6 16v-4h12v4"/>',
+    database: '<ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3"/>',
     map: '<path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2z"/><path d="M9 4v14M15 6v14"/>',
     book: '<path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 19V5"/>',
     pencil: '<path d="M4 20l1-4L16 5l3 3L8 19z"/><path d="M14 7l3 3"/>',
@@ -58,7 +59,7 @@
     ["06-conditions", "branch"], ["07-logging", "file"], ["08-security", "shield"],
     ["09-errors", "alert"], ["10-json", "braces"], ["11-cors", "globe"],
     ["12-compression", "archive"], ["13-static", "folder"], ["14-example", "code"],
-    ["15-http", "network"], ["16-ssl", "shield"], ["17-actuator", "activity"], ["18-tasks", "clock"], ["19-password", "key"], ["20-sessions", "lock"], ["21-form-login", "shield"], ["22-csrf", "shield"], ["23-session-management", "lock"], ["24-remember-me", "key"], ["25-method-security", "shield"], ["26-http-client", "network"], ["27-oauth2-login", "key"], ["28-oauth2-client", "key"], ["29-roadmap", "map"], ["API", "book"], ["ROADMAP-core", "map"],
+    ["15-http", "network"], ["16-ssl", "shield"], ["17-actuator", "activity"], ["18-tasks", "clock"], ["19-password", "key"], ["20-sessions", "lock"], ["21-form-login", "shield"], ["22-csrf", "shield"], ["23-session-management", "lock"], ["24-remember-me", "key"], ["25-method-security", "shield"], ["26-http-client", "network"], ["27-oauth2-login", "key"], ["28-oauth2-client", "key"], ["29-data", "database"], ["30-roadmap", "map"], ["API", "book"], ["ROADMAP-core", "map"],
     ["ROADMAP-modules", "map"],
   ];
   function iconFor(href) {

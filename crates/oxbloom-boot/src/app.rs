@@ -767,9 +767,12 @@ impl OxbloomApplicationBuilder {
     /// services and shuts the container down.
     ///
     /// With no service, `run()` returns right after the runners and listens for
-    /// no signal. With at least one, it waits for the first of Ctrl-C, SIGTERM
-    /// (Unix only) and the [`ShutdownHandle`] (at once if it already was
-    /// triggered), then stops the services in reverse start order within
+    /// no signal. With services of which none
+    /// [keeps running](Service::keeps_running), it starts them, stops them again
+    /// at once and listens for no signal either. With at least one service that
+    /// keeps running, it waits for the first of Ctrl-C, SIGTERM (Unix only) and
+    /// the [`ShutdownHandle`] (at once if it already was triggered). Then it
+    /// stops the services in reverse start order within
     /// [`shutdown_timeout`](Self::shutdown_timeout) and returns the exit code:
     /// the highest [`ExitCodeGenerator::exit_code`] among the beans that provide
     /// `dyn ExitCodeGenerator`, each first mapped to 0..=255 (a negative code or
@@ -786,7 +789,7 @@ impl OxbloomApplicationBuilder {
     /// platforms without SIGTERM.
     ///
     /// Signal handlers are installed from just before the services start until
-    /// the stop sequence ends, and only when there is at least one service. A
+    /// the stop sequence ends, and only when a service keeps running. A
     /// signal while a service is still starting is kept: the remaining services
     /// start, then the wait ends at once and they stop gracefully. Tokio's
     /// process-wide handler stays installed afterwards, so later Ctrl-C or
@@ -1080,9 +1083,12 @@ impl Run {
             .get_all::<dyn Service>()
             .map_err(container_error)?;
         // Signal listeners exist from just before the services start until the
-        // end of step 8, and only when there is a service: a signal during a
-        // slow `start` is kept and ends the step-7 wait at once.
-        let signals = (!services.is_empty()).then(signal::Signals::install);
+        // end of step 8, and only when a service keeps running (only then does
+        // step 7 wait): a signal during a slow `start` is kept and ends the
+        // step-7 wait at once. Services that do not keep running are started and
+        // stopped all the same, without a wait in between.
+        let keeps_running = services.iter().any(|s| s.keeps_running());
+        let signals = keeps_running.then(signal::Signals::install);
         let started = service::start_all(&services, &self.output).await;
         // From here on, `cleanup` stops what was started.
         self.started = match started {
@@ -1099,7 +1105,8 @@ impl Run {
         #[cfg(feature = "logging")]
         announce_started(container, &self.logging);
 
-        // 7. Wait, only when a service was started (and then `signals` exists).
+        // 7. Wait, only when a started service keeps running (and then `signals`
+        // exists: a failed start returned above, so every service was started).
         let forced = match signals {
             None => {
                 self.fire(|l| l.stopping());
