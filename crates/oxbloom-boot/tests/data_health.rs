@@ -94,6 +94,28 @@ async fn a_down_source_in_the_readiness_include_turns_readiness_down() {
     app.stop().await;
 }
 
+/// An application without a `data` section that registers its own `DataSources` still gets
+/// its `db` indicator: there is no `DataSettings` bean then, and none is needed.
+#[tokio::test]
+async fn an_application_registry_without_a_data_section_reports_db() {
+    use oxbloom_config::Config;
+    use oxbloom_data::{DataError, DataSettings, DataSources};
+
+    fn own_registry() -> DataSources {
+        let config = Config::from_str("[data]\nurl = \"sqlite::memory:\"").unwrap();
+        let settings = DataSettings::from_config(&config).unwrap();
+        DataSources::build(&settings, &|_| Err(DataError::Tls)).unwrap()
+    }
+
+    let app = app("").configure(|b| b.bean(own_registry)).start().await;
+    let res = app.client().get("/actuator/health").send().await;
+    assert_eq!(res.status(), 200, "{}", res.text());
+    let body: Value = serde_json::from_str(&res.text()).unwrap();
+    assert_eq!(body["components"]["db"]["status"], "UP", "{body}");
+    assert_eq!(body["components"]["db"]["details"]["driver"], "sqlite");
+    app.stop().await;
+}
+
 #[cfg(feature = "data-migrate")]
 #[tokio::test]
 async fn the_boot_indicator_of_a_migrating_source_shows_the_version() {
