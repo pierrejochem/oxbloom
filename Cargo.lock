@@ -2034,6 +2034,8 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-rustls",
+ "tracing",
+ "tracing-subscriber",
  "url",
 ]
 
