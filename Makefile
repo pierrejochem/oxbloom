@@ -60,7 +60,7 @@ test-db:
 	elif command -v docker-compose >/dev/null 2>&1; then compose="docker-compose"; \
 	elif podman compose version >/dev/null 2>&1; then compose="podman compose"; \
 	else echo "no compose tool found: install docker compose, docker-compose or podman compose"; exit 2; fi; \
-	trap '$$compose -f $(COMPOSE_FILE) down -v' EXIT; \
+	trap '$$compose -f $(COMPOSE_FILE) down -v' EXIT INT TERM; \
 	if $$compose -f $(COMPOSE_FILE) up --help 2>&1 | grep -q -- --wait; then \
 		$$compose -f $(COMPOSE_FILE) up -d --wait || exit 1; \
 	else \

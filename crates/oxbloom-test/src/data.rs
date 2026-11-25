@@ -19,14 +19,36 @@ const POSTGRES_ENV: &str = "OXBLOOM_TEST_POSTGRES_URL";
 const MYSQL_ENV: &str = "OXBLOOM_TEST_MYSQL_URL";
 
 /// A name part that is unique in this process and, with the clock and the process id, across
-/// processes: a counter, the process id and the nanoseconds of the clock, in hex.
+/// processes: the process id, the nanoseconds of the clock and a counter, in hex, separated by `_`.
 fn unique_suffix() -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let count = COUNTER.fetch_add(1, Ordering::Relaxed);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos());
-    format!("{:x}{:x}{:x}", std::process::id(), nanos, count)
+    format!("{:x}_{:x}_{:x}", std::process::id(), nanos, count)
+}
+
+/// The text as a TOML basic string, with the quotes: `\` and `"` escaped.
+fn toml_basic_string(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('"');
+    for c in text.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// The line printed when a test database could not be dropped; the reason is a fixed text, so
+/// neither a URL nor a driver message ends up in it.
+#[cfg(any(feature = "data-postgres", feature = "data-mysql"))]
+fn drop_failure_message(name: &str, reason: &str) -> String {
+    format!("oxbloom-test: could not drop test database {name}: {reason}")
 }
 
 /// A database for one test, created for it and removed again by [`close`](TestDatabase::close).
@@ -36,6 +58,13 @@ fn unique_suffix() -> String {
 /// uniquely named database on the server whose URL is in `OXBLOOM_TEST_POSTGRES_URL` or
 /// `OXBLOOM_TEST_MYSQL_URL`, and `make test-db` starts such servers. The URL of a database holds
 /// credentials, so neither `Debug` nor any error of this type shows it.
+///
+/// Call `close` at the end of a test. The cleanup of `Drop` is best effort: it needs a running
+/// runtime and usually does not get to run on a current-thread `#[tokio::test]`, which ends
+/// right after the test, and a test that panics before `close` leaves its `oxbloom_test_*`
+/// database behind on the server. `make test-db` runs the servers on tmpfs and removes them
+/// with `down -v`, so nothing stays; on a persistent server the `oxbloom_test_` prefix lets you
+/// drop the leftovers by hand.
 ///
 /// # Examples
 ///
@@ -81,6 +110,7 @@ enum Inner {
 #[cfg(any(feature = "data-postgres", feature = "data-mysql"))]
 struct ServerDatabase {
     admin_url: String,
+    name: String,
     drop_sql: String,
     postgres: bool,
     /// Whether `close` or the best-effort cleanup of `Drop` already took care of the database.
@@ -192,7 +222,7 @@ impl TestDatabase {
     /// # }
     /// ```
     pub fn config_snippet(&self) -> String {
-        let mut snippet = format!("[data]\nurl = \"{}\"\n", self.url);
+        let mut snippet = format!("[data]\nurl = {}\n", toml_basic_string(&self.url));
         if matches!(self.inner, Inner::Sqlite { .. }) {
             // The shared cache allows several connections to the in-memory database.
             snippet.push_str("max-connections = 4\n");
@@ -269,21 +299,17 @@ impl TestDatabase {
 
 #[cfg(any(feature = "data-postgres", feature = "data-mysql"))]
 impl ServerDatabase {
-    /// Drops the database through a fresh admin connection; errors are ignored because the
-    /// database is throwaway and the message of a connect error could carry the URL.
+    /// Drops the database through a fresh admin connection. A failure is reported on stderr
+    /// with a fixed reason and the generated name, never with the URL.
     async fn drop_database(&mut self) {
         if self.done {
             return;
         }
         self.done = true;
-        run_admin(&self.admin_url, self.postgres, &self.drop_sql).await;
+        if let Err(reason) = try_admin(&self.admin_url, self.postgres, &self.drop_sql).await {
+            eprintln!("{}", drop_failure_message(&self.name, reason));
+        }
     }
-}
-
-/// Runs one statement on a fresh connection to the server, ignoring every error.
-#[cfg(any(feature = "data-postgres", feature = "data-mysql"))]
-async fn run_admin(admin_url: &str, postgres: bool, sql: &str) {
-    let _ = try_admin(admin_url, postgres, sql).await;
 }
 
 /// Runs one statement on a fresh connection to the server. The error text is replaced by a
@@ -296,8 +322,10 @@ async fn try_admin(admin_url: &str, postgres: bool, sql: &str) -> Result<(), &'s
             let mut conn = sqlx::PgConnection::connect(admin_url)
                 .await
                 .map_err(|_| "could not connect to the Postgres test server")?;
-            let result = // The statement is built from a generated name that holds only `[a-z0-9_]`.
-            sqlx::query(sqlx::AssertSqlSafe(sql.to_owned())).execute(&mut conn).await;
+            // The statement is built from a generated name that holds only `[a-z0-9_]`.
+            let result = sqlx::query(sqlx::AssertSqlSafe(sql.to_owned()))
+                .execute(&mut conn)
+                .await;
             let _ = conn.close().await;
             return result
                 .map(|_| ())
@@ -309,8 +337,10 @@ async fn try_admin(admin_url: &str, postgres: bool, sql: &str) -> Result<(), &'s
             let mut conn = sqlx::MySqlConnection::connect(admin_url)
                 .await
                 .map_err(|_| "could not connect to the MySQL test server")?;
-            let result = // The statement is built from a generated name that holds only `[a-z0-9_]`.
-            sqlx::query(sqlx::AssertSqlSafe(sql.to_owned())).execute(&mut conn).await;
+            // The statement is built from a generated name that holds only `[a-z0-9_]`.
+            let result = sqlx::query(sqlx::AssertSqlSafe(sql.to_owned()))
+                .execute(&mut conn)
+                .await;
             let _ = conn.close().await;
             return result
                 .map(|_| ())
@@ -327,14 +357,25 @@ fn with_database(server_url: &str, database: &str, var: &str) -> String {
     let mut url =
         url::Url::parse(server_url).unwrap_or_else(|_| panic!("{var} is not a valid URL"));
     url.set_path(database);
+    // sqlx lets a `dbname` query pair override the path, so it must not survive.
+    let kept: Vec<(String, String)> = url
+        .query_pairs()
+        .filter(|(key, _)| key != "dbname")
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    if kept.is_empty() {
+        url.set_query(None);
+    } else {
+        url.query_pairs_mut().clear().extend_pairs(kept);
+    }
     url.into()
 }
 
 /// Reads the server URL variable; the panic names the variable and never the value.
 #[cfg(any(feature = "data-postgres", feature = "data-mysql"))]
-fn server_url(var: &str, example: &str) -> String {
+fn server_url(var: &str) -> String {
     std::env::var(var).unwrap_or_else(|_| {
-        panic!("the environment variable {var} is not set; run `make test-db` or set it, for example to {example}")
+        panic!("the environment variable {var} is not set; run `make test-db` or set it to the URL of a server whose user may create databases")
     })
 }
 
@@ -370,22 +411,28 @@ impl TestDatabase {
     /// # }
     /// ```
     pub async fn postgres() -> TestDatabase {
-        let admin_url = server_url(
-            POSTGRES_ENV,
-            "postgres://user:password@127.0.0.1:5432/postgres",
-        );
+        let admin_url = server_url(POSTGRES_ENV);
         let name = database_name();
-        try_admin(&admin_url, true, &format!("CREATE DATABASE {name}"))
+        let url = with_database(&admin_url, &name, POSTGRES_ENV);
+        let create = format!("CREATE DATABASE {name}");
+        try_admin(&admin_url, true, &create)
             .await
             .unwrap_or_else(|reason| panic!("{reason} named by {POSTGRES_ENV}"));
-        let url = with_database(&admin_url, &name, POSTGRES_ENV);
-        let pool = sqlx::postgres::PgPoolOptions::new()
+        let pool = match sqlx::postgres::PgPoolOptions::new()
             .max_connections(4)
             .connect(&url)
             .await
-            .unwrap_or_else(|_| {
-                panic!("could not connect to the database created on {POSTGRES_ENV}")
-            });
+        {
+            Ok(pool) => pool,
+            Err(_) => {
+                // The database exists already: drop it before failing the test.
+                let sql = format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)");
+                if let Err(reason) = try_admin(&admin_url, true, &sql).await {
+                    eprintln!("{}", drop_failure_message(&name, reason));
+                }
+                panic!("could not connect to the database created on {POSTGRES_ENV}");
+            }
+        };
         TestDatabase {
             url,
             inner: Inner::Postgres {
@@ -393,6 +440,7 @@ impl TestDatabase {
                 server: ServerDatabase {
                     admin_url,
                     drop_sql: format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"),
+                    name,
                     postgres: true,
                     done: false,
                 },
@@ -445,17 +493,28 @@ impl TestDatabase {
     /// # }
     /// ```
     pub async fn mysql() -> TestDatabase {
-        let admin_url = server_url(MYSQL_ENV, "mysql://root:password@127.0.0.1:3306/mysql");
+        let admin_url = server_url(MYSQL_ENV);
         let name = database_name();
-        try_admin(&admin_url, false, &format!("CREATE DATABASE {name}"))
+        let url = with_database(&admin_url, &name, MYSQL_ENV);
+        let create = format!("CREATE DATABASE {name}");
+        try_admin(&admin_url, false, &create)
             .await
             .unwrap_or_else(|reason| panic!("{reason} named by {MYSQL_ENV}"));
-        let url = with_database(&admin_url, &name, MYSQL_ENV);
-        let pool = sqlx::mysql::MySqlPoolOptions::new()
+        let pool = match sqlx::mysql::MySqlPoolOptions::new()
             .max_connections(4)
             .connect(&url)
             .await
-            .unwrap_or_else(|_| panic!("could not connect to the database created on {MYSQL_ENV}"));
+        {
+            Ok(pool) => pool,
+            Err(_) => {
+                // The database exists already: drop it before failing the test.
+                let sql = format!("DROP DATABASE IF EXISTS {name}");
+                if let Err(reason) = try_admin(&admin_url, false, &sql).await {
+                    eprintln!("{}", drop_failure_message(&name, reason));
+                }
+                panic!("could not connect to the database created on {MYSQL_ENV}");
+            }
+        };
         TestDatabase {
             url,
             inner: Inner::Mysql {
@@ -463,6 +522,7 @@ impl TestDatabase {
                 server: ServerDatabase {
                     admin_url,
                     drop_sql: format!("DROP DATABASE IF EXISTS {name}"),
+                    name,
                     postgres: false,
                     done: false,
                 },
@@ -513,10 +573,11 @@ impl Drop for TestDatabase {
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
             return;
         };
-        let (admin_url, postgres, sql) = (
+        let (admin_url, postgres, sql, name) = (
             server.admin_url.clone(),
             server.postgres,
             server.drop_sql.clone(),
+            server.name.clone(),
         );
         handle.spawn(async move {
             match pool_close {
@@ -525,7 +586,9 @@ impl Drop for TestDatabase {
                 #[cfg(feature = "data-mysql")]
                 Closer::My(pool) => pool.close().await,
             }
-            run_admin(&admin_url, postgres, &sql).await;
+            if let Err(reason) = try_admin(&admin_url, postgres, &sql).await {
+                eprintln!("{}", drop_failure_message(&name, reason));
+            }
         });
     }
 }
@@ -536,4 +599,68 @@ enum Closer {
     Pg(PgPool),
     #[cfg(feature = "data-mysql")]
     My(MySqlPool),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn toml_basic_string_escapes_backslash_and_quote() {
+        let url = "sqlite:file:a\\b\"c?mode=memory";
+        let quoted = toml_basic_string(url);
+        assert_eq!(quoted, "\"sqlite:file:a\\\\b\\\"c?mode=memory\"");
+        let config = oxbloom_config::Config::from_str(&format!("url = {quoted}")).unwrap();
+        assert_eq!(config.get::<String>("url").unwrap(), url);
+    }
+
+    #[test]
+    fn the_unique_suffix_separates_its_parts_and_never_repeats() {
+        let a = unique_suffix();
+        let b = unique_suffix();
+        assert_ne!(a, b);
+        assert_eq!(a.matches('_').count(), 2);
+        assert!(a.bytes().all(|c| c.is_ascii_hexdigit() || c == b'_'));
+    }
+
+    #[cfg(any(feature = "data-postgres", feature = "data-mysql"))]
+    #[test]
+    fn the_drop_failure_message_has_the_name_and_the_fixed_reason_only() {
+        let text =
+            drop_failure_message("oxbloom_test_1_2_3", "could not connect to the test server");
+        assert_eq!(
+            text,
+            "oxbloom-test: could not drop test database oxbloom_test_1_2_3: could not connect to the test server"
+        );
+    }
+
+    #[cfg(any(feature = "data-postgres", feature = "data-mysql"))]
+    #[test]
+    fn a_missing_env_var_panics_with_the_variable_name_and_no_url() {
+        let var = format!("OXBLOOM_TEST_UNSET_{}", unique_suffix());
+        let payload = std::panic::catch_unwind(|| server_url(&var)).expect_err("a panic");
+        let text = payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+            .expect("a text payload");
+        assert!(text.contains(&var), "{text}");
+        assert!(!text.contains("://"), "{text}");
+    }
+
+    #[cfg(any(feature = "data-postgres", feature = "data-mysql"))]
+    #[test]
+    fn with_database_replaces_the_path_and_drops_a_dbname_pair() {
+        let url = with_database(
+            "postgres://u:p@127.0.0.1:55432/postgres?dbname=other&sslmode=disable",
+            "oxbloom_test_x",
+            "VAR",
+        );
+        assert_eq!(
+            url,
+            "postgres://u:p@127.0.0.1:55432/oxbloom_test_x?sslmode=disable"
+        );
+        let only = with_database("mysql://root:p@h:1/mysql?dbname=other", "d", "VAR");
+        assert_eq!(only, "mysql://root:p@h:1/d");
+    }
 }

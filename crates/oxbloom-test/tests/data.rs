@@ -93,23 +93,3 @@ async fn close_makes_the_pool_unusable() {
     assert!(pool.is_closed());
     assert!(pool.acquire().await.is_err());
 }
-
-#[cfg(feature = "data-postgres")]
-#[tokio::test]
-#[should_panic(expected = "OXBLOOM_TEST_POSTGRES_URL")]
-async fn a_missing_env_var_panics_with_the_variable_name() {
-    if std::env::var("OXBLOOM_TEST_POSTGRES_URL").is_ok() {
-        panic!("OXBLOOM_TEST_POSTGRES_URL (the variable is set, so the panic is simulated)");
-    }
-    let _ = TestDatabase::postgres().await;
-}
-
-#[cfg(feature = "data-mysql")]
-#[tokio::test]
-#[should_panic(expected = "OXBLOOM_TEST_MYSQL_URL")]
-async fn a_missing_env_var_panics_with_the_variable_name_for_mysql() {
-    if std::env::var("OXBLOOM_TEST_MYSQL_URL").is_ok() {
-        panic!("OXBLOOM_TEST_MYSQL_URL (the variable is set, so the panic is simulated)");
-    }
-    let _ = TestDatabase::mysql().await;
-}

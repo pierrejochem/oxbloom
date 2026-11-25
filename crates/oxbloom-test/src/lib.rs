@@ -16,7 +16,7 @@
 //! the same name and adds `MockHttpClient` and `MockResponse`, a scripted `HttpClient` that
 //! records the requests it gets. The feature `oauth2` turns on `http-client` and adds
 //! `FakeProvider`, an OpenID Connect provider over `MockHttpClient` that signs id tokens with a
-//! key generated at construction, with `FakeUser`, `Fault` and `TokenRequest`. `web`,
+//! key generated at construction, with `FakeUser`, `Fault` and `TokenRequest`.
 //! The feature `data` adds `TestDatabase`, a uniquely named in-memory SQLite database with a
 //! `[data]` snippet for `ContextRunner`; `data-postgres` and `data-mysql` add
 //! `TestDatabase::postgres` and `TestDatabase::mysql`, which create a throwaway database on the
