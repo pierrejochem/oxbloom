@@ -59,7 +59,7 @@ pub use client::{RequestBuilder, TestClient, TestResponse};
 pub use clock::{FixedClock, ManualClock};
 pub use config_dir::TempConfigDir;
 #[cfg(feature = "data")]
-pub use data::TestDatabase;
+pub use data::{MigrationFiles, TestDatabase};
 #[cfg(feature = "oauth2")]
 pub use fake_provider::{FakeProvider, FakeUser, Fault, TokenRequest};
 pub use log::Log;

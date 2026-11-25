@@ -30,9 +30,9 @@ http-client = ["oxbloom-boot/http-client", "dep:oxbloom-http-client", "dep:async
 # `FakeProvider`: an OpenID Connect provider over `MockHttpClient` that signs id tokens with an
 # ES256 key generated at construction (`aws-lc-rs`, no `ring`).
 oauth2 = ["http-client", "dep:jsonwebtoken", "dep:aws-lc-rs", "dep:base64"]
-# `TestDatabase` over SQLite; `oxbloom-boot/data-sqlite` lets `ContextRunner` run
+# `TestDatabase` over SQLite, `MigrationFiles` and `TestDatabase::with_migrations`; `oxbloom-boot/data-sqlite` lets `ContextRunner` run
 # `DataAutoConfiguration` on the `config_snippet`.
-data = ["dep:oxbloom-data", "oxbloom-data/sqlite", "oxbloom-boot/data-sqlite"]
+data = ["dep:oxbloom-data", "oxbloom-data/sqlite", "oxbloom-data/migrate", "oxbloom-boot/data-sqlite"]
 # `TestDatabase::postgres` and `TestDatabase::mysql`; `url` rewrites the database of the server URL.
 data-postgres = ["data", "oxbloom-data/postgres", "oxbloom-boot/data-postgres", "dep:url"]
 data-mysql = ["data", "oxbloom-data/mysql", "oxbloom-boot/data-mysql", "dep:url"]

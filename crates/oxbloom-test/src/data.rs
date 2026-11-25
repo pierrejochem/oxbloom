@@ -4,7 +4,11 @@ use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use std::path::Path;
+
+use oxbloom_data::migrate::{self, MigrateError};
 use oxbloom_data::sqlx::{self, Connection, SqliteConnection, SqlitePool};
+use oxbloom_data::{DataError, DataSettings, DataSources};
 
 #[cfg(feature = "data-mysql")]
 use oxbloom_data::sqlx::MySqlPool;
@@ -49,6 +53,137 @@ fn toml_basic_string(text: &str) -> String {
 #[cfg(any(feature = "data-postgres", feature = "data-mysql"))]
 fn drop_failure_message(name: &str, reason: &str) -> String {
     format!("oxbloom-test: could not drop test database {name}: {reason}")
+}
+
+/// Migration files in a temporary directory, for [`TestDatabase::with_migrations`] and for the
+/// `data.migrations.path` of a test. The directory and its files are removed when the value is
+/// dropped.
+///
+/// The names are the ones `sqlx` reads: `<version>_<description>.up.sql` (with an optional
+/// `.down.sql` for the same version) for a reversible migration and `<version>_<description>.sql`
+/// for a plain one. Spaces in the description become underscores, and `sqlx` shows underscores
+/// as spaces again, so the description of `"create accounts"` is `create accounts` in a report;
+/// an underscore you write yourself comes back as a space too. `sqlx` does not require a
+/// directory to be all reversible or all plain: it parses every file on its own and orders the
+/// migrations by version, so plain, `up` and `reversible` files can be mixed (a test pins this).
+///
+/// # Examples
+///
+/// ```
+/// use oxbloom_test::MigrationFiles;
+///
+/// let files = MigrationFiles::new()
+///     .up(1, "create accounts", "CREATE TABLE accounts (id INTEGER)")
+///     .reversible(2, "add notes", "CREATE TABLE notes (b TEXT)", "DROP TABLE notes")
+///     .plain(3, "seed", "INSERT INTO accounts VALUES (1)");
+/// assert!(files.path().join("1_create_accounts.up.sql").is_file());
+/// assert!(files.path().join("2_add_notes.down.sql").is_file());
+/// assert!(files.path().join("3_seed.sql").is_file());
+/// ```
+pub struct MigrationFiles {
+    dir: tempfile::TempDir,
+}
+
+impl MigrationFiles {
+    /// An empty temporary directory.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the temporary directory cannot be created, which is a broken test
+    /// environment.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let files = oxbloom_test::MigrationFiles::new();
+    /// assert!(files.path().is_dir());
+    /// ```
+    pub fn new() -> Self {
+        MigrationFiles {
+            dir: tempfile::Builder::new()
+                .prefix("oxbloom-migrations-")
+                .tempdir()
+                .expect("a temporary directory for the migration files"),
+        }
+    }
+
+    fn write(self, version: i64, description: &str, suffix: &str, sql: &str) -> Self {
+        let name = format!("{version}_{}{suffix}", description.replace(' ', "_"));
+        std::fs::write(self.dir.path().join(name), sql)
+            .expect("the migration file is written to the temporary directory");
+        self
+    }
+
+    /// Writes `<version>_<description>.up.sql`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let files = oxbloom_test::MigrationFiles::new().up(1, "create t", "CREATE TABLE t (x INTEGER)");
+    /// assert!(files.path().join("1_create_t.up.sql").is_file());
+    /// ```
+    #[must_use]
+    pub fn up(self, version: i64, description: &str, sql: &str) -> Self {
+        self.write(version, description, ".up.sql", sql)
+    }
+
+    /// Writes `<version>_<description>.up.sql` and `<version>_<description>.down.sql`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let files = oxbloom_test::MigrationFiles::new()
+    ///     .reversible(1, "create t", "CREATE TABLE t (x INTEGER)", "DROP TABLE t");
+    /// assert!(files.path().join("1_create_t.down.sql").is_file());
+    /// ```
+    #[must_use]
+    pub fn reversible(self, version: i64, description: &str, up: &str, down: &str) -> Self {
+        self.write(version, description, ".up.sql", up).write(
+            version,
+            description,
+            ".down.sql",
+            down,
+        )
+    }
+
+    /// Writes `<version>_<description>.sql`, a migration that cannot be reverted.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let files = oxbloom_test::MigrationFiles::new().plain(1, "create t", "CREATE TABLE t (x INTEGER)");
+    /// assert!(files.path().join("1_create_t.sql").is_file());
+    /// ```
+    #[must_use]
+    pub fn plain(self, version: i64, description: &str, sql: &str) -> Self {
+        self.write(version, description, ".sql", sql)
+    }
+
+    /// The directory, for `with_migrations` and for `data.migrations.path`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let files = oxbloom_test::MigrationFiles::new();
+    /// assert!(files.path().is_absolute());
+    /// ```
+    pub fn path(&self) -> &Path {
+        self.dir.path()
+    }
+}
+
+impl Default for MigrationFiles {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl fmt::Debug for MigrationFiles {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MigrationFiles")
+            .field("path", &"<redacted>")
+            .finish()
+    }
 }
 
 /// A database for one test, created for it and removed again by [`close`](TestDatabase::close).
@@ -248,6 +383,105 @@ impl TestDatabase {
             snippet.push_str("max-connections = 4\n");
         }
         snippet
+    }
+
+    /// The [`config_snippet`](TestDatabase::config_snippet) plus a `[data.migrations]` table that
+    /// enables the migrations at startup and reads them from `dir`, for a test that boots the
+    /// data auto-configuration with migrations. The path is written as an escaped TOML string, so
+    /// a backslash or a quote in it survives. The sub-table comes after the plain keys of
+    /// `[data]`, so the snippet is valid TOML; append further tables after it, not plain `data`
+    /// keys.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_test::{MigrationFiles, TestDatabase};
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() {
+    /// let db = TestDatabase::sqlite();
+    /// let files = MigrationFiles::new().up(1, "create t", "CREATE TABLE t (id INTEGER)");
+    /// let snippet = db.config_snippet_with_migrations(files.path());
+    /// assert!(snippet.starts_with(&db.config_snippet()));
+    /// assert!(snippet.contains("[data.migrations]\nenabled = true\npath = \""));
+    /// db.close().await;
+    /// # }
+    /// ```
+    pub fn config_snippet_with_migrations(&self, dir: &Path) -> String {
+        let mut snippet = self.config_snippet();
+        snippet.push_str("[data.migrations]\nenabled = true\npath = ");
+        snippet.push_str(&toml_basic_string(&dir.to_string_lossy()));
+        snippet.push('\n');
+        snippet
+    }
+
+    /// Applies the migration files in `dir` to this database and returns the database, so a
+    /// test can chain it: `TestDatabase::sqlite().with_migrations(dir).await?`.
+    ///
+    /// The migrations run through [`oxbloom_data::migrate::run`] with the default settings
+    /// (history table `_sqlx_migrations`, a 300 second timeout, the database lock on) on a
+    /// registry of its own, built from this database's snippet; that registry's pool is closed
+    /// before the call returns, and the pool of this value stays open. The in-memory database of
+    /// [`TestDatabase::sqlite`] uses a shared cache, so the migrations and the pool see the same
+    /// data. On a database kind other than SQLite the call needs the matching feature,
+    /// `data-postgres` or `data-mysql`, and a server.
+    ///
+    /// # Errors
+    ///
+    /// The [`MigrateError`] of the run. Its text is fixed and holds no SQL, no file path and no
+    /// URL. On an error this database is closed (and a server database dropped), so the test
+    /// cannot use it afterwards.
+    ///
+    /// # Panics
+    ///
+    /// Panics with a fixed text when the snippet of the database cannot be read, which is a bug
+    /// of this crate.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use oxbloom_data::sqlx;
+    /// use oxbloom_test::{MigrationFiles, TestDatabase};
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let files = MigrationFiles::new().up(1, "create t", "CREATE TABLE t (id INTEGER)");
+    /// let db = TestDatabase::sqlite().with_migrations(files.path()).await?;
+    /// let (rows,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM t")
+    ///     .fetch_one(db.sqlite_pool())
+    ///     .await?;
+    /// assert_eq!(rows, 0);
+    /// db.close().await;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn with_migrations(self, dir: &Path) -> Result<TestDatabase, MigrateError> {
+        let snippet = self.config_snippet_with_migrations(dir);
+        let sources = oxbloom_config::Config::from_str(&snippet)
+            .ok()
+            .and_then(|config| DataSettings::from_config(&config).ok())
+            .and_then(|settings| {
+                let sources = DataSources::build(&settings, &|_| Err(DataError::Tls)).ok()?;
+                Some((settings, sources))
+            });
+        let Some((settings, sources)) = sources else {
+            panic!("the configuration snippet of the test database is not valid");
+        };
+        let name = sources.default_name().unwrap_or("default").to_owned();
+        let migrations = settings
+            .sources
+            .first()
+            .and_then(|source| source.migrations.as_ref())
+            .expect("the snippet enables the migrations");
+        let result = migrate::run(&sources, &name, migrations, None).await;
+        sources.close_all().await;
+        match result {
+            Ok(_) => Ok(self),
+            Err(error) => {
+                self.close().await;
+                Err(error)
+            }
+        }
     }
 
     /// The pool of a SQLite test database.
@@ -641,6 +875,61 @@ mod tests {
         assert_ne!(a, b);
         assert_eq!(a.matches('_').count(), 2);
         assert!(a.bytes().all(|c| c.is_ascii_hexdigit() || c == b'_'));
+    }
+
+    #[test]
+    fn files_are_written_with_sqlx_names() {
+        let files = MigrationFiles::new()
+            .up(1, "create accounts", "CREATE TABLE a (id INTEGER)")
+            .plain(20, "add_index", "CREATE INDEX i ON a (id)");
+        let mut names: Vec<String> = std::fs::read_dir(files.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["1_create_accounts.up.sql", "20_add_index.sql"]);
+        let body = std::fs::read_to_string(files.path().join("1_create_accounts.up.sql")).unwrap();
+        assert_eq!(body, "CREATE TABLE a (id INTEGER)");
+    }
+
+    #[test]
+    fn a_reversible_pair_writes_both_files() {
+        let files = MigrationFiles::new().reversible(
+            3,
+            "make t",
+            "CREATE TABLE t (x INTEGER)",
+            "DROP TABLE t",
+        );
+        let up = std::fs::read_to_string(files.path().join("3_make_t.up.sql")).unwrap();
+        let down = std::fs::read_to_string(files.path().join("3_make_t.down.sql")).unwrap();
+        assert_eq!(up, "CREATE TABLE t (x INTEGER)");
+        assert_eq!(down, "DROP TABLE t");
+    }
+
+    #[test]
+    fn the_directory_is_removed_on_drop() {
+        let files = MigrationFiles::new().up(1, "x", "SELECT 1");
+        let path = files.path().to_path_buf();
+        assert!(path.is_dir());
+        drop(files);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn the_snippet_escapes_a_backslash_and_a_quote_in_the_path() {
+        let db = TestDatabase::sqlite();
+        let dir = std::path::Path::new("/tmp/a\\b\"c d");
+        let snippet = db.config_snippet_with_migrations(dir);
+        assert!(snippet.starts_with(&db.config_snippet()));
+        assert!(snippet.contains("[data.migrations]\nenabled = true\npath = \""));
+        let config = oxbloom_config::Config::from_str(&snippet).unwrap();
+        assert_eq!(
+            config.get::<String>("data.migrations.path").unwrap(),
+            dir.to_str().unwrap()
+        );
+        let settings = oxbloom_data::DataSettings::from_config(&config).unwrap();
+        let migrations = settings.sources[0].migrations.as_ref().unwrap();
+        assert_eq!(migrations.path.as_deref(), Some(dir));
     }
 
     #[cfg(any(feature = "data-postgres", feature = "data-mysql"))]
