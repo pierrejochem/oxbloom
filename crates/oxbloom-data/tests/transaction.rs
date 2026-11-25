@@ -469,21 +469,30 @@ mod retry {
         // An induced `SQLITE_BUSY`: the second writer retries until the first one commits.
         let (holder, held) = lock_for_writers(&path).await;
         let calls = AtomicU32::new(0);
+        // The holder lets go only once the first run has failed, which the start of the second
+        // run shows; no timing is assumed.
+        let second_run = tokio::sync::Notify::new();
         let release = async {
-            tokio::time::sleep(Duration::from_millis(150)).await;
+            second_run.notified().await;
             held.commit().await.unwrap();
         };
         let retry = policy(50, 20);
         let work = transaction_with_retry(&pool, &options, &retry, {
             async |tx| {
-                calls.fetch_add(1, Ordering::SeqCst);
+                if calls.fetch_add(1, Ordering::SeqCst) == 1 {
+                    second_run.notify_one();
+                }
                 sqlx::query("INSERT INTO items (name) VALUES ('retried')")
                     .execute(&mut **tx)
                     .await?;
                 Ok::<_, sqlx::Error>(())
             }
         });
-        let ((), result) = tokio::join!(release, work);
+        let ((), result) = tokio::time::timeout(Duration::from_secs(30), async {
+            tokio::join!(release, work)
+        })
+        .await
+        .expect("the retried transaction finishes");
         result.unwrap();
         assert!(
             calls.load(Ordering::SeqCst) >= 2,
@@ -589,21 +598,30 @@ mod retry {
         assert_eq!(seen, 0);
 
         let calls = AtomicU32::new(0);
+        // The reader lets go only once the first commit has failed, which the start of the
+        // second run shows; no timing is assumed.
+        let second_run = tokio::sync::Notify::new();
         let release = async {
-            tokio::time::sleep(Duration::from_millis(150)).await;
+            second_run.notified().await;
             sqlx::query("COMMIT").execute(&mut *reader).await.unwrap();
         };
         let options = TransactionOptions::default();
         let retry = policy(50, 20);
         let work = transaction_with_retry(&pool, &options, &retry, async |tx| {
-            calls.fetch_add(1, Ordering::SeqCst);
+            if calls.fetch_add(1, Ordering::SeqCst) == 1 {
+                second_run.notify_one();
+            }
             // The insert takes only the reserved lock, which the reader does not block.
             sqlx::query("INSERT INTO items (name) VALUES ('committed')")
                 .execute(&mut **tx)
                 .await?;
             Ok::<_, sqlx::Error>(())
         });
-        let ((), result) = tokio::join!(release, work);
+        let ((), result) = tokio::time::timeout(Duration::from_secs(30), async {
+            tokio::join!(release, work)
+        })
+        .await
+        .expect("the retried transaction finishes");
         result.unwrap();
         assert!(
             calls.load(Ordering::SeqCst) >= 2,

@@ -79,3 +79,17 @@ async fn readiness_can_include_a_data_indicator() {
     assert_eq!(res.status(), 200, "{}", res.text());
     app.stop().await;
 }
+
+#[tokio::test]
+async fn a_down_source_in_the_readiness_include_turns_readiness_down() {
+    let app = app(
+        "[data]\nurl = \"sqlite::memory:\"\nconnect-on-startup = false\n\
+         [data.sources.replica]\nurl = \"sqlite:/no-such-oxbloom-data-dir/secret-file-name.db\"\n\
+         [management.health.readiness]\ninclude = [\"db\", \"db.replica\"]",
+    )
+    .start()
+    .await;
+    let res = app.client().get("/actuator/health/readiness").send().await;
+    assert_eq!(res.status(), 503, "{}", res.text());
+    app.stop().await;
+}

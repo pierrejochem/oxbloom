@@ -265,6 +265,116 @@ async fn close_all_closes_pools() {
     );
 }
 
+/// A SQLite file in the temporary directory, removed with its journal files on drop.
+struct TempDb(std::path::PathBuf);
+
+impl TempDb {
+    fn new(tag: &str) -> Self {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let name = format!("oxbloom-data-close-{tag}-{}-{nanos}.db", std::process::id());
+        Self(std::env::temp_dir().join(name))
+    }
+
+    fn url(&self) -> String {
+        format!("sqlite:{}?mode=rwc", self.0.display())
+    }
+}
+
+impl Drop for TempDb {
+    fn drop(&mut self) {
+        for suffix in ["", "-journal", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", self.0.display()));
+        }
+    }
+}
+
+#[tokio::test]
+async fn close_all_within_names_only_the_sources_that_did_not_close_in_time() {
+    let (free, held) = (TempDb::new("free"), TempDb::new("held"));
+    let toml = format!(
+        "[data]\nurl = \"{}\"\n[data.sources.held]\nurl = \"{}\"",
+        free.url(),
+        held.url()
+    );
+    let sources = build(&toml).unwrap();
+    sources
+        .ping("default", Duration::from_secs(10))
+        .await
+        .unwrap();
+    // A connection that is checked out and never returned keeps its pool from closing.
+    let checked_out = sources.sqlite("held").unwrap().acquire().await.unwrap();
+
+    let budget = Duration::from_millis(400);
+    let started = std::time::Instant::now();
+    let check = async {
+        // Both pools are marked closed as soon as the close begins, before the budget runs out.
+        tokio::task::yield_now().await;
+        assert!(sources.sqlite("default").unwrap().is_closed());
+        assert!(sources.sqlite("held").unwrap().is_closed());
+        assert!(started.elapsed() < budget);
+    };
+    let (unfinished, ()) = tokio::time::timeout(Duration::from_secs(30), async {
+        tokio::join!(sources.close_all_within(budget), check)
+    })
+    .await
+    .expect("close_all_within returns after its budget");
+    assert_eq!(unfinished, ["held"]);
+    assert!(started.elapsed() >= budget);
+    assert_eq!(
+        sources.pool_counts("default"),
+        Some((0, 0)),
+        "the free pool closed"
+    );
+    assert_eq!(
+        sources.ping("default", Duration::from_secs(1)).await,
+        Err(DataError::Pool)
+    );
+    drop(checked_out);
+}
+
+#[tokio::test]
+async fn close_all_within_is_empty_when_every_pool_closes_and_is_idempotent() {
+    let file = TempDb::new("all");
+    let toml = format!(
+        "[data]\nurl = \"sqlite::memory:\"\n[data.sources.file]\nurl = \"{}\"",
+        file.url()
+    );
+    let sources = build(&toml).unwrap();
+    sources
+        .ping("default", Duration::from_secs(10))
+        .await
+        .unwrap();
+    sources.ping("file", Duration::from_secs(10)).await.unwrap();
+    let started = std::time::Instant::now();
+    let unfinished = sources.close_all_within(Duration::from_secs(20)).await;
+    assert!(unfinished.is_empty(), "{unfinished:?}");
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "it returns as soon as all closed"
+    );
+    assert!(sources.sqlite("default").unwrap().is_closed());
+    assert!(sources.sqlite("file").unwrap().is_closed());
+    // Closing again is harmless.
+    assert!(
+        sources
+            .close_all_within(Duration::from_secs(5))
+            .await
+            .is_empty()
+    );
+    sources.close_all().await;
+    // A registry without sources has nothing to close.
+    assert!(
+        build("")
+            .unwrap()
+            .close_all_within(Duration::ZERO)
+            .await
+            .is_empty()
+    );
+}
+
 #[cfg(not(feature = "postgres"))]
 #[tokio::test]
 async fn a_driver_without_its_feature_is_unsupported() {
@@ -381,6 +491,48 @@ fn the_registry_is_send_and_sync() {
     assert_send_sync::<TlsMaterial>();
 }
 
+/// Checks the refusal of `ssl-mode = verify-ca` with a bundle that has a trust store for a
+/// source at `url`, and that `verify-ca` with an identity-only bundle and `verify-full` with a
+/// trust store still build. `mode_of` gives the TLS mode of the built default source.
+#[cfg(any(feature = "postgres", feature = "mysql"))]
+fn refuses_verify_ca_with_trust(url: &str, mode_of: fn(&DataSources) -> String) {
+    let with_trust = |_: &str| {
+        Ok(TlsMaterial {
+            trust_pem: Some(b"TRUST-PEM".to_vec()),
+            identity: Some((b"CHAIN-PEM".to_vec(), b"KEY-PEM".to_vec())),
+        })
+    };
+    let identity_only = |_: &str| {
+        Ok(TlsMaterial {
+            trust_pem: None,
+            identity: Some((b"CHAIN-PEM".to_vec(), b"KEY-PEM".to_vec())),
+        })
+    };
+    let toml = |mode: &str| {
+        format!(
+            "[data]\nurl = \"sqlite::memory:\"\n[data.sources.db]\nurl = \"{url}\"\n\
+             ssl-bundle = \"b\"\nssl-mode = \"{mode}\""
+        )
+    };
+    let err = DataSources::build(&settings(&toml("verify-ca")), &with_trust).unwrap_err();
+    assert_eq!(err.error(), DataError::VerifyCaWithTrust);
+    assert_eq!(err.source_name(), "db");
+    assert_eq!(err.config_prefix(), "data.sources.db");
+    assert!(err.to_string().contains("verify-full"), "{err}");
+    assert!(!err.to_string().contains("TRUST-PEM"), "{err}");
+
+    let single =
+        |mode: &str| format!("[data]\nurl = \"{url}\"\nssl-bundle = \"b\"\nssl-mode = \"{mode}\"");
+    let sources = DataSources::build(&settings(&single("verify-ca")), &identity_only).unwrap();
+    assert_eq!(mode_of(&sources), "VerifyCa");
+    let sources = DataSources::build(&settings(&single("verify-full")), &with_trust).unwrap();
+    assert!(mode_of(&sources).starts_with("Verify"), "verify-full stays");
+    assert_ne!(mode_of(&sources), "VerifyCa");
+    // Without an `ssl-mode` a bundle with a trust store means `verify-full`, which is allowed.
+    let toml = format!("[data]\nurl = \"{url}\"\nssl-bundle = \"b\"");
+    assert!(DataSources::build(&settings(&toml), &with_trust).is_ok());
+}
+
 #[cfg(feature = "postgres")]
 mod postgres {
     use super::*;
@@ -468,11 +620,23 @@ mod postgres {
             "[data]\nurl = \"postgres://db/app\"\nssl-bundle = \"b\"\nssl-mode = \"require\"",
         );
         assert_eq!(mode_of(&sources), "Require");
+        // An explicit `prefer` stays `prefer`, bundle or not.
+        let sources = build_with(
+            "[data]\nurl = \"postgres://db/app\"\nssl-bundle = \"b\"\nssl-mode = \"prefer\"",
+        );
+        assert_eq!(mode_of(&sources), "Prefer");
         // Without a bundle and a mode the driver default stays.
         let url = "postgres://db/app";
         let sources = build_with(&format!("[data]\nurl = \"{url}\""));
         let default: oxbloom_data::sqlx::postgres::PgConnectOptions = url.parse().unwrap();
         assert_eq!(mode_of(&sources), format!("{:?}", default.get_ssl_mode()));
+    }
+
+    /// sqlx adds the trust of a bundle to the platform roots and `verify-ca` skips the host name
+    /// check, so the pair would accept any publicly trusted certificate: it is refused.
+    #[tokio::test]
+    async fn verify_ca_with_a_bundle_that_has_a_trust_store_is_refused() {
+        refuses_verify_ca_with_trust("postgres://db/app", mode_of);
     }
 
     #[tokio::test]
@@ -634,6 +798,11 @@ mod mysql {
             debug.contains(&inline("ssl_client_key", b"KEY-PEM")),
             "{debug}"
         );
+    }
+
+    #[tokio::test]
+    async fn verify_ca_with_a_bundle_that_has_a_trust_store_is_refused() {
+        refuses_verify_ca_with_trust("mysql://db/app", mode_of);
     }
 
     #[tokio::test]

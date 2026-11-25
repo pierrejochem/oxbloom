@@ -88,22 +88,10 @@ async fn a_postgres_source_without_the_feature_fails_naming_the_feature() {
         .await;
 }
 
-/// Without the `ssl` feature a named bundle is an error naming the key.
-#[cfg(all(not(feature = "ssl"), feature = "data-postgres"))]
-#[tokio::test]
-async fn a_bundle_without_the_ssl_feature_fails_naming_the_key() {
-    ContextRunner::new()
-        .config_str("[data]\nurl = \"postgres://db.internal/app\"\nssl-bundle = \"db\"")
-        .auto_configuration::<DataAutoConfiguration>()
-        .run_failing(|view| {
-            let config = view.error().find_cause::<ConfigError>().unwrap();
-            assert!(
-                matches!(config, ConfigError::Invalid { key, .. } if key == "data.ssl-bundle"),
-                "{config:?}"
-            );
-        })
-        .await;
-}
+// The path without the `ssl` feature (a named bundle is an error on its `ssl-bundle` key) has
+// no test here: a dev-dependency of this crate turns `ssl` on in every test build. The
+// non-`ssl` `bundle_material` is compiled by `cargo build -p oxbloom-boot --no-default-features
+// --features data-postgres`.
 
 #[cfg(feature = "data-sqlite")]
 mod sqlite {
@@ -121,22 +109,199 @@ mod sqlite {
     async fn a_sqlite_default_source_registers_the_registry_and_the_pool_bean() {
         let seen: Slot<(Arc<DataSources>, Arc<SqlitePool>)> = slot();
         let out = seen.clone();
+        // A shared-cache in-memory database, so a table written through one connection is
+        // visible through any other connection of the same pool.
         ContextRunner::new()
-            .config_str("[data]\nurl = \"sqlite::memory:\"")
+            .config_str(
+                "[data]\nurl = \"sqlite:file:oxbloom-boot-same-pool?mode=memory&cache=shared\"",
+            )
             .auto_configuration::<DataAutoConfiguration>()
             .run(move |view| {
                 let sources = view.get::<DataSources>().unwrap();
                 let pool = view.get::<SqlitePool>().unwrap();
                 assert_eq!(sources.names(), ["default"]);
                 assert_eq!(sources.default_name(), Some("default"));
-                // The start-up ping opened a connection of the registry's pool, which is the
-                // same pool as the bean.
-                assert_eq!(pool.size(), sources.sqlite("default").unwrap().size());
                 assert!(pool.size() >= 1, "connect-on-startup connects");
                 *out.lock().unwrap() = Some((sources, pool));
             })
             .await;
-        assert!(seen.lock().unwrap().is_some());
+        let (sources, pool) = seen.lock().unwrap().take().unwrap();
+        // The run is over and the pools are closed; the same pool is closed through both
+        // handles.
+        assert!(pool.is_closed());
+        assert!(sources.sqlite("default").unwrap().is_closed());
+    }
+
+    /// The bean is the registry's pool: a row written through the bean is read back through
+    /// `sources.sqlite("default")`.
+    #[tokio::test]
+    async fn the_pool_bean_is_the_registry_pool() {
+        use oxbloom_boot::{ApplicationArguments, ApplicationRunner, RunnerError, async_trait};
+
+        struct WriteRead(Arc<SqlitePool>, Arc<DataSources>, Slot<String>);
+
+        #[async_trait]
+        impl ApplicationRunner for WriteRead {
+            async fn run(&self, _: &ApplicationArguments) -> Result<(), RunnerError> {
+                use oxbloom_data::sqlx;
+                sqlx::query("CREATE TABLE notes (body TEXT NOT NULL)")
+                    .execute(&*self.0)
+                    .await
+                    .map_err(RunnerError::new)?;
+                sqlx::query("INSERT INTO notes (body) VALUES ('through the bean')")
+                    .execute(&*self.0)
+                    .await
+                    .map_err(RunnerError::new)?;
+                let registry = self
+                    .1
+                    .sqlite("default")
+                    .ok_or_else(|| RunnerError::new("none"))?;
+                let body: String = sqlx::query_scalar("SELECT body FROM notes")
+                    .fetch_one(registry)
+                    .await
+                    .map_err(RunnerError::new)?;
+                *self.2.lock().unwrap() = Some(body);
+                Ok(())
+            }
+        }
+
+        let seen: Slot<String> = slot();
+        let out = seen.clone();
+        ContextRunner::new()
+            .config_str(
+                "[data]\nurl = \"sqlite:file:oxbloom-boot-bean-pool?mode=memory&cache=shared\"\n\
+                 max-connections = 2",
+            )
+            .auto_configuration::<DataAutoConfiguration>()
+            .configure(move |b| {
+                b.bean(move |pool: Arc<SqlitePool>, sources: Arc<DataSources>| {
+                    WriteRead(pool, sources, out.clone())
+                })
+                .provides(|r: Arc<WriteRead>| -> Arc<dyn ApplicationRunner> { r })
+            })
+            .run(|_| {})
+            .await;
+        assert_eq!(seen.lock().unwrap().as_deref(), Some("through the bean"));
+    }
+
+    /// The application registers its own `DataSources`: boot does not build another one, and
+    /// the default pool bean, the service and the start-up check use the application's.
+    #[tokio::test]
+    async fn an_application_registry_wins() {
+        use oxbloom_config::Config;
+        use oxbloom_data::DataSettings;
+
+        fn own_registry() -> DataSources {
+            let config = Config::from_str(
+                "[data]\nurl = \"sqlite::memory:\"\n[data.sources.own]\nurl = \"sqlite::memory:\"",
+            )
+            .unwrap();
+            let settings = DataSettings::from_config(&config).unwrap();
+            DataSources::build(&settings, &|_| Err(DataError::Tls)).unwrap()
+        }
+
+        let seen: Slot<Arc<DataSources>> = slot();
+        let out = seen.clone();
+        ContextRunner::new()
+            .config_str("[data]\nurl = \"sqlite::memory:\"")
+            .auto_configuration::<DataAutoConfiguration>()
+            .configure(|b| b.bean(own_registry))
+            .run(move |view| {
+                let sources = view.get::<DataSources>().unwrap();
+                assert_eq!(sources.names(), ["default", "own"]);
+                let pool = view.get::<SqlitePool>().unwrap();
+                // The start-up check pinged the application's sources, and the pool bean is
+                // the application's default pool.
+                assert!(pool.size() >= 1);
+                assert!(sources.sqlite("own").unwrap().size() >= 1);
+                let service = view.get::<oxbloom_boot::DataService>().unwrap();
+                assert!(Arc::ptr_eq(service.sources(), &sources));
+                let report = view.conditions().to_string();
+                assert!(report.contains("on_missing_bean"), "{report}");
+                *out.lock().unwrap() = Some(sources);
+            })
+            .await;
+        // The service closed the application's pools at shutdown.
+        let own = seen.lock().unwrap().take().unwrap();
+        assert!(own.sqlite("own").unwrap().is_closed());
+    }
+
+    /// A run-to-completion application: a runner does the work and no service keeps running,
+    /// so the run ends after the runner without a shutdown signal. The watchdog fails the test
+    /// instead of letting a regression hang.
+    #[tokio::test]
+    async fn a_runner_only_application_ends_without_a_signal() {
+        use oxbloom_boot::{
+            ApplicationArguments, ApplicationRunner, Banner, OxbloomApplication, RunnerError,
+            async_trait,
+        };
+        use oxbloom_config::Config;
+
+        struct Work(Arc<SqlitePool>);
+
+        #[async_trait]
+        impl ApplicationRunner for Work {
+            async fn run(&self, _: &ApplicationArguments) -> Result<(), RunnerError> {
+                oxbloom_data::sqlx::query("SELECT 1")
+                    .execute(&*self.0)
+                    .await
+                    .map_err(RunnerError::new)?;
+                Ok(())
+            }
+        }
+
+        for extra in ["", "connect-on-startup = false\n"] {
+            let seen: Slot<Arc<SqlitePool>> = slot();
+            let out = seen.clone();
+            let run = OxbloomApplication::builder()
+                .with_config(
+                    Config::from_str(&format!("[data]\nurl = \"sqlite::memory:\"\n{extra}"))
+                        .unwrap(),
+                )
+                .banner(Banner::off())
+                .output(std::io::sink())
+                .auto_configuration::<DataAutoConfiguration>()
+                .configure(move |b| {
+                    let out = out.clone();
+                    b.bean(move |pool: Arc<SqlitePool>| {
+                        *out.lock().unwrap() = Some(pool.clone());
+                        Work(pool)
+                    })
+                    .provides(|r: Arc<Work>| -> Arc<dyn ApplicationRunner> { r })
+                })
+                .run();
+            let status = tokio::time::timeout(std::time::Duration::from_secs(20), run)
+                .await
+                .expect("the run ends without a shutdown signal")
+                .unwrap();
+            assert_eq!(status.code(), 0);
+            let pool = seen.lock().unwrap().take().unwrap();
+            assert!(pool.is_closed(), "the data service still stopped: {extra}");
+        }
+    }
+
+    /// A `data` section without a source registers no `DataService`.
+    #[tokio::test]
+    async fn a_data_section_without_sources_registers_no_service() {
+        ContextRunner::new()
+            .config_str("[data]\nconnect-on-startup = false")
+            .auto_configuration::<DataAutoConfiguration>()
+            .run(|view| {
+                assert!(view.get::<DataSources>().unwrap().is_empty());
+                assert!(!view.contains::<oxbloom_boot::DataService>());
+                let report = view.conditions().to_string();
+                assert!(
+                    report.contains("the data section configures no source"),
+                    "{report}"
+                );
+            })
+            .await;
+        // A named source alone registers it.
+        ContextRunner::new()
+            .config_str("[data.sources.cache]\nurl = \"sqlite::memory:\"")
+            .auto_configuration::<DataAutoConfiguration>()
+            .run(|view| assert!(view.contains::<oxbloom_boot::DataService>()))
+            .await;
     }
 
     /// The registry is built while the container is built, inside the application's runtime:

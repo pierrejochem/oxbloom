@@ -424,3 +424,22 @@ fn properties_list_every_key() {
         .unwrap();
     assert_eq!((max.1, max.2), ("u32", Some("10")));
 }
+
+#[test]
+fn driver_from_url_follows_the_scheme_rule_of_the_settings() {
+    assert_eq!(Driver::from_url("postgres://h/db"), Some(Driver::Postgres));
+    assert_eq!(
+        Driver::from_url("postgresql://h/db"),
+        Some(Driver::Postgres)
+    );
+    assert_eq!(Driver::from_url("mysql://h/db"), Some(Driver::Mysql));
+    assert_eq!(Driver::from_url("mariadb://h/db"), Some(Driver::Mysql));
+    assert_eq!(Driver::from_url("sqlite::memory:"), Some(Driver::Sqlite));
+    assert_eq!(Driver::from_url("sqlite:app.db"), Some(Driver::Sqlite));
+    // The network schemes need `://`, and every scheme is matched case-sensitively.
+    assert_eq!(Driver::from_url("postgres:h"), None);
+    assert_eq!(Driver::from_url("POSTGRES://h/db"), None);
+    assert_eq!(Driver::from_url("SQLITE::memory:"), None);
+    assert_eq!(Driver::from_url("redis://h"), None);
+    assert_eq!(Driver::from_url("no-scheme"), None);
+}

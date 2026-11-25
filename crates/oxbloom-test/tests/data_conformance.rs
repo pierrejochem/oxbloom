@@ -49,7 +49,7 @@ macro_rules! conformance_tests {
         use oxbloom_data::{DataError, TransactionError, TransactionOptions, transaction};
         use oxbloom_test::TestDatabase;
 
-        use super::assert_free_of;
+        use super::{assert_free_of, chain_texts};
         use super::data_conformance_support::{data_section, sources};
 
         /// A fresh database with the table `items`.
@@ -265,6 +265,18 @@ macro_rules! conformance_tests {
     };
 }
 
+/// The `Display` and `Debug` text of `error` and of every error in its
+/// [`source`](std::error::Error::source) chain.
+fn chain_texts(error: &(dyn std::error::Error + 'static)) -> Vec<String> {
+    let mut texts = Vec::new();
+    let mut next = Some(error);
+    while let Some(error) = next {
+        texts.push(format!("{error} {error:?}"));
+        next = error.source();
+    }
+    texts
+}
+
 /// Asserts that none of `texts` contains any of `secrets`.
 fn assert_free_of(texts: &[String], secrets: &[&str]) {
     for text in texts {
@@ -389,10 +401,14 @@ mod sqlite {
             .unwrap();
 
         let runs = AtomicU32::new(0);
+        // The SQLite result code of the first failed write.
+        let first_failure: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+        // The holder commits only once the first run has failed; no timing is assumed.
+        let failed = tokio::sync::Notify::new();
         let options = TransactionOptions::default();
         let retry = policy(100, 20);
         let release = async {
-            tokio::time::sleep(Duration::from_millis(200)).await;
+            failed.notified().await;
             held.commit().await.unwrap();
         };
         let work = transaction_with_retry(pool, &options, &retry, async |tx| {
@@ -400,15 +416,39 @@ mod sqlite {
             let n: i64 = sqlx::query_scalar("SELECT n FROM counters WHERE id = 1")
                 .fetch_one(&mut **tx)
                 .await?;
-            sqlx::query("UPDATE counters SET n = ? WHERE id = 1")
+            let updated = sqlx::query("UPDATE counters SET n = ? WHERE id = 1")
                 .bind(n + 1)
                 .execute(&mut **tx)
-                .await?;
-            Ok::<_, sqlx::Error>(())
+                .await;
+            if let Err(error) = &updated {
+                let mut first = first_failure.lock().unwrap();
+                if first.is_none() {
+                    *first = Some(
+                        error
+                            .as_database_error()
+                            .and_then(|e| e.code())
+                            .map(|code| code.into_owned())
+                            .unwrap_or_default(),
+                    );
+                    failed.notify_one();
+                }
+            }
+            updated.map(|_| ())
         });
-        let ((), result) = tokio::join!(release, work);
+        let ((), result) = tokio::time::timeout(Duration::from_secs(60), async {
+            tokio::join!(release, work)
+        })
+        .await
+        .expect("the retried work finishes");
         result.unwrap();
         assert!(runs.load(Ordering::SeqCst) >= 2, "the busy work ran again");
+        // `SQLITE_BUSY` is 5; an extended code keeps it in its low byte.
+        let code = first_failure
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("a write failed");
+        assert_eq!(code.parse::<i32>().map(|c| c & 0xff), Ok(5), "code {code}");
         let n: i64 = sqlx::query_scalar("SELECT n FROM counters WHERE id = 1")
             .fetch_one(pool)
             .await
@@ -418,9 +458,11 @@ mod sqlite {
         registry.close_all().await;
     }
 
-    /// A path with a marker never shows in `Debug`, in an error or in the health report.
+    /// A path with a marker never shows in `Debug`, in an error (its source chain included) or
+    /// in the health report. No logs are checked here: `oxbloom-data` logs nothing, and the
+    /// boot tests check the logs of a failed start.
     #[tokio::test(flavor = "multi_thread")]
-    async fn data_conformance_no_password_in_debug_errors_or_logs() {
+    async fn data_conformance_no_password_in_debug_or_errors() {
         let marker = "secret-marker-7f3a";
         let url = format!("sqlite:/no-such-oxbloom-dir-{marker}/{marker}.db");
         let toml = data_section(&url, "");
@@ -443,16 +485,14 @@ mod sqlite {
             oxbloom_data::DataSources::build(&bad, &|_| Err(DataError::Tls)).unwrap_err();
         assert_eq!(source_error.error(), DataError::Config);
 
-        assert_free_of(
-            &[
-                format!("{data_settings:?}"),
-                format!("{registry:?}"),
-                format!("{ping:?} {ping}"),
-                format!("{source_error:?} {source_error}"),
-                format!("{health:?}"),
-            ],
-            &[marker, "no-such-oxbloom-dir"],
-        );
+        let mut texts = vec![
+            format!("{data_settings:?}"),
+            format!("{registry:?}"),
+            format!("{health:?}"),
+        ];
+        texts.extend(chain_texts(&ping));
+        texts.extend(chain_texts(&source_error));
+        assert_free_of(&texts, &[marker, "no-such-oxbloom-dir"]);
     }
 }
 
@@ -589,9 +629,13 @@ mod postgres {
         db.close().await;
     }
 
+    /// A URL with a password to a closed port: neither `Debug`, an error (its source chain
+    /// included) nor the health report shows the password, the user or the host. No logs are
+    /// checked here: `oxbloom-data` logs nothing, and the boot tests check the logs of a failed
+    /// start.
     #[ignore = "needs OXBLOOM_TEST_POSTGRES_URL"]
     #[tokio::test(flavor = "multi_thread")]
-    async fn data_conformance_no_password_in_debug_errors_or_logs() {
+    async fn data_conformance_no_password_in_debug_or_errors() {
         let password = "pw-that-must-never-leak";
         let user = "leaky-user";
         let host = format!("127.0.0.1:{}", closed_port());
@@ -614,16 +658,14 @@ mod postgres {
             oxbloom_data::DataSources::build(&bad, &|_| Err(DataError::Tls)).unwrap_err();
         assert_eq!(source_error.error(), DataError::Config);
 
-        assert_free_of(
-            &[
-                format!("{data_settings:?}"),
-                format!("{registry:?}"),
-                format!("{ping:?} {ping}"),
-                format!("{source_error:?} {source_error}"),
-                format!("{health:?}"),
-            ],
-            &[password, user, &host],
-        );
+        let mut texts = vec![
+            format!("{data_settings:?}"),
+            format!("{registry:?}"),
+            format!("{health:?}"),
+        ];
+        texts.extend(chain_texts(&ping));
+        texts.extend(chain_texts(&source_error));
+        assert_free_of(&texts, &[password, user, &host]);
     }
 
     /// A role whose password needs percent-encoding connects through `data.url`.
@@ -633,8 +675,9 @@ mod postgres {
         let db = TestDatabase::postgres().await;
         let role = create_postgres_role(db.postgres_pool()).await;
         let url = url_with_user(db.url(), &role, SPECIAL_PASSWORD_ENCODED);
-        assert!(!url.contains(SPECIAL_PASSWORD));
-        let outcome = async {
+        // Every step that can panic runs in a task, so the role is dropped whatever happens.
+        let outcome = tokio::spawn(async move {
+            assert!(!url.contains(SPECIAL_PASSWORD));
             let registry = sources(&data_section(&url, ""));
             let one: Result<i64, _> = sqlx::query_scalar("SELECT 1::int8")
                 .fetch_one(registry.postgres("default").unwrap())
@@ -644,10 +687,11 @@ mod postgres {
                 .await;
             registry.close_all().await;
             (one.map_err(|e| sqlstate(&e)), user.ok())
-        }
+        })
         .await;
         drop_postgres_role(db.postgres_pool(), &role).await;
         db.close().await;
+        let outcome = outcome.unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()));
         assert_eq!(outcome.0, Ok(1));
         assert_eq!(outcome.1.as_deref(), Some(role.as_str()));
     }
@@ -801,9 +845,13 @@ mod mysql {
         db.close().await;
     }
 
+    /// A URL with a password to a closed port: neither `Debug`, an error (its source chain
+    /// included) nor the health report shows the password, the user or the host. No logs are
+    /// checked here: `oxbloom-data` logs nothing, and the boot tests check the logs of a failed
+    /// start.
     #[ignore = "needs OXBLOOM_TEST_MYSQL_URL"]
     #[tokio::test(flavor = "multi_thread")]
-    async fn data_conformance_no_password_in_debug_errors_or_logs() {
+    async fn data_conformance_no_password_in_debug_or_errors() {
         let password = "pw-that-must-never-leak";
         let user = "leaky-user";
         let host = format!("127.0.0.1:{}", closed_port());
@@ -826,16 +874,14 @@ mod mysql {
             oxbloom_data::DataSources::build(&bad, &|_| Err(DataError::Tls)).unwrap_err();
         assert_eq!(source_error.error(), DataError::Config);
 
-        assert_free_of(
-            &[
-                format!("{data_settings:?}"),
-                format!("{registry:?}"),
-                format!("{ping:?} {ping}"),
-                format!("{source_error:?} {source_error}"),
-                format!("{health:?}"),
-            ],
-            &[password, user, &host],
-        );
+        let mut texts = vec![
+            format!("{data_settings:?}"),
+            format!("{registry:?}"),
+            format!("{health:?}"),
+        ];
+        texts.extend(chain_texts(&ping));
+        texts.extend(chain_texts(&source_error));
+        assert_free_of(&texts, &[password, user, &host]);
     }
 
     /// A user whose password needs percent-encoding connects through `data.url`.
@@ -845,8 +891,9 @@ mod mysql {
         let db = TestDatabase::mysql().await;
         let user = create_mysql_user(db.mysql_pool()).await;
         let url = url_with_user(db.url(), &user, SPECIAL_PASSWORD_ENCODED);
-        assert!(!url.contains(SPECIAL_PASSWORD));
-        let outcome = async {
+        // Every step that can panic runs in a task, so the user is dropped whatever happens.
+        let outcome = tokio::spawn(async move {
+            assert!(!url.contains(SPECIAL_PASSWORD));
             let registry = sources(&data_section(&url, ""));
             let one: Result<i64, _> = sqlx::query_scalar("SELECT 1")
                 .fetch_one(registry.mysql("default").unwrap())
@@ -856,10 +903,11 @@ mod mysql {
                 .await;
             registry.close_all().await;
             (one.map_err(|e| error_number(&e)), current.ok())
-        }
+        })
         .await;
         drop_mysql_user(db.mysql_pool(), &user).await;
         db.close().await;
+        let outcome = outcome.unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()));
         assert_eq!(outcome.0, Ok(1));
         assert_eq!(outcome.1, Some(format!("{user}@%")));
     }

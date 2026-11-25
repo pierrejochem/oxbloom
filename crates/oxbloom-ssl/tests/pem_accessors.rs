@@ -178,3 +178,67 @@ fn debug_of_the_bundle_never_contains_pem_or_key_bytes() {
     }
     assert!(!debug.contains("BEGIN"));
 }
+
+#[test]
+fn a_pkcs1_rsa_key_keeps_its_rsa_private_key_label() {
+    // An RSA key as `openssl genrsa` of OpenSSL 1.x writes it: PKCS#1, the content of the
+    // OCTET STRING of the PKCS#8 key rcgen generates.
+    let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_RSA_SHA256).expect("an RSA key");
+    let cert = rcgen::CertificateParams::new(vec!["localhost".to_string()])
+        .unwrap()
+        .self_signed(&key)
+        .unwrap();
+    let pkcs1 = sec1_from_pkcs8(&key.serialize_der());
+    let pkcs1_pem =
+        pem_rfc7468::encode_string("RSA PRIVATE KEY", pem_rfc7468::LineEnding::LF, &pkcs1).unwrap();
+    let web = bundle(&format!(
+        "[ssl.bundle.pem.web]\ncertificate = '''\n{}'''\nprivate-key = '''\n{pkcs1_pem}'''",
+        cert.pem()
+    ));
+    let (_, key) = web.identity_pem().expect("identity pem");
+    assert!(
+        String::from_utf8(key.clone())
+            .unwrap()
+            .starts_with("-----BEGIN RSA PRIVATE KEY-----")
+    );
+    let parsed = PrivateKeyDer::from_pem_slice(&key).unwrap();
+    assert!(matches!(parsed, PrivateKeyDer::Pkcs1(_)));
+    assert_eq!(parsed.secret_der(), pkcs1.as_slice());
+}
+
+#[test]
+fn the_pem_accessors_follow_a_reload() {
+    let dir = tempfile::tempdir().unwrap();
+    let (first, second) = (ca(), common::ca());
+    let trust = write(dir.path(), "ca.pem", first.cert_pem.as_bytes());
+    let config = Config::from_str(&format!(
+        "[ssl.bundle.pem.client]\ntrust = \"{}\"",
+        trust.display()
+    ))
+    .unwrap();
+    let bundles = SslBundles::from_config(&config).unwrap();
+    let client = bundles.get("client").unwrap();
+    assert_eq!(
+        certs(&client.trust_pem().unwrap()),
+        [first.cert_der.as_slice()]
+    );
+
+    // Replace the file the way deployment tools do: write a new one and rename it over.
+    let next = write(dir.path(), "ca.pem.new", second.cert_pem.as_bytes());
+    std::fs::rename(&next, &trust).unwrap();
+    let results = bundles.reload();
+    assert!(
+        results.iter().all(|(_, result)| result.is_ok()),
+        "{results:?}"
+    );
+    // The clone taken before the reload shares the material, so it sees the new trust too.
+    assert_eq!(
+        certs(&client.trust_pem().unwrap()),
+        [second.cert_der.as_slice()]
+    );
+    let fresh = bundles.get("client").unwrap();
+    assert_eq!(
+        certs(&fresh.trust_pem().unwrap()),
+        [second.cert_der.as_slice()]
+    );
+}
